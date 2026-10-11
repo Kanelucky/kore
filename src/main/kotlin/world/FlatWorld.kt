@@ -1,5 +1,6 @@
 package org.koremc.world
 
+import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
@@ -35,6 +36,9 @@ class FlatWorld(
 
     /** The chunks players have changed, which no longer match [generated]. */
     private val changed = HashMap<ChunkPos, Chunk>()
+
+    /** The block entities in each chunk that has any, by where they are. */
+    private val blockEntities = HashMap<ChunkPos, HashMap<BlockPos, NbtMap>>()
 
     private val itemEntities = LinkedHashMap<Long, ItemEntity>()
     private var nextEntityId = 1L
@@ -76,11 +80,32 @@ class FlatWorld(
         itemEntities.remove(id)
     }
 
-    /** Puts [state] at [pos], which must be within the overworld's height. */
+    /**
+     * Puts [state] at [pos], which must be within the overworld's height.
+     * Putting a block of another kind there forgets the block entity the
+     * old one had.
+     */
     operator fun set(pos: BlockPos, state: BlockState) {
         require(pos.y in MIN_Y..MAX_Y) { "$pos is outside the overworld" }
+        if (stateAt(pos)?.name != state.name) blockEntities[pos.chunk]?.remove(pos)
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
     }
+
+    /** The data the block at [pos] keeps beyond its state, like a bed's colour, or null for none. */
+    fun blockEntityAt(pos: BlockPos): NbtMap? = blockEntities[pos.chunk]?.get(pos)
+
+    /** Gives the block at [pos] [data] to keep, or forgets what it kept, for null. The data names where it is. */
+    fun setBlockEntity(pos: BlockPos, data: NbtMap?) {
+        if (data == null) {
+            blockEntities[pos.chunk]?.remove(pos)
+            return
+        }
+        val located = data.toBuilder().putInt("x", pos.x).putInt("y", pos.y).putInt("z", pos.z).build()
+        blockEntities.getOrPut(pos.chunk) { HashMap() }[pos] = located
+    }
+
+    /** The block entities in the chunk at [pos], for sending with it. */
+    fun blockEntitiesIn(pos: ChunkPos): Collection<NbtMap> = blockEntities[pos]?.values.orEmpty()
 
     companion object {
         /** The vanilla flat world: bedrock, two layers of dirt and grass on top, all plains. */

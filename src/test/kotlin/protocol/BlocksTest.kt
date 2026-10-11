@@ -3,6 +3,7 @@ package org.koremc.protocol
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
+import org.cloudburstmc.nbt.NbtMap
 import org.koremc.world.BlockPos
 import org.koremc.world.Vec3
 import kotlin.test.Test
@@ -111,6 +112,14 @@ class BlocksTest {
         val input = decodeClientPacket(packet) as PlayerAuthInput
         assertEquals(StackRequest(-5, listOf(StackAction.CraftCreative(1, 1))), input.stackRequest)
         assertEquals(emptyList(), input.blockActions)
+    }
+
+    @Test
+    fun `a block's data goes as network NBT after where it is`() {
+        val bed = NbtMap.builder().putString("id", "Bed").putByte("color", 14).build()
+        // A compound with no name, then the id string and the colour byte, each named.
+        val expected = "38" + "047705" + "0a00" + "080269640342656401" + "05636f6c6f720e" + "00"
+        assertContentEquals(ByteBufUtil.decodeHexDump(expected), BlockActorData(clicked, bed).encode())
     }
 
     @Test

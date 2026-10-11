@@ -168,18 +168,28 @@ Building works the same way: the client predicts what happens, and Kore agrees o
 - slabs go in the half of the space the player clicked, and two make a double slab;
 - stairs climb the way the player faces;
 - logs and other pillars lie along the clicked face's axis;
-- furnaces, chests and other blocks with a front turn it to the player, while fence gates face the way the player does and trapdoors hinge on the side away from them;
+- furnaces, chests and other blocks with a front turn it to the player, while fence gates face the way the player does, trapdoors hinge on the side away from them and anvils lie across the way they face;
+- pistons, dispensers, droppers, barrels and crafters face the player, and face up or down when the player is right beside them and well above or below. Observers look away from the player, and hoppers point into the block they were placed against. Pistons and end rods store their sideways faces the wrong way round, as the game does;
 - buttons, levers and ladders need a whole face to go on, like a full block's or the back of stairs, and point out of it. A lever on a floor or ceiling lies the way the player faces;
 - a torch leans on the block it was placed against, if that face is whole. If not, it leans on a neighbour's whole face, or stands on the floor;
-- anything fixed to a block falls when the block breaks;
+- signs, banners and coral fans placed against a side take their kind on a wall. Standing signs and banners turn to the player in sixteen steps, as heads on the floor do. Hanging signs hang from chains at their edges under a whole block, or from one in the middle, and stick out from a wall on a bracket;
+- lanterns hang from a ceiling when placed against one, or when there's no floor; bells and grindstones stand, hang or fix to a wall, and a bell between two walls fixes to both;
+- candles, sea pickles, turtle eggs, petals, leaf litter and wildflowers pile up to four in a space, and snow up to eight layers. Glow lichen and sculk veins spread over each face they're placed against, and vines over each side;
+- anything fixed to a block, standing on it or hanging from it breaks when the block does: torches, signs and tripwire hooks on walls, plants, carpets and rails on floors, roots and lanterns from ceilings. A cactus breaks when a block goes beside it, and vines and glow lichen let go of faces with nothing behind them;
+- rails join the rails around them, as in Java Edition, curving round corners and sloping up a step, and the rails they join turn to meet them. Powered, detector and activator rails only run straight or slope;
+- scaffolding placed on the top of scaffolding climbs to the top of its column, and on a side reaches out that way. It stays up to six blocks out from scaffolding that stands on something, and breaks when it can't reach one, along with everything that depended on it. Scaffolding falls in the game; Kore breaks it, until it has falling blocks;
+- tripwire joins the tripwire and hooks beside it, and two hooks facing one another with tripwire all the way between are attached. Pointed dripstone thickens from its tip back as it grows;
 - fences, panes, bars and walls join what's beside them: their own kind, gates set across them and whole faces, though not leaves, pumpkins, melons, barriers or shulker boxes. Walls stand tall under a block that covers them, and raise a post where they stand alone, end or turn. A fence gate drops when set in a wall;
 - stairs turn a corner against stairs of the same half set across them, as in Java Edition: an outer corner at their back, or an inner one at their step, but not where it would break a straight run;
 - placing or breaking a block reshapes the ones around it that join or turn, and so on to theirs;
-- tall plants, like sunflowers, and doors take two blocks, and need a whole top to stand on. A door hinges on its right if there's a door to its left to pair with, or a wall to its right and not its left.
+- tall plants, like sunflowers, and doors take two blocks, and need a whole top to stand on. A door hinges on its right if there's a door to its left to pair with, or a wall to its right and not its left. A bed takes the space in front of the player too;
+- leaves a player places never decay.
 
-Cloudburst's data has no block shapes, so Kore tells which blocks are whole cubes by name: slabs, stairs, fences, plants and the like come in families named alike. A slab's face on the side it fills is whole, and so are the backs and bottoms of stairs. Kore doesn't know every block's rules, like which way a piston or an anvil turns, so after each placement it tells the client what's really at the spots it may have changed. That corrects any guess that differed. Door items carry no block state, so Kore places the door of the same name. Beds and signs are items too, and can't be placed yet.
+Cloudburst's data has no block shapes, so Kore tells which blocks are whole cubes by name: slabs, stairs, fences, plants and the like come in families named alike. A slab's face on the side it fills is whole, and so are the backs and bottoms of stairs. Kore doesn't know every block's rules, so after each placement it tells the client what's really at the spots it may have changed. That corrects any guess that differed. Some items carry no block state: doors, beds, cauldrons and the like place the block of the same name, and seeds, signs, banners, redstone dust, string, repeaters and comparators place the block they're for. Those blocks drop the item they came from.
 
-Clicking a lever, button, door, trapdoor or fence gate uses it instead, unless the player sneaks with something in hand. A lever flips, a button presses in and pops back out a second or so later, and doors, trapdoors and fence gates open and shut: a door's two halves together, and a gate away from the player. Everyone with the chunk sees the change and hears it. Each sound names the block making it, so the client plays that block's own: a lever's click, or a bamboo button's. Iron doors and trapdoors only open with redstone, and Kore has no redstone yet, so nothing levers and buttons switch on is powered.
+Some blocks keep more than their state, in a block entity. Kore gives one to heads on the floor, for the way they turn, to beds, for their colour, and to banners, for their colour and patterns, and pairs chests placed side by side facing the same way. The client makes a plain one for any other block that needs one. Block entities go to clients with their chunk, and whenever they change. A bed or banner drops in its colour. Writing on signs, and what goes in a chest, are for later.
+
+Clicking a lever, button, door, trapdoor, fence gate, daylight detector, repeater or comparator uses it instead, unless the player sneaks with something in hand. A daylight detector switches between sensing day and night, a repeater's delay goes up a tick, back to one after four, and a comparator switches between comparing and subtracting. A lever flips, a button presses in and pops back out a second or so later, and doors, trapdoors and fence gates open and shut: a door's two halves together, and a gate away from the player. Everyone with the chunk sees the change and hears it. Each sound names the block making it, so the client plays that block's own: a lever's click, or a bamboo button's. Iron doors and trapdoors only open with redstone, and Kore has no redstone yet, so nothing levers and buttons switch on is powered.
 
 In creative, the client breaks a block at once and says so with a `PlayerAction`. Outside creative, it reports a finished break in its input. With server-authoritative block breaking off, Mojang leaves the timing of a break to the client, so Kore takes its word for it. Either way, everyone with the chunk sees the block go, with the particles and sound of it breaking: the client leaves those to the server, even for its own breaks. Outside creative, bedrock and other blocks only creative players break stay put.
 
@@ -234,8 +244,13 @@ src/main/kotlin/
 │   ├── Chunk.kt                     # Chunk columns, and which are in a player's view
 │   ├── FlatWorld.kt                 # The same layers in every column, until players change them
 │   ├── Building.kt                  # Where placed blocks go and which way they turn, and breaking them
-│   ├── Using.kt                     # Levers, buttons, doors, trapdoors and fence gates, clicked
-│   ├── Connections.kt               # Fences, panes and walls joining the blocks beside them
+│   ├── BlockItems.kt                # Which block an item places, when it isn't one itself
+│   ├── Support.kt                   # What holds each block up, and settling the world after a change
+│   ├── Rails.kt                     # Rails joining the rails around them, as Java Edition's rail logic does
+│   ├── Scaffolding.kt               # Scaffolding climbing, reaching out, and how far it is from support
+│   ├── BlockEntities.kt             # The data heads, beds, banners and paired chests keep
+│   ├── Using.kt                     # Levers, buttons, doors, detectors, repeaters and more, clicked
+│   ├── Connections.kt               # Fences, panes, walls, stairs, tripwire and dripstone joining the blocks beside them
 │   ├── Mining.kt                    # How long a block takes to break, and whether it drops anything
 │   ├── Drops.kt                     # What each block drops
 │   ├── Items.kt                     # Items lying in the world, falling and sliding

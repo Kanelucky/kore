@@ -1,5 +1,6 @@
 package org.koremc.world
 
+import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
 import org.koremc.registry.CreativeInventory
@@ -34,6 +35,7 @@ private val DROPS_INSTEAD = buildMap {
 private val DROPS_NOTHING = setOf(
     "minecraft:ice", "minecraft:packed_ice", "minecraft:blue_ice", "minecraft:short_grass", "minecraft:tall_grass",
     "minecraft:fern", "minecraft:large_fern", "minecraft:seagrass", "minecraft:web", "minecraft:fire", "minecraft:soul_fire",
+    "minecraft:cake", "minecraft:cave_vines",
 )
 
 /**
@@ -41,19 +43,29 @@ private val DROPS_NOTHING = setOf(
  * which shares the block's name and, in the creative inventory, carries the
  * block state it places. Some drop another, like grass dropping dirt, and
  * some drop nothing: glass, leaves, ice and plain grasses. A double slab
- * drops two slabs, and a door or tall plant drops once, from its bottom
- * half. Chance drops, like saplings from leaves, are for later.
+ * drops two slabs, and a door, bed or tall plant drops once. Blocks placed
+ * by an item of another name, like crops and repeaters, drop that item,
+ * and beds and banners drop in the colour they kept. Chance drops, like
+ * saplings from leaves, are for later.
  */
 class Drops(items: List<ItemDefinition>, creative: CreativeInventory, private val blocks: BlockPalette) {
     private val items = items.associateBy { it.name }
     private val placing = creative.items.map { it.stack }.filter { it.block != null }.distinctBy { it.item.name }.associateBy { it.item.name }
+    private val inCreative = creative.items.map { it.stack }.distinctBy { it.item.name }.associateBy { it.item.name }
 
-    /** What [state] drops, which a player holding something that harvests it gets. */
-    fun of(state: BlockState): List<ItemStack> {
-        if (state.properties[UPPER_BLOCK] == 1.toByte() || dropsNothing(state.name)) return emptyList()
-        val (name, count) = DROPS_INSTEAD[state.name] ?: singleSlabOf(state.name)?.let { it to 2 } ?: (state.name to 1)
-        val stack = placing[name] ?: items[name]?.let { ItemStack(it, block = blocks.defaultOf(name)) } ?: return emptyList()
-        return listOf(stack.copy(count = count))
+    /** What [state] drops, given the data it kept, [blockEntity], which a player holding something that harvests it gets. */
+    fun of(state: BlockState, blockEntity: NbtMap? = null): List<ItemStack> {
+        if (state.properties[UPPER_BLOCK] == 1.toByte() || state.properties[HEAD_PIECE] == 1.toByte() || dropsNothing(state.name)) return emptyList()
+        val (name, count) = DROPS_INSTEAD[state.name] ?: singleSlabOf(state.name)?.let { it to 2 } ?: ((itemPlacing(state.name) ?: state.name) to 1)
+        val stack = placing[name] ?: inCreative[name]?.copy(aux = 0) ?: items[name]?.let { ItemStack(it, block = blocks.defaultOf(name)) } ?: return emptyList()
+        // Beds and banners keep their colour in their block entity, as their items do in their aux value.
+        val colour = when {
+            blockEntity == null -> null
+            blockEntity.containsKey("color") -> blockEntity.getByte("color").toInt()
+            blockEntity.containsKey("Base") -> blockEntity.getInt("Base")
+            else -> null
+        }
+        return listOf(stack.copy(count = count, aux = colour ?: stack.aux))
     }
 
     private fun dropsNothing(name: String) = name in DROPS_NOTHING || name.endsWith("_leaves") ||

@@ -1,5 +1,6 @@
 package org.koremc
 
+import org.cloudburstmc.nbt.NbtMap
 import org.koremc.inventory.HOTBAR_SIZE
 import org.koremc.inventory.PlayerInventory
 import org.koremc.inventory.StackRequestHandler
@@ -14,6 +15,7 @@ import org.koremc.protocol.Animate
 import org.koremc.protocol.Attribute
 import org.koremc.protocol.BlockAction
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.BlockActorData
 import org.koremc.protocol.ByteItem
 import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
@@ -82,9 +84,11 @@ import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
 import org.koremc.world.BlockPos
+import org.koremc.world.BrokenBlock
 import org.koremc.world.ChunkPos
 import org.koremc.world.Face
 import org.koremc.world.ItemEntity
+import org.koremc.world.Placer
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
 import org.koremc.world.PLAYER_MAX_AIR
@@ -100,11 +104,12 @@ import org.koremc.world.centre
 import org.koremc.world.chunksAround
 import org.koremc.world.facing
 import org.koremc.world.harvests
+import org.koremc.world.otherHalf
 import org.koremc.world.place
 import org.koremc.world.releaseButton
+import org.koremc.world.settle
 import org.koremc.world.side
 import org.koremc.world.tickItems
-import org.koremc.world.updateAround
 import org.koremc.world.usable
 import org.koremc.world.use
 import org.slf4j.LoggerFactory
@@ -612,7 +617,7 @@ class Session(
         // The client drops chunks that fall out of view, so those need sending again if they come back.
         sentChunks.retainAll(inView.toSet())
         val unsent = inView.filter(sentChunks::add)
-        unsent.chunked(CHUNKS_PER_BATCH).forEach { batch -> send(*batch.map { LevelChunk(it, world.chunkAt(it)) }.toTypedArray()) }
+        unsent.chunked(CHUNKS_PER_BATCH).forEach { batch -> send(*batch.map { LevelChunk(it, world.chunkAt(it), world.blockEntitiesIn(it)) }.toTypedArray()) }
         return unsent.size
     }
 
@@ -760,8 +765,9 @@ class Session(
         // The client's item must be the one Kore has in the slot.
         val stack = inventory.items[heldSlot]?.stack?.takeIf { use.hotbarSlot == heldSlot && it.item.runtimeId == use.heldItem }
         val block = stack?.let { it.block ?: world.blocks.blockPlacedBy(it.item.name) }
+        val placer = Placer(facing(yaw), yaw, position, sneaking)
         val placed = if (block != null && canBuild() && inReach(use.position.side(face))) {
-            world.place(block, use.position, face, use.clickPosition.y, facing(yaw))
+            world.place(block, use.position, face, use.clickPosition.y, placer, stack)
         } else {
             emptyList()
         }
@@ -771,8 +777,12 @@ class Session(
         } else {
             val first = placed.first()
             val sound = first to LevelSoundEvent(LevelSoundEvent.PLACE, first.centre, world.blockAt(first))
-            showAround(placed.map(::updateOf) + sound + world.updateAround(placed).map(::updateOf))
-            if (!creative) inventory.remove(heldSlot)
+            val changes = world.settle(placed)
+            showAround(placed.flatMap(::updateWithData) + sound + changes.broken.flatMap(::breakEffects) + changes.reshaped.flatMap(::updateWithData))
+            if (!creative) {
+                inventory.remove(heldSlot)
+                changes.broken.forEach { (at, broken) -> dropFrom(at, broken.state, broken.blockEntity) }
+            }
             log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.name, first)
         }
         val corrections = (listOf(use.position, use.position.side(face)) - placed.toSet()).map { UpdateBlock(it, world.blockAt(it)) }
@@ -812,21 +822,35 @@ class Session(
             send(UpdateBlock(pos, world.blockAt(pos)))
             return
         }
-        val broken = world.breakBlock(pos)
-        val effects = broken.flatMap { (at, block) -> listOf(at to UpdateBlock(at, AIR_NETWORK_ID), at to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, at.centre, block.networkId)) }
-        showAround(effects + world.updateAround(broken.keys).map(::updateOf))
-        if (!creative) broken.forEach(::dropFrom)
+        val changes = world.breakBlock(pos)
+        showAround(changes.broken.flatMap(::breakEffects) + changes.reshaped.flatMap(::updateWithData))
+        if (!creative) {
+            changes.broken.forEach { (at, broken) ->
+                // What the player broke drops only if what they hold harvests it. What fell with it always drops.
+                val byHand = at == pos || broken.state.otherHalf(at) == pos
+                if (!byHand || game.mining[broken.state.name]?.let { harvests(it, heldItem()) } != false) dropFrom(at, broken.state, broken.blockEntity)
+            }
+        }
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
     }
 
+    /** What everyone with the chunk sees of the block at [pos] breaking: it going, with the particles and sound of [broken]. */
+    private fun breakEffects(pos: BlockPos, broken: BrokenBlock): List<Pair<BlockPos, ServerPacket>> =
+        listOf(pos to UpdateBlock(pos, AIR_NETWORK_ID), pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
+
+    private fun breakEffects(entry: Map.Entry<BlockPos, BrokenBlock>) = breakEffects(entry.key, entry.value)
+
+    /** The block at [pos] as it is now, for the clients that have it, followed by the data it keeps, if any. */
+    private fun updateWithData(pos: BlockPos): List<Pair<BlockPos, ServerPacket>> =
+        listOfNotNull(updateOf(pos), world.blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) })
+
     /**
-     * Drops what [block], broken at [pos], drops, if what the player holds
-     * harvests it: each stack somewhere near the block's middle, popping
+     * Drops what [block], broken at [pos], drops, given the data it kept,
+     * [blockEntity]: each stack somewhere near the block's middle, popping
      * up and out a little, as the game drops them.
      */
-    private fun dropFrom(pos: BlockPos, block: BlockState) {
-        if (game.mining[block.name]?.let { harvests(it, heldItem()) } == false) return
-        for (stack in game.drops.of(block)) {
+    private fun dropFrom(pos: BlockPos, block: BlockState, blockEntity: NbtMap?) {
+        for (stack in game.drops.of(block, blockEntity)) {
             fun jitter() = Random.nextFloat() * 0.5f - 0.25f
             val at = Vec3(pos.x + 0.5f + jitter(), pos.y + 0.5f - ITEM_HEIGHT / 2 + jitter(), pos.z + 0.5f + jitter())
             val velocity = Vec3(Random.nextFloat() * 0.2f - 0.1f, 0.2f, Random.nextFloat() * 0.2f - 0.1f)

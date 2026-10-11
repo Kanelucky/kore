@@ -4,8 +4,11 @@ import org.koremc.registry.BlockState
 
 private const val WALL_POST = "wall_post_bit"
 private const val IN_WALL = "in_wall_bit"
-/** The four sides a block can join others on. */
-private val AROUND = listOf(Face.NORTH, Face.EAST, Face.SOUTH, Face.WEST)
+private const val ATTACHED = "attached_bit"
+private const val THICKNESS = "dripstone_thickness"
+
+internal const val TRIPWIRE = "minecraft:trip_wire"
+internal const val TRIPWIRE_HOOK = "minecraft:tripwire_hook"
 
 private fun connection(side: Face) = "minecraft:connection_${side.id}"
 
@@ -35,10 +38,18 @@ private val BlockState.gateFacing get() = Face.entries.find { it.id == propertie
  * they join. A wall's sides stand tall under a block that covers them,
  * and it raises a post where it ends or turns. A fence gate drops when
  * set in a wall. Stairs turn a corner against stairs set across them.
- * Any other block is as it is.
+ * Tripwire joins the tripwire and hooks beside it, and tripwire hooks
+ * strung to one another, with the tripwire between, are attached.
+ * Pointed dripstone thickens from its tip back, and scaffolding knows how
+ * far it is from what holds it up. Any other block is as it is.
  */
 fun FlatWorld.joined(pos: BlockPos, state: BlockState): BlockState {
     val changes = when {
+        state.name == SCAFFOLDING -> return scaffoldingShaped(pos, state)
+        state.name == TRIPWIRE -> AROUND.associate { side -> connection(side) to bit(tripwireJoins(side, stateAt(pos.side(side)))) } +
+            (ATTACHED to bit(tripwireStrung(pos)))
+        state.name == TRIPWIRE_HOOK -> mapOf(ATTACHED to bit(hookStrung(pos, state)))
+        THICKNESS in state.properties -> mapOf(THICKNESS to dripstoneThickness(pos, state))
         state.isWall -> wallShape(pos, state)
         STAIRS_CORNER in state.properties -> mapOf(STAIRS_CORNER to stairsCorner(pos, state))
         state.isFence || state.isPane -> AROUND.associate { side -> connection(side) to bit(joins(state, side, stateAt(pos.side(side)))) }
@@ -116,6 +127,67 @@ private fun FlatWorld.stairsCorner(pos: BlockPos, stairs: BlockState): String {
         return if (across == climb.counterClockwise) "inner_left" else "inner_right"
     }
     return "none"
+}
+
+/** Whether tripwire joins [neighbour] on its [side]: more tripwire, or a hook facing it. */
+private fun tripwireJoins(side: Face, neighbour: BlockState?): Boolean = when (neighbour?.name) {
+    TRIPWIRE -> true
+    TRIPWIRE_HOOK -> neighbour.hookFacing == side.opposite
+    else -> false
+}
+
+/** The way a tripwire hook faces, out of the block it's fixed to, along the tripwire it can be strung to. */
+private val BlockState.hookFacing get() = (properties["direction"] as? Int)?.let(Face::ofLegacyIndex)
+
+/**
+ * Whether the tripwire hook at [pos], [hook], is strung to another: one
+ * facing it, more than a block and at most [TRIPWIRE_REACH] away, with
+ * tripwire all the way between.
+ */
+private fun FlatWorld.hookStrung(pos: BlockPos, hook: BlockState): Boolean {
+    val facing = hook.hookFacing ?: return false
+    for (distance in 1..TRIPWIRE_REACH) {
+        val along = stateAt(BlockPos(pos.x + facing.dx * distance, pos.y, pos.z + facing.dz * distance)) ?: return false
+        when (along.name) {
+            TRIPWIRE -> continue
+            TRIPWIRE_HOOK -> return along.hookFacing == facing.opposite && distance > 1
+            else -> return false
+        }
+    }
+    return false
+}
+
+/** Whether the tripwire at [pos] lies between two hooks strung to one another, along either axis. */
+private fun FlatWorld.tripwireStrung(pos: BlockPos): Boolean = listOf(Face.EAST, Face.SOUTH).any { side ->
+    val ends = listOf(side, side.opposite).map { direction ->
+        var at = pos.side(direction)
+        var distance = 1
+        while (stateAt(at)?.name == TRIPWIRE && distance <= TRIPWIRE_REACH) {
+            at = at.side(direction)
+            distance++
+        }
+        at to stateAt(at)
+    }
+    ends.all { (at, end) -> end?.name == TRIPWIRE_HOOK && hookStrung(at, end) }
+}
+
+/**
+ * How thick pointed dripstone is, worked out as Java Edition does from
+ * the dripstone beyond its tip and behind it: the tip at the end of a
+ * run, then the frustum behind it, a middle, and the base the run grows
+ * from. A tip that meets another coming the other way merges with it.
+ */
+private fun FlatWorld.dripstoneThickness(pos: BlockPos, dripstone: BlockState): String {
+    val hanging = dripstone.properties[HANGING]
+    val pointing = if (hanging == 1.toByte()) Face.DOWN else Face.UP
+    fun isDripstone(at: BlockPos, pointingSame: Boolean) = stateAt(at)?.takeIf { it.name == dripstone.name && (it.properties[HANGING] == hanging) == pointingSame }
+    val ahead = pos.side(pointing)
+    isDripstone(ahead, pointingSame = false)?.let { return if (dripstone.properties[THICKNESS] == "merge" || it.properties[THICKNESS] == "merge") "merge" else "tip" }
+    val next = isDripstone(ahead, pointingSame = true) ?: return "tip"
+    return when (next.properties[THICKNESS]) {
+        "tip", "merge" -> "frustum"
+        else -> if (isDripstone(pos.side(pointing.opposite), pointingSame = true) != null) "middle" else "base"
+    }
 }
 
 /**

@@ -62,7 +62,7 @@ class UsingTest {
 
     @Test
     fun `doors open and shut both halves, unless only redstone opens them`() {
-        world.place(palette.defaultOf("minecraft:wooden_door")!!, spot.side(Face.DOWN), Face.UP, clickY = 0f, Face.NORTH)
+        world.place(palette.defaultOf("minecraft:wooden_door")!!, spot.side(Face.DOWN), Face.UP, clickY = 0f, Placer(Face.NORTH))
         val top = spot.side(Face.UP)
 
         val opened = world.use(top, Face.SOUTH)
@@ -79,30 +79,30 @@ class UsingTest {
     fun `doors face a quarter turn clockwise from the player, hinge against a wall, and pair up`() {
         // Facing north, a wall to the right (east) puts the hinge on the right.
         world[spot.side(Face.EAST)] = stone
-        world.place(palette.defaultOf("minecraft:wooden_door")!!, spot.side(Face.DOWN), Face.UP, clickY = 0f, Face.NORTH)
+        world.place(palette.defaultOf("minecraft:wooden_door")!!, spot.side(Face.DOWN), Face.UP, clickY = 0f, Placer(Face.NORTH))
         assertEquals(door("minecraft:wooden_door", "east", 1, 0, 0), world.stateAt(spot))
 
         // A door placed to the right of another, its left, pairs with it.
         val next = BlockPos(6, MIN_Y + 1, 2)
-        world.place(palette.defaultOf("minecraft:wooden_door")!!, next.side(Face.DOWN), Face.UP, clickY = 0f, Face.NORTH)
-        world.place(palette.defaultOf("minecraft:wooden_door")!!, next.side(Face.EAST).side(Face.DOWN), Face.UP, clickY = 0f, Face.NORTH)
+        world.place(palette.defaultOf("minecraft:wooden_door")!!, next.side(Face.DOWN), Face.UP, clickY = 0f, Placer(Face.NORTH))
+        world.place(palette.defaultOf("minecraft:wooden_door")!!, next.side(Face.EAST).side(Face.DOWN), Face.UP, clickY = 0f, Placer(Face.NORTH))
         assertEquals(0.toByte(), world.stateAt(next)?.properties?.get("door_hinge_bit"))
         assertEquals(1.toByte(), world.stateAt(next.side(Face.EAST))?.properties?.get("door_hinge_bit"))
     }
 
     @Test
     fun `a door falls with the block it stands on, both halves`() {
-        world.place(palette.defaultOf("minecraft:wooden_door")!!, spot.side(Face.DOWN), Face.UP, clickY = 0f, Face.NORTH)
+        world.place(palette.defaultOf("minecraft:wooden_door")!!, spot.side(Face.DOWN), Face.UP, clickY = 0f, Placer(Face.NORTH))
 
         val broken = world.breakBlock(spot.side(Face.DOWN))
 
-        assertEquals(setOf(spot.side(Face.DOWN), spot, spot.side(Face.UP)), broken.keys)
+        assertEquals(setOf(spot.side(Face.DOWN), spot, spot.side(Face.UP)), broken.broken.keys)
         assertEquals(air, world.stateAt(spot.side(Face.UP)))
     }
 
     @Test
     fun `trapdoors hinge away from the player, and open and shut`() {
-        world.place(trapdoor(0, 0, 0), spot.side(Face.DOWN), Face.UP, clickY = 0f, Face.EAST)
+        world.place(trapdoor(0, 0, 0), spot.side(Face.DOWN), Face.UP, clickY = 0f, Placer(Face.EAST))
         assertEquals(trapdoor(1, 0, 0), world.stateAt(spot))
 
         assertEquals(Used(listOf(spot), "trapdoor.open", trapdoor(1, 1, 0).networkId), world.use(spot, Face.EAST))
@@ -111,7 +111,7 @@ class UsingTest {
 
     @Test
     fun `fence gates face the way the player does, and open away from them`() {
-        world.place(gate("south", 0), spot.side(Face.DOWN), Face.UP, clickY = 0f, Face.NORTH)
+        world.place(gate("south", 0), spot.side(Face.DOWN), Face.UP, clickY = 0f, Placer(Face.NORTH))
         assertEquals(gate("north", 0), world.stateAt(spot))
 
         // Opened from its far side, facing south, the gate turns round first.

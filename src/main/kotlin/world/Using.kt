@@ -31,22 +31,44 @@ data class Used(
     val releaseIn: Int? = null,
 )
 
+/** Daylight detectors, which a click switches between sensing day and night. */
+private val DAYLIGHT_DETECTORS = listOf("minecraft:daylight_detector", "minecraft:daylight_detector_inverted")
+
+private const val REPEATER_DELAY = "repeater_delay"
+private const val SUBTRACTING = "output_subtract_bit"
+
 /** Whether clicking this block uses it, rather than placing the held item against it. */
 val BlockState.usable: Boolean
-    get() = name == LEVER || name.endsWith("button") ||
+    get() = name == LEVER || name.endsWith("button") || name in DAYLIGHT_DETECTORS ||
+        REPEATER_DELAY in properties || SUBTRACTING in properties ||
         (name !in OPENED_BY_REDSTONE && (name.endsWith("_door") || name.endsWith("trapdoor") || name.endsWith("fence_gate")))
 
 /**
  * Uses the block at [pos] as a player facing [facing] does by clicking it:
  * a lever flips, a button presses in, and doors, trapdoors and fence gates
  * open or shut, a door's two halves together and a gate away from the
- * player. A button already pressed does nothing. Null for a block that
- * isn't [usable].
+ * player. A daylight detector switches to sensing night, or back, a
+ * repeater waits a tick longer, or back to one after four, and a
+ * comparator switches between comparing and subtracting. A button already
+ * pressed does nothing. Null for a block that isn't [usable].
  */
 fun FlatWorld.use(pos: BlockPos, facing: Face): Used? {
     val state = stateAt(pos)?.takeIf { it.usable } ?: return null
     val name = state.name
     return when {
+        name in DAYLIGHT_DETECTORS -> {
+            val other = DAYLIGHT_DETECTORS.first { it != name }
+            blocks.find(other, state.properties)?.let { set(pos, it) }
+            Used(listOf(pos))
+        }
+        REPEATER_DELAY in state.properties -> {
+            change(pos, state, REPEATER_DELAY to ((state.properties[REPEATER_DELAY] as Int) + 1) % 4)
+            Used(listOf(pos))
+        }
+        SUBTRACTING in state.properties -> {
+            change(pos, state, SUBTRACTING to bit(state.properties[SUBTRACTING] == 0.toByte()))
+            Used(listOf(pos))
+        }
         name == LEVER -> {
             val on = state.properties[OPEN] == 0.toByte()
             change(pos, state, OPEN to bit(on))

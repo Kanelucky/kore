@@ -1,10 +1,12 @@
 package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
+import org.cloudburstmc.nbt.NbtMap
 import org.koremc.world.BlockPos
 import org.koremc.world.Vec3
 
 private const val UPDATE_BLOCK = 21
+private const val BLOCK_ACTOR_DATA = 56
 private const val LEVEL_EVENT = 25
 internal const val INVENTORY_TRANSACTION = 30
 internal const val MOB_EQUIPMENT = 31
@@ -123,6 +125,20 @@ data class UpdateBlock(val position: BlockPos, val networkId: Int) : ServerPacke
     private companion object {
         /** The flag for a change that comes over the network, rather than one the client made itself. */
         const val BLOCK_UPDATE_NETWORK = 0b10
+    }
+}
+
+/**
+ * The data the block at [position] keeps beyond its state, like a bed's
+ * colour or a banner's patterns, as network NBT. It names its block
+ * entity's kind with `id`, and where it is.
+ */
+data class BlockActorData(val position: BlockPos, val data: NbtMap) : ServerPacket {
+    override val id get() = BLOCK_ACTOR_DATA
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeBlockPos(position)
+        out.writeNbt(data)
     }
 }
 

@@ -2,6 +2,7 @@ package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.Unpooled
+import org.cloudburstmc.nbt.NbtMap
 import org.koremc.world.BlockPos
 import org.koremc.world.Chunk
 import org.koremc.world.ChunkPos
@@ -25,10 +26,11 @@ private const val REPEAT_PREVIOUS = (0x7F shl 1) or 1
 
 /**
  * A whole chunk column in one packet: every sub-chunk up to the last with
- * anything in it, then biomes for the column's full height. The client can
- * also ask for sub-chunks one by one, but Kore doesn't make it.
+ * anything in it, then biomes for the column's full height, then the
+ * column's [blockEntities]. The client can also ask for sub-chunks one by
+ * one, but Kore doesn't make it.
  */
-data class LevelChunk(val position: ChunkPos, val chunk: Chunk) : ServerPacket {
+data class LevelChunk(val position: ChunkPos, val chunk: Chunk, val blockEntities: Collection<NbtMap> = emptyList()) : ServerPacket {
     override val id get() = LEVEL_CHUNK
 
     override fun encodeBody(out: ByteBuf) {
@@ -44,7 +46,7 @@ data class LevelChunk(val position: ChunkPos, val chunk: Chunk) : ServerPacket {
         chunk.subChunks.forEachIndexed { i, blocks -> payload.writeSubChunk(MIN_Y / 16 + i, blocks) }
         chunk.biomes.forEachIndexed { i, biomes -> payload.writePalettedStorage(biomes, previous = chunk.biomes.getOrNull(i - 1)) }
         payload.writeByte(0) // Border blocks, an Education Edition feature
-        // Block entities would follow, as network NBT. Kore has none yet.
+        blockEntities.forEach(payload::writeNbt) // One after another, until the payload ends
 
         out.writeVarUInt(payload.readableBytes())
         out.writeBytes(payload)

@@ -38,14 +38,14 @@ class ConnectionsTest {
 
         place(fence(), spot.side(Face.EAST))
         assertEquals(fence(w = 1), world.stateAt(spot.side(Face.EAST)))
-        assertEquals(listOf(spot), world.updateAround(listOf(spot.side(Face.EAST))))
+        assertEquals(listOf(spot), world.settle(listOf(spot.side(Face.EAST))).reshaped)
         assertEquals(fence(e = 1), world.stateAt(spot))
 
         // Stone joins; a nether brick fence and a wall don't.
         world[spot.side(Face.NORTH)] = stone
         place(joining("minecraft:nether_brick_fence", 0, 0, 0, 0), spot.side(Face.SOUTH))
         place(wall("none", "none", "none", "none", 1), spot.side(Face.WEST))
-        world.updateAround(listOf(spot.side(Face.NORTH), spot.side(Face.SOUTH), spot.side(Face.WEST)))
+        world.settle(listOf(spot.side(Face.NORTH), spot.side(Face.SOUTH), spot.side(Face.WEST)))
         assertEquals(fence(n = 1, e = 1), world.stateAt(spot))
     }
 
@@ -67,9 +67,9 @@ class ConnectionsTest {
         place(fence(), spot)
         assertEquals(fence(n = 1), world.stateAt(spot))
 
-        val broken = world.breakBlock(spot.side(Face.NORTH))
+        val changes = world.breakBlock(spot.side(Face.NORTH))
 
-        assertEquals(listOf(spot), world.updateAround(broken.keys))
+        assertEquals(listOf(spot), changes.reshaped)
         assertEquals(fence(), world.stateAt(spot))
     }
 
@@ -78,7 +78,7 @@ class ConnectionsTest {
         val run = (0..2).map { BlockPos(spot.x + it, spot.y, spot.z) }
         for (pos in run) {
             place(wall("none", "none", "none", "none", 0), pos)
-            world.updateAround(listOf(pos))
+            world.settle(listOf(pos))
         }
 
         assertEquals(wall("none", "short", "none", "none", 1), world.stateAt(run[0]))
@@ -87,12 +87,12 @@ class ConnectionsTest {
 
         // Turning the corner at the east end.
         place(wall("none", "none", "none", "none", 0), run[2].side(Face.SOUTH))
-        world.updateAround(listOf(run[2].side(Face.SOUTH)))
+        world.settle(listOf(run[2].side(Face.SOUTH)))
         assertEquals(wall("none", "none", "short", "short", 1), world.stateAt(run[2]))
 
         // A torch on the straight run raises a post under it.
         world[run[1].side(Face.UP)] = standingTorch
-        world.updateAround(listOf(run[1].side(Face.UP)))
+        world.settle(listOf(run[1].side(Face.UP)))
         assertEquals(wall("none", "short", "none", "short", 1), world.stateAt(run[1]))
     }
 
@@ -141,8 +141,8 @@ class ConnectionsTest {
         // Turned to climb east behind the first, west behind the second.
         place(stairs(Face.EAST), spot.side(Face.NORTH), facing = Face.EAST)
         place(stairs(Face.WEST), other.side(Face.NORTH), facing = Face.WEST)
-        assertEquals(listOf(spot), world.updateAround(listOf(spot.side(Face.NORTH))))
-        world.updateAround(listOf(other.side(Face.NORTH)))
+        assertEquals(listOf(spot), world.settle(listOf(spot.side(Face.NORTH))).reshaped)
+        world.settle(listOf(other.side(Face.NORTH)))
 
         assertEquals(stairs(Face.NORTH, "outer_right"), world.stateAt(spot))
         assertEquals(stairs(Face.NORTH, "outer_left"), world.stateAt(other))
@@ -185,7 +185,7 @@ class ConnectionsTest {
     }
 
     /** Places [block] standing on the ground at [pos], with the player facing [facing]. */
-    private fun place(block: BlockState, pos: BlockPos, facing: Face = Face.NORTH) = world.place(block, pos.side(Face.DOWN), Face.UP, clickY = 0f, facing)
+    private fun place(block: BlockState, pos: BlockPos, facing: Face = Face.NORTH) = world.place(block, pos.side(Face.DOWN), Face.UP, clickY = 0f, Placer(facing))
 
     private fun stairs(climb: Face, corner: String = "none", upsideDown: Int = 0) = state(
         "minecraft:oak_stairs",
