@@ -2,6 +2,7 @@ package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
 import org.cloudburstmc.nbt.NbtMap
+import org.koremc.registry.BlockDefinition
 import org.koremc.world.BlockPos
 import org.koremc.world.Vec3
 import java.util.UUID
@@ -61,9 +62,13 @@ data class StartGame(
     val worldName: String,
     /** The game version the server speaks, like "1.26.50". */
     val serverVersion: String,
+    /** The game version whose vanilla content the client should load. See [ResourcePackStack.baseGameVersion]. */
+    val baseGameVersion: String,
     val time: Long = 0,
     /** Ties the session's telemetry together. Any unique string will do. */
     val multiplayerCorrelationId: String = UUID.randomUUID().toString(),
+    /** The blocks defined in data, which the client can't show or use without their definitions. */
+    val blockDefinitions: BlockDefinitions = BlockDefinitions(emptyList()),
 ) : ServerPacket {
     override val id get() = START_GAME
 
@@ -88,7 +93,7 @@ data class StartGame(
 
         out.writeLongLE(time)
         out.writeVarInt(0) // Enchantment seed
-        out.writeVarUInt(0) // Custom block properties
+        out.writeBytes(blockDefinitions.encoded)
         out.writeString(multiplayerCorrelationId)
         out.writeBoolean(true) // Server-authoritative inventory
         out.writeString(serverVersion)
@@ -144,7 +149,7 @@ data class StartGame(
         // gamertags only, from world template, template option locked, only v1 villagers,
         // persona disabled, custom skins disabled and emote chat muted.
         repeat(10) { out.writeBoolean(false) }
-        out.writeString("*") // Base game version: whatever the client has
+        out.writeString(baseGameVersion)
         out.writeIntLE(0) // Limited world width
         out.writeIntLE(0) // Limited world depth
         out.writeBoolean(true) // New nether
@@ -167,4 +172,19 @@ private fun ByteBuf.writeVec3(vec: Vec3) {
     writeFloatLE(vec.x)
     writeFloatLE(vec.y)
     writeFloatLE(vec.z)
+}
+
+/**
+ * Block definitions as `StartGame` carries them: each block's name, then
+ * its definition as network NBT. They're the same for every player and run
+ * to tens of kilobytes, so they're encoded once.
+ */
+class BlockDefinitions(val blocks: List<BlockDefinition>) {
+    internal val encoded = encodeOnce {
+        writeVarUInt(blocks.size)
+        for (block in blocks) {
+            writeString(block.name)
+            writeNbt(block.data)
+        }
+    }
 }

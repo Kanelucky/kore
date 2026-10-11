@@ -7,12 +7,16 @@ import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.Attribute
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.BiomeDefinitionList
+import org.koremc.protocol.BlockDefinitions
 import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
 import org.koremc.protocol.ClientPacket
+import org.koremc.protocol.ContainerClose
+import org.koremc.protocol.ContainerOpen
 import org.koremc.protocol.CreativeContent
 import org.koremc.protocol.Disconnect
 import org.koremc.protocol.FloatItem
+import org.koremc.protocol.Interact
 import org.koremc.protocol.InputFlag
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.JigsawStructureData
@@ -35,7 +39,6 @@ import org.koremc.protocol.SetActorData
 import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.ShortItem
 import org.koremc.protocol.StartGame
-import org.koremc.protocol.UnhandledPacket
 import org.koremc.protocol.UpdateAbilities
 import org.koremc.protocol.UpdateAttributes
 import org.koremc.protocol.abilitiesFor
@@ -84,6 +87,13 @@ private const val MAX_COORDINATE = 30_000_000f
  */
 private const val RECENTRE_DISTANCE = 2
 
+/** The window and container type of a player's own inventory. */
+private const val INVENTORY_WINDOW = 0
+private const val INVENTORY_CONTAINER = 0xFF
+
+/** The window a client closes when chat opens over a container. It gets no reply. */
+private const val CHAT_WINDOW = 0xFF
+
 /** The flags a player always has: they breathe, fall, collide and climb. */
 private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, ActorFlag.HAS_COLLISION, ActorFlag.CAN_CLIMB)
 
@@ -106,7 +116,7 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  *    shapes go just before it, as the client insists, and the game's
  *    definitions just after:
  *    the `ItemRegistry`, with every item and the runtime ID it travels by,
- *    then the biomes and the (empty) creative inventory.
+ *    then the biomes and the creative inventory.
  * 5. The client asks how far it can see. Kore settles on a chunk radius,
  *    sends every chunk within it, nearest first, then
  *    `PlayStatus(PLAYER_SPAWN)`.
@@ -128,6 +138,8 @@ class Session(
     private val config: ServerConfig,
     /** What follows `StartGame`: the item registry first, then the rest of the game's definitions. Shared by every session. */
     private val definitions: List<ServerPacket>,
+    /** The blocks defined in data, sent in `StartGame`. Shared by every session. */
+    private val blockDefinitions: BlockDefinitions,
     private val world: FlatWorld,
     private val networkId: String,
     /** The player's entity ID, unique across the server. */
@@ -182,6 +194,9 @@ class Session(
     /** Whether the player is flying, where sneaking means descending rather than slowing down. */
     private var flying = false
 
+    /** Whether the player's inventory is open, which the client can't do without Kore's say-so. */
+    private var inventoryOpen = false
+
     /** The chunk the player's view is centred on. */
     private var viewCentre = world.spawn.chunk
 
@@ -192,8 +207,8 @@ class Session(
             log.warn("Dropped a batch from network {}: {}", networkId, e.message)
             return
         }
-        // Movement arrives every tick in game, along with packets Kore ignores, so those batches only go to trace.
-        if (state == State.IN_GAME && packets.all { it is PlayerAuthInput || it is UnhandledPacket }) {
+        // Movement arrives every tick in game, so batches of nothing else only go to trace.
+        if (state == State.IN_GAME && packets.all { it is PlayerAuthInput }) {
             packetLog.trace("<- {}: {} ({} bytes)", who, packets.joinToString(), message.size)
         } else {
             packetLog.debug("<- {}: {} ({} bytes)", who, packets.joinToString(), message.size)
@@ -213,6 +228,8 @@ class Session(
             State.LOADING_WORLD -> if (packet is RequestChunkRadius) onRequestChunkRadius(packet) else unexpected(packet)
             State.SPAWNING, State.IN_GAME -> when (packet) {
                 is PlayerAuthInput -> onMove(packet)
+                is Interact -> if (packet.action == Interact.OPEN_INVENTORY) openInventory()
+                is ContainerClose -> onContainerClose(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
                 is SetLocalPlayerAsInitialised -> if (state == State.SPAWNING) onPlayerInitialised(packet) else unexpected(packet)
                 // Movement and the rest of gameplay arrive many times a second, and Kore has nothing for them yet.
@@ -268,12 +285,12 @@ class Session(
 
     private fun onResourcePackResponse(packet: ResourcePackClientResponse) {
         when (packet.response) {
-            ResourcePackClientResponse.Response.DOWNLOADING_FINISHED -> send(ResourcePackStack())
+            ResourcePackClientResponse.Response.DOWNLOADING_FINISHED -> send(ResourcePackStack(baseGameVersion = config.version))
 
             // Kore offered nothing, so there's nothing to download. Carry on as though the client had everything.
             ResourcePackClientResponse.Response.DOWNLOADING -> {
                 log.debug("Network {} asked for packs Kore never offered: {}", networkId, packet.packs)
-                send(ResourcePackStack())
+                send(ResourcePackStack(baseGameVersion = config.version))
             }
 
             ResourcePackClientResponse.Response.RESOURCE_PACK_STACK_FINISHED -> startGame()
@@ -301,6 +318,8 @@ class Session(
                 worldSpawn = spawn,
                 worldName = config.level,
                 serverVersion = config.version,
+                baseGameVersion = config.version,
+                blockDefinitions = blockDefinitions,
             ),
             *definitions.toTypedArray(),
         )
@@ -409,6 +428,29 @@ class Session(
     private fun Vec3.isPlausible() =
         listOf(x, y, z).all { it.isFinite() } && abs(x) <= MAX_COORDINATE && abs(z) <= MAX_COORDINATE
 
+    /**
+     * Opens the player's inventory, which with server-authoritative
+     * inventories the client only does when Kore says so. The client can
+     * ask again before the first answer arrives, and two answers crash it.
+     */
+    private fun openInventory() {
+        if (inventoryOpen) return
+        inventoryOpen = true
+        send(ContainerOpen(INVENTORY_WINDOW, INVENTORY_CONTAINER, position.toBlockPos(), entityId = -1))
+    }
+
+    /** Agrees to the client closing a window, except one closed by chat opening, which needs no answer. */
+    private fun onContainerClose(packet: ContainerClose) {
+        when (packet.windowId) {
+            INVENTORY_WINDOW -> {
+                inventoryOpen = false
+                send(ContainerClose(INVENTORY_WINDOW, containerType = 0))
+            }
+            CHAT_WINDOW -> inventoryOpen = false
+            else -> send(ContainerClose(packet.windowId, packet.containerType))
+        }
+    }
+
     private fun onPlayerInitialised(packet: SetLocalPlayerAsInitialised) {
         if (packet.runtimeId != entityId) {
             log.debug("Network {} initialised runtime ID {}, but its player's is {}", networkId, packet.runtimeId, entityId)
@@ -501,10 +543,11 @@ class Sessions(private val config: ServerConfig, vanilla: VanillaData, private v
     private var nextEntityId = 1L
 
     /** Built here, on start, so no player's login pays to encode them. */
-    private val definitions = listOf(ItemRegistry(vanilla.items), BiomeDefinitionList(vanilla.biomes), CreativeContent)
+    private val definitions = listOf(ItemRegistry(vanilla.items), BiomeDefinitionList(vanilla.biomes), CreativeContent(vanilla.creative))
+    private val blockDefinitions = BlockDefinitions(vanilla.blockDefinitions)
 
     fun connect(connection: NetherNetConnection) {
-        sessions[connection] = Session(config, definitions, world, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
+        sessions[connection] = Session(config, definitions, blockDefinitions, world, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
             connection.send(message)
         }
     }

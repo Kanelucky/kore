@@ -57,6 +57,14 @@ fun blockStateHash(name: String, properties: Map<String, Any>): Int {
     return bytes.fold(FNV1A_32_OFFSET_BASIS) { hash, byte -> (hash xor (byte.toInt() and 0xFF)) * FNV1A_32_PRIME }
 }
 
+/**
+ * A vanilla block defined in data rather than in the game's code, like the
+ * wool and concrete stairs and slabs added in 26.50. The client only knows
+ * how such a block looks and behaves once the server sends it [data]: its
+ * components, tags and creative category.
+ */
+data class BlockDefinition(val name: String, val data: NbtMap)
+
 /** Every block state the client knows, found by the network ID the client sends when it names one. */
 class BlockPalette(val states: List<BlockState>) {
     private val byNetworkId = states.associateBy(BlockState::networkId)

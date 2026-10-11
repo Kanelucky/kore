@@ -6,6 +6,7 @@ import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemVersion
+import org.koremc.world.BlockPos
 import org.koremc.world.Vec3
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -70,10 +71,11 @@ class PacketsTest {
 
     @Test
     fun `the pack stack counts experiments with a plain uint32`() {
-        assertContentEquals(bytes(0x07, 0x00, 0x00, 0x01, '*'.code, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00), ResourcePackStack().encode())
+        val version = bytes(7) + "1.26.50".toByteArray()
+        assertContentEquals(bytes(0x07, 0x00, 0x00) + version + bytes(0x00, 0x00, 0x00, 0x00, 0x00, 0x00), ResourcePackStack(baseGameVersion = "1.26.50").encode())
         assertContentEquals(
             bytes(0x07, 0x00, 0x00, 0x01, '*'.code, 0x01, 0x00, 0x00, 0x00) + bytes(0x07) + "cameras".toByteArray() + bytes(0x01, 0x01, 0x00),
-            ResourcePackStack(experiments = mapOf("cameras" to true)).encode(),
+            ResourcePackStack(baseGameVersion = "*", experiments = mapOf("cameras" to true)).encode(),
         )
     }
 
@@ -167,6 +169,24 @@ class PacketsTest {
     }
 
     @Test
+    fun `interact carries an action and a target, and maybe a position`() {
+        assertEquals(Interact(action = 6, targetRuntimeId = 1), decodeClientPacket(bytes(0x21, 0x06, 0x01, 0x00)))
+        assertEquals(Interact(action = 4, targetRuntimeId = 5), decodeClientPacket(bytes(0x21, 0x04, 0x05, 0x01) + ByteArray(12)))
+    }
+
+    @Test
+    fun `containers open with a window, a type, a block position and an entity`() {
+        // Window 0, type -1, block 0, -59, 0 zigzagged, and entity -1 zigzagged to 1.
+        assertContentEquals(bytes(0x2E, 0x00, 0xFF, 0x00, 0x75, 0x00, 0x01), ContainerOpen(0, 0xFF, BlockPos(0, -59, 0), entityId = -1).encode())
+    }
+
+    @Test
+    fun `container close reads and writes the same way`() {
+        assertEquals(ContainerClose(windowId = 0, containerType = 0xFF), decodeClientPacket(bytes(0x2F, 0x00, 0xFF, 0x00)))
+        assertContentEquals(bytes(0x2F, 0x00, 0x00, 0x00), ContainerClose(windowId = 0, containerType = 0).encode())
+    }
+
+    @Test
     fun `the client names its player's runtime ID once it has spawned`() {
         assertEquals(SetLocalPlayerAsInitialised(runtimeId = 300), decodeClientPacket(bytes(0x71, 0xAC, 0x02)))
     }
@@ -184,11 +204,6 @@ class PacketsTest {
     @Test
     fun `empty voxel shapes are two empty lists and a zero count`() {
         assertContentEquals(bytes(0xD1, 0x02, 0x00, 0x00, 0x00, 0x00), VoxelShapes.encode())
-    }
-
-    @Test
-    fun `an empty creative inventory is two empty lists`() {
-        assertContentEquals(bytes(0x91, 0x01, 0x00, 0x00), CreativeContent.encode())
     }
 
     @Test

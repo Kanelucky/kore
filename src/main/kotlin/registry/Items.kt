@@ -21,3 +21,16 @@ data class ItemDefinition(
     /** The item's component data, which most items leave empty. */
     val components: NbtMap = NbtMap.EMPTY,
 )
+
+/**
+ * Some of an item, as inventories and the creative inventory hold it: how
+ * many, which variant (its aux value, like an arrow's potion), the block
+ * state it places, and its NBT, like an enchanted book's enchantment.
+ */
+data class ItemStack(
+    val item: ItemDefinition,
+    val count: Int = 1,
+    val aux: Int = 0,
+    val block: BlockState? = null,
+    val nbt: NbtMap = NbtMap.EMPTY,
+)

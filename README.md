@@ -40,7 +40,7 @@ Kore is not a fork, a wrapper, or a port of an existing server. It's a ground-up
 | Networking | **Netty 4** | Battle-tested non-blocking I/O for both the TCP signaling and the UDP game traffic. |
 | Serialization | **kotlinx.serialization** | Compile-time JSON codecs with no reflection. |
 | NBT | **Cloudburst NBT** | Reads the vanilla data, and writes NBT for packets and block state hashes. No dependencies of its own. |
-| Game data | **[KoreMC/data](https://github.com/KoreMC/data)** | Items, block states and biomes, dumped from the game by CloudburstMC. Kept in its own repository and read from `data/` on start. |
+| Game data | **[KoreMC/data](https://github.com/KoreMC/data)** | Items, block states, biomes and the creative inventory, dumped from the game by CloudburstMC. Kept in its own repository and read from `data/` on start. |
 | Security | **JDK** (DTLS 1.2, ECDSA) | The JDK's non-blocking DTLS engine fits Netty, and needs no native libraries or BouncyCastle. |
 | Logging | **SLF4J + Logback** | Structured, configurable, and fast enough to stay out of the way. |
 
@@ -138,10 +138,12 @@ Kore finds the authorization service through Minecraft's service discovery and k
 
 ### 📦 Vanilla Data
 
-Clients expect the server to agree with them about the game itself: which items and biomes exist, and what each block state is called on the network. [CloudburstMC/Data](https://github.com/CloudburstMC/Data) dumps that data from the game, and Kore keeps its copy in a repository of its own, [KoreMC/data](https://github.com/KoreMC/data), apart from the code. Kore reads it once on start from `data/` in its working directory (`dataDirectory` in `ServerConfig`). If a file is missing, Kore names it and stops.
+Clients expect the server to agree with them about the game itself: which items and biomes exist, what the creative inventory holds, and what each block state is called on the network. [CloudburstMC/Data](https://github.com/CloudburstMC/Data) dumps that data from the game, and Kore keeps its copy in a repository of its own, [KoreMC/data](https://github.com/KoreMC/data), apart from the code. Kore reads it once on start from `data/` in its working directory (`dataDirectory` in `ServerConfig`). If a file is missing, Kore names it and stops.
 
 - **Items** go to every player in the `ItemRegistry`, with the runtime ID each one travels by. The list is the same for everyone, so Kore encodes it once on start rather than at every login.
 - **Biomes** follow in the `BiomeDefinitionList`: each one's climate, colours and tags. Kore leaves out the world generation data, which only a client generating its own terrain would use, so the packet stays under 8 KB.
+- **The creative inventory** follows, as `CreativeContent`: 124 groups across the four tabs, and 1,980 items, including recent ones like the mushroom shelf and wool and concrete stairs and slabs. Each item names the block state it places and carries its NBT, like an enchanted book's enchantment. It's encoded once on start, too. Because Kore tells the client that the server owns inventories, the client can't even open its own inventory without asking: Kore answers with `ContainerOpen`, and agrees when the client closes it.
+- **Blocks defined in data**, rather than in the game's code, go in `StartGame`. Since 26.50 that includes the wool and concrete stairs and slabs and the shelf mushroom. Without their definitions, the client knows these blocks exist but not how they look, and shows them as placeholders.
 - **Block states** are named on the network by a hash, not by their place in a palette: the 32-bit FNV-1a hash of the state's name and properties, written as little-endian NBT. Mojang's protocol docs don't spell the rule out, so the tests check it against the network ID the game gave each of the 22,091 states in its palette.
 
 The data must be for the same client release as `version` in `ServerConfig`.
@@ -183,6 +185,7 @@ src/main/kotlin/
 │   ├── ActorData.kt                 # Actors' synced data and flags
 │   ├── Attributes.kt                # Health, hunger, speed and other attributes
 │   ├── Abilities.kt                 # What a player may do in their game mode
+│   ├── CreativeContent.kt           # The creative inventory, and items on the wire
 │   └── LoginRequest.kt              # Reading who a client claims to be
 ├── world/
 │   ├── Positions.kt                 # Block, chunk and exact positions
@@ -194,6 +197,7 @@ src/main/kotlin/
 │   ├── VanillaData.kt               # Loads the game's items, block states and biomes on start
 │   ├── Items.kt                     # Items, as the client's item registry lists them
 │   ├── Biomes.kt                    # Biomes, as the client's biome definitions describe them
+│   ├── Creative.kt                  # The creative inventory's tabs, groups and items
 │   └── BlockStates.kt               # Block states and the hashes the client knows them by
 └── network/
     ├── SignalingServer.kt           # TCP bootstrap and HTTP pipeline
@@ -252,6 +256,7 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [ ] Movement simulation and corrections
 
 ### Phase 4: Gameplay
+- [x] Creative inventory, from CloudburstMC's data
 - [ ] Block breaking and placing
 - [ ] Inventories
 - [ ] Entities

@@ -7,6 +7,7 @@ import org.cloudburstmc.nbt.NbtMap
 import org.cloudburstmc.nbt.NbtType
 import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.ItemDefinition
+import org.koremc.world.BlockPos
 import org.koremc.world.Vec3
 import java.util.EnumSet
 import java.util.UUID
@@ -19,13 +20,15 @@ private const val DISCONNECT = 5
 private const val RESOURCE_PACKS_INFO = 6
 private const val RESOURCE_PACK_STACK = 7
 private const val RESOURCE_PACK_CLIENT_RESPONSE = 8
+private const val INTERACT = 33
+private const val CONTAINER_OPEN = 46
+private const val CONTAINER_CLOSE = 47
 private const val REQUEST_CHUNK_RADIUS = 69
 private const val CHUNK_RADIUS_UPDATED = 70
 private const val SET_LOCAL_PLAYER_AS_INITIALISED = 113
 private const val BIOME_DEFINITION_LIST = 122
 private const val CLIENT_CACHE_STATUS = 129
 private const val PLAYER_AUTH_INPUT = 144
-private const val CREATIVE_CONTENT = 145
 private const val ITEM_REGISTRY = 162
 private const val NETWORK_SETTINGS = 143
 private const val REQUEST_NETWORK_SETTINGS = 193
@@ -114,6 +117,27 @@ data class PlayerAuthInput(
 
 /** The client has the chunks around it and has put its player in the world, naming the player's runtime ID from `StartGame`. */
 data class SetLocalPlayerAsInitialised(val runtimeId: Long) : ClientPacket
+
+/** The player interacting with an entity, or with nothing, as when they press the key to open their inventory. */
+data class Interact(val action: Int, val targetRuntimeId: Long) : ClientPacket {
+    companion object {
+        const val OPEN_INVENTORY = 6
+    }
+}
+
+/**
+ * A container window closing. The client sends it when the player closes
+ * one, and the server sends it back to agree, or to close one itself.
+ */
+data class ContainerClose(val windowId: Int, val containerType: Int, val serverInitiated: Boolean = false) : ClientPacket, ServerPacket {
+    override val id get() = CONTAINER_CLOSE
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeByte(windowId)
+        out.writeByte(containerType)
+        out.writeBoolean(serverInitiated)
+    }
+}
 
 /** A packet Kore doesn't decode yet. */
 class UnhandledPacket(val id: Int, val payload: ByteArray) : ClientPacket {
@@ -222,8 +246,12 @@ data class ResourcePacksInfo(
 
 /** The order to apply packs in. Kore's is empty: just the vanilla packs the client already has. */
 data class ResourcePackStack(
-    /** The vanilla packs to build on. `*` means whatever version the client has. */
-    val baseGameVersion: String = "*",
+    /**
+     * The game version whose vanilla packs to build on, like "1.26.50".
+     * Sending `*` instead left blocks new in 26.50 without textures, and
+     * other servers send their game version.
+     */
+    val baseGameVersion: String,
     val experiments: Map<String, Boolean> = emptyMap(),
 ) : ServerPacket {
     override val id get() = RESOURCE_PACK_STACK
@@ -347,16 +375,17 @@ data object VoxelShapes : ServerPacket {
 }
 
 /**
- * The creative inventory's groups and items. Kore has none to offer yet,
- * but the vanilla server sends this to every joining player, so Kore sends
- * it empty.
+ * Opens a container window on the client. For the player's own inventory,
+ * that's window 0, of type -1, with no entity behind it.
  */
-data object CreativeContent : ServerPacket {
-    override val id get() = CREATIVE_CONTENT
+data class ContainerOpen(val windowId: Int, val containerType: Int, val position: BlockPos, val entityId: Long) : ServerPacket {
+    override val id get() = CONTAINER_OPEN
 
     override fun encodeBody(out: ByteBuf) {
-        out.writeVarUInt(0) // Groups
-        out.writeVarUInt(0) // Items
+        out.writeByte(windowId)
+        out.writeByte(containerType)
+        out.writeBlockPos(position)
+        out.writeVarLong(entityId)
     }
 }
 
@@ -394,6 +423,8 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             CLIENT_CACHE_STATUS -> ClientCacheStatus(supported = buffer.readBoolean())
             REQUEST_CHUNK_RADIUS -> RequestChunkRadius(radius = buffer.readVarInt(), maxRadius = buffer.readUnsignedByte().toInt())
             SET_LOCAL_PLAYER_AS_INITIALISED -> SetLocalPlayerAsInitialised(runtimeId = buffer.readVarULong())
+            INTERACT -> Interact(action = buffer.readUnsignedByte().toInt(), targetRuntimeId = buffer.readVarULong())
+            CONTAINER_CLOSE -> ContainerClose(buffer.readUnsignedByte().toInt(), buffer.readUnsignedByte().toInt(), buffer.readBoolean())
             PLAYER_AUTH_INPUT -> decodePlayerAuthInput(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
@@ -412,7 +443,7 @@ private fun decodeResourcePackClientResponse(buffer: ByteBuf): ResourcePackClien
 }
 
 /** Encodes a body now, for packets that keep their bytes to send again and again. */
-private fun encodeOnce(write: ByteBuf.() -> Unit): ByteArray = ByteBufUtil.getBytes(Unpooled.buffer().apply(write))
+internal fun encodeOnce(write: ByteBuf.() -> Unit): ByteArray = ByteBufUtil.getBytes(Unpooled.buffer().apply(write))
 
 fun ServerPacket.encode(): ByteArray {
     val buffer = Unpooled.buffer()

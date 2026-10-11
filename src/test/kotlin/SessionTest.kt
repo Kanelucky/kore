@@ -14,10 +14,14 @@ import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.BiomeDefinitionList
+import org.koremc.protocol.BlockDefinitions
+import org.koremc.protocol.ContainerClose
+import org.koremc.protocol.ContainerOpen
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.SetActorData
 import org.koremc.protocol.flagsItem
 import org.koremc.protocol.ItemRegistry
+import org.koremc.protocol.ResourcePackStack
 import org.koremc.protocol.clientDataToken
 import org.koremc.protocol.connectionRequest
 import org.koremc.protocol.encode
@@ -28,9 +32,11 @@ import org.koremc.protocol.writeVarInt
 import org.koremc.protocol.writeVarUInt
 import org.koremc.protocol.writeVarULong
 import org.koremc.registry.BiomeDefinition
+import org.koremc.registry.BlockDefinition
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemVersion
+import org.koremc.world.BlockPos
 import org.koremc.world.ChunkPos
 import org.koremc.world.FlatWorld
 import org.koremc.world.Vec3
@@ -63,7 +69,8 @@ class SessionTest {
     private val biomes = BiomeDefinitionList(listOf(BiomeDefinition("minecraft:plains", null, 0.8f, 0.4f, 0f, 0.125f, 0.05f, 0, rain = true, listOf("plains"))))
     private val world = FlatWorld(listOf(BlockState("minecraft:stone", NbtMap.EMPTY, version = 18168865)))
     private val sent = mutableListOf<ByteArray>()
-    private val session = Session(config, listOf(itemRegistry, biomes), world, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
+    private val blockDefinitions = BlockDefinitions(listOf(BlockDefinition("minecraft:white_wool_stairs", NbtMap.builder().putInt("molangVersion", 13).build())))
+    private val session = Session(config, listOf(itemRegistry, biomes), blockDefinitions, world, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
 
     /** The client's side of batching, which switches on compression when NetworkSettings arrives. */
     private val batches = BatchCodec()
@@ -115,7 +122,7 @@ class SessionTest {
 
         clientSends(clientCacheStatus(supported = true))
         clientSends(packResponse(2, "downloadingfinished"))
-        assertEquals(0x07, receivedPacket()[0].toInt())
+        assertContentEquals(ResourcePackStack(baseGameVersion = "1.26.50").encode(), receivedPacket())
         assertFalse(session.isLoadingWorld)
 
         clientSends(packResponse(3, "resourcepackstackfinished"))
@@ -125,6 +132,7 @@ class SessionTest {
         assertEquals(0xD1, voxelShapes[0].toInt() and 0xFF)
         assertEquals(0x0B, startGame[0].toInt())
         assertEquals(0x0E, startGame[1].toInt()) // Entity ID 7, zigzagged
+        assertTrue("minecraft:white_wool_stairs" in startGame.decodeToString()) // The block definitions are in there
         assertContentEquals(itemRegistry.encode(), registry)
         assertContentEquals(biomes.encode(), biomeList)
         assertTrue(session.isLoadingWorld)
@@ -325,6 +333,62 @@ class SessionTest {
     }
 
     @Test
+    fun `the inventory opens when the client asks, once`() {
+        spawn()
+
+        clientSends(interact(action = 6, target = 7))
+        // The player's own inventory, at the block they're in: in this one-layer world, their eyes start at 0.5, -61.38, 0.5.
+        assertContentEquals(ContainerOpen(0, 0xFF, BlockPos(0, -62, 0), entityId = -1).encode(), receivedPacket())
+
+        sent.clear()
+        clientSends(interact(action = 6, target = 7)) // Asked again before the answer arrived
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun `closing the inventory is agreed to, and it can open again`() {
+        spawn()
+        clientSends(interact(action = 6, target = 7))
+
+        clientSends(containerClose(window = 0, type = 0xFF))
+        assertContentEquals(ContainerClose(0, 0).encode(), receivedPacket())
+
+        clientSends(interact(action = 6, target = 7))
+        assertEquals(0x2E, receivedPacket()[0].toInt())
+    }
+
+    @Test
+    fun `chat closing the inventory needs no answer`() {
+        spawn()
+        clientSends(interact(action = 6, target = 7))
+        sent.clear()
+
+        clientSends(containerClose(window = 0xFF, type = 0xFF))
+        assertTrue(sent.isEmpty())
+
+        clientSends(interact(action = 6, target = 7))
+        assertEquals(0x2E, receivedPacket()[0].toInt())
+    }
+
+    @Test
+    fun `in game, the packet log only quietens movement`() {
+        spawn()
+        val packetLog = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("org.koremc.packets") as Logger
+        logger.level = ch.qos.logback.classic.Level.TRACE
+        logger.addAppender(packetLog)
+        try {
+            clientSends(playerAuthInput(standing))
+            clientSends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(44).writeZero(4))) // A packet Kore doesn't handle
+        } finally {
+            logger.detachAppender(packetLog)
+            logger.level = null
+        }
+
+        assertEquals(listOf("TRACE", "DEBUG"), packetLog.list.map { it.level.toString() })
+    }
+
+    @Test
     fun `a client that cancels during resource packs goes no further`() {
         logIn()
 
@@ -426,6 +490,12 @@ class SessionTest {
     }
 
     private val standing = Vec3(0.5f, -61.38f, 0.5f)
+
+    private fun interact(action: Int, target: Long) =
+        ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(33).writeByte(action).writeVarULong(target).writeBoolean(false))
+
+    private fun containerClose(window: Int, type: Int) =
+        ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(47).writeByte(window).writeByte(type).writeBoolean(false))
 
     private fun setLocalPlayerAsInitialised(runtimeId: Long) =
         ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(113).writeVarULong(runtimeId))
