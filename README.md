@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Clients get through signaling, ICE and DTLS, but players can't join yet.
+> Kore is in early development. Clients can connect all the way to open data channels, but there's no game protocol on top yet, so players can't join.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -64,9 +64,11 @@ sequenceDiagram
 | Discovery | `GET /v1/join` returns name, version, level and player counts as JSON | ✅ Implemented |
 | Offer / answer | `POST /v1/join/{networkId}` exchanges SDP with all ICE candidates included. The answer is signed with the operator identity. | ✅ Implemented |
 | Connectivity | ICE checks find a UDP path, then DTLS secures it | ✅ Implemented |
-| Data channels | SCTP inside DTLS carries the `ReliableDataChannel` and `UnreliableDataChannel` | ⏳ Planned |
+| Data channels | SCTP inside DTLS carries the `ReliableDataChannel` and `UnreliableDataChannel` | ✅ Implemented |
 
 Kore keeps its side of WebRTC as small as possible. It runs **ICE-lite** and takes the **passive DTLS** role, so it never initiates anything. Every client shares one UDP port: Kore answers their connectivity checks, then waits for each client's first DTLS message. A client's DTLS certificate is accepted only if it matches the fingerprint in that client's offer.
+
+**SCTP is written in Kotlin**, with no native libraries. It covers only what data channels need: one path, no multihoming, and partial reliability so the unreliable channel can drop messages instead of retransmitting them.
 
 ## 🚀 Getting Started
 
@@ -112,16 +114,20 @@ src/main/kotlin/
     ├── NetherNetSignalingHandler.kt # Routes /v1/join requests
     ├── JoinInfo.kt                  # Discovery response body
     ├── RtcServer.kt                 # UDP bootstrap
-    ├── NetherNetRtcHandler.kt       # Splits UDP traffic into STUN and DTLS per client
-    └── rtc/
-        ├── Sdp.kt                   # Offer parsing and answer encoding
-        ├── LocalPeer.kt             # Builds answers from this server's WebRTC state
-        ├── Peer.kt                  # Clients between signaling and disconnect
-        ├── Ice.kt                   # ICE credentials and host candidates
-        ├── Stun.kt                  # STUN messages for ICE-lite
-        ├── Dtls.kt                  # DTLS engines and per-client transport
-        ├── DtlsCertificate.kt       # Self-signed DTLS certificate and fingerprint
-        └── OperatorIdentity.kt      # Operator key and a=identity assertions
+    ├── NetherNetRtcHandler.kt       # Routes UDP traffic through STUN, DTLS and SCTP per client
+    ├── rtc/
+    │   ├── Sdp.kt                   # Offer parsing and answer encoding
+    │   ├── LocalPeer.kt             # Builds answers from this server's WebRTC state
+    │   ├── Peer.kt                  # Clients between signaling and disconnect
+    │   ├── Ice.kt                   # ICE credentials and host candidates
+    │   ├── Stun.kt                  # STUN messages for ICE-lite
+    │   ├── Dtls.kt                  # DTLS engines and per-client transport
+    │   ├── DtlsCertificate.kt       # Self-signed DTLS certificate and fingerprint
+    │   └── OperatorIdentity.kt      # Operator key and a=identity assertions
+    └── sctp/
+        ├── Chunks.kt                # SCTP packet and chunk encoding
+        ├── SctpAssociation.kt       # Handshake, reassembly, retransmission and congestion control
+        └── DataChannels.kt          # Opening data channels (DCEP)
 ```
 
 Packages follow the Kotlin convention of omitting the common root, so `org.koremc.network` lives in `src/main/kotlin/network/`.
@@ -134,7 +140,7 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] **NetherNet HTTP Signaling:** SDP offer/answer (`POST /v1/join/{networkId}`)
 - [x] **UDP Channel Negotiation:** ICE-lite connectivity checks
 - [x] **UDP Channel Negotiation:** DTLS 1.2 handshake with fingerprint verification
-- [ ] **UDP Channel Negotiation:** SCTP association and data channels
+- [x] **UDP Channel Negotiation:** SCTP association and data channels
 - [ ] Message framing over reliable and unreliable data channels
 
 ### Phase 2: Protocol

@@ -10,9 +10,6 @@ import javax.net.ssl.SSLEngineResult.HandshakeStatus
 import javax.net.ssl.SSLEngineResult.Status
 import javax.net.ssl.X509ExtendedTrustManager
 
-/** Keeps every DTLS datagram under a typical path MTU once UDP and IP headers are added. */
-private const val MAX_PACKET_SIZE = 1200
-
 /** Guards against a misbehaving engine spinning the event loop. */
 private const val MAX_STEPS = 64
 
@@ -29,12 +26,13 @@ class DtlsContext(private val certificate: DtlsCertificate) {
         val context = SSLContext.getInstance("DTLSv1.2").apply {
             init(certificate.keyManagers, arrayOf(FingerprintTrustManager(expected)), null)
         }
+        // The engine's maximum packet size caps incoming records too, and clients fill whole
+        // SCTP packets (about 1225 bytes once encrypted), so it stays at the JDK default.
+        // Kore's own records stay small without it: SCTP packets are capped at its MTU, and
+        // the handshake flight with a P-256 certificate is well under 1200 bytes.
         return context.createSSLEngine().apply {
             useClientMode = false
-            sslParameters = sslParameters.apply {
-                needClientAuth = true
-                maximumPacketSize = MAX_PACKET_SIZE
-            }
+            needClientAuth = true
         }
     }
 }
@@ -81,12 +79,13 @@ class DtlsTransport(private val engine: SSLEngine, private val transmit: (ByteBu
         return received
     }
 
-    /** Encrypts [data] into a single record and sends it. */
+    /** Encrypts [data] into a single record and sends it. The receiver treats each record as one SCTP packet. */
     fun write(data: ByteBuffer) {
         val output = ByteBuffer.allocate(engine.session.packetBufferSize)
         val result = engine.wrap(data, output)
         if (result.bytesProduced() > 0) transmit(output.flip())
         if (result.status == Status.CLOSED) isClosed = true
+        check(!data.hasRemaining() || isClosed) { "${data.remaining()} bytes didn't fit in one DTLS record" }
     }
 
     private fun driveHandshake() {

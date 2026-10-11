@@ -1,5 +1,6 @@
 package org.koremc.network.rtc
 
+import org.koremc.network.sctp.DataChannels
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 
@@ -15,8 +16,11 @@ class Peer(
 ) {
     // Set by the signaling thread before the peer is published, then only touched on the UDP event loop.
     var lastSeen: Long = System.nanoTime()
+    val validatedAddresses = HashSet<InetSocketAddress>()
+    /** Where replies go: the validated path the client is currently using. */
     var address: InetSocketAddress? = null
     var dtls: DtlsTransport? = null
+    var channels: DataChannels? = null
 }
 
 /** Every known peer, keyed by the ICE ufrag Kore gave it in the answer. */

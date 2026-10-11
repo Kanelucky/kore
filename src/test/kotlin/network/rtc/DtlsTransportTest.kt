@@ -30,6 +30,15 @@ class DtlsTransportTest {
     }
 
     @Test
+    fun `handshake datagrams fit any path without a packet size cap`() {
+        val link = Link(expected = listOf(clientCertificate.fingerprint))
+        link.pump()
+
+        assertTrue(link.serverDatagramSizes.isNotEmpty())
+        assertTrue(link.serverDatagramSizes.all { it <= 1200 }, "server sent ${link.serverDatagramSizes}")
+    }
+
+    @Test
     fun `client certificate must match the fingerprint in the offer`() {
         val link = Link(expected = listOf(serverCertificate.fingerprint))
 
@@ -41,8 +50,12 @@ class DtlsTransportTest {
     private inner class Link(expected: List<Fingerprint>) {
         private val toServer = ArrayDeque<ByteBuffer>()
         private val toClient = ArrayDeque<ByteBuffer>()
+        val serverDatagramSizes = mutableListOf<Int>()
 
-        val server = DtlsTransport(DtlsContext(serverCertificate).newEngine(expected)) { toClient += it }
+        val server = DtlsTransport(DtlsContext(serverCertificate).newEngine(expected)) {
+            serverDatagramSizes += it.remaining()
+            toClient += it
+        }
         val client = DtlsTransport(dtlsClientEngine(clientCertificate)) { toServer += it }
 
         /** Delivers queued datagrams until both sides go quiet, returning what the server received. */
@@ -70,8 +83,5 @@ internal fun dtlsClientEngine(certificate: DtlsCertificate): SSLEngine {
     return SSLContext.getInstance("DTLSv1.2")
         .apply { init(certificate.keyManagers, arrayOf(trustAll), null) }
         .createSSLEngine()
-        .apply {
-            useClientMode = true
-            sslParameters = sslParameters.apply { maximumPacketSize = 1200 }
-        }
+        .apply { useClientMode = true }
 }

@@ -1,9 +1,7 @@
 package org.koremc.network.rtc
 
+import org.koremc.network.sctp.SCTP_PORT
 import kotlin.random.Random
-
-/** The SCTP port inside the DTLS association. Every WebRTC stack uses 5000. */
-private const val SCTP_PORT = 5000
 
 /** The largest data channel message Kore accepts, matching the client's own limit. */
 private const val MAX_MESSAGE_SIZE = 262_144L

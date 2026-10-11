@@ -11,6 +11,11 @@ import org.koremc.network.rtc.Peer
 import org.koremc.network.rtc.Peers
 import org.koremc.network.rtc.bindingSuccess
 import org.koremc.network.rtc.parseStun
+import org.koremc.network.sctp.ChannelEvent
+import org.koremc.network.sctp.DataChannel
+import org.koremc.network.sctp.DataChannels
+import org.koremc.network.sctp.Scheduler
+import org.koremc.network.sctp.SctpAssociation
 import org.slf4j.LoggerFactory
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
@@ -28,13 +33,16 @@ private val SWEEP_INTERVAL = 5.seconds
  * Handles everything that arrives on the UDP socket. STUN and DTLS share the
  * port and are told apart by their first byte (RFC 7983).
  *
- * Kore runs ICE-lite, so the STUN side only answers the client's checks. The
- * address the client nominates becomes its address, and DTLS records from
- * that address belong to it.
+ * Kore runs ICE-lite, so the STUN side only answers the client's checks.
+ * Every address that passes a check is a valid path for that client, and
+ * replies follow the path the client is currently using. Inside DTLS, SCTP
+ * carries the data channels, and every message on them goes to [onMessage]
+ * on this event loop.
  */
 class NetherNetRtcHandler(
     private val peers: Peers,
     private val dtls: DtlsContext,
+    private val onMessage: (peer: Peer, channel: DataChannel, data: ByteArray) -> Unit = { _, _, _ -> },
 ) : SimpleChannelInboundHandler<DatagramPacket>() {
     // Only touched on this channel's event loop.
     private val byAddress = HashMap<InetSocketAddress, Peer>()
@@ -70,20 +78,26 @@ class NetherNetRtcHandler(
         ctx.writeAndFlush(DatagramPacket(Unpooled.wrappedBuffer(response), sender))
         peer.lastSeen = System.nanoTime()
 
+        // Any address that passes a check is a valid path for this client, not just the nominated one.
+        if (peer.validatedAddresses.add(sender)) byAddress[sender] = peer
+
         // The client picks the path. Until it nominates one, the first address that checks in will do.
         if (request.useCandidate || peer.address == null) select(peer, sender)
     }
 
     private fun select(peer: Peer, address: InetSocketAddress) {
         if (peer.address == address) return
-        peer.address?.let { byAddress.remove(it) }
         peer.address = address
-        byAddress[address] = peer
         log.info("ICE path for network {}: {}", peer.networkId, address)
     }
 
     private fun onDtls(ctx: ChannelHandlerContext, sender: InetSocketAddress, datagram: ByteBuffer) {
         val peer = byAddress[sender] ?: return
+
+        // The client's ICE agent can move to a better path at any time, and may start sending on it
+        // before it nominates it. Replies follow whichever validated path the client is using now.
+        select(peer, sender)
+
         val transport = peer.dtls ?: DtlsTransport(dtls.newEngine(peer.remoteFingerprints)) { record ->
             peer.address?.let { ctx.writeAndFlush(DatagramPacket(Unpooled.wrappedBuffer(record), it)) }
         }.also { peer.dtls = it }
@@ -106,20 +120,63 @@ class NetherNetRtcHandler(
             return
         }
 
-        // SCTP rides inside DTLS and is the next layer to build. For now, show that it arrives.
-        received.forEach { log.debug("SCTP packet from network {} ({} bytes)", peer.networkId, it.remaining()) }
+        for (packet in received) {
+            onSctp(ctx, peer, transport, packet)
+            if (peer.channels?.association?.isClosed == true) {
+                log.info("Network {} closed its SCTP association", peer.networkId)
+                drop(peer)
+                return
+            }
+        }
+    }
+
+    private fun onSctp(ctx: ChannelHandlerContext, peer: Peer, transport: DtlsTransport, packet: ByteBuffer) {
+        val channels = peer.channels
+            ?: DataChannels(SctpAssociation(transport::write, ctx.scheduler())).also { peer.channels = it }
+        val association = channels.association
+
+        val wasEstablished = association.isEstablished
+        val messages = association.receive(packet)
+        if (!wasEstablished && association.isEstablished) log.info("SCTP association up for network {}", peer.networkId)
+
+        for (message in messages) {
+            when (val event = channels.receive(message)) {
+                is ChannelEvent.Opened -> log.info(
+                    "Network {} opened '{}' on stream {} ({}, {})",
+                    peer.networkId, event.channel.label, event.channel.streamId,
+                    if (event.channel.ordered) "ordered" else "unordered",
+                    event.channel.maxRetransmits?.let { "max $it retransmits" } ?: "reliable",
+                )
+                is ChannelEvent.Message -> {
+                    log.debug("{} bytes on '{}' from network {}", event.data.size, event.channel.label, peer.networkId)
+                    onMessage(peer, event.channel, event.data)
+                }
+                null -> Unit
+            }
+        }
     }
 
     private fun sweep() {
         val cutoff = System.nanoTime() - PEER_TIMEOUT.inWholeNanoseconds
         for (peer in peers.removeIdle(cutoff)) {
-            peer.address?.let { byAddress.remove(it) }
+            forget(peer)
             log.info(if (peer.address == null) "Network {} never connected" else "Network {} timed out", peer.networkId)
         }
     }
 
     private fun drop(peer: Peer) {
         peers.remove(peer)
-        peer.address?.let { byAddress.remove(it) }
+        forget(peer)
     }
+
+    private fun forget(peer: Peer) {
+        peer.validatedAddresses.forEach { byAddress.remove(it, peer) }
+        peer.channels?.association?.close()
+    }
+}
+
+/** Runs SCTP timers on this channel's event loop, alongside everything else for the association. */
+private fun ChannelHandlerContext.scheduler() = Scheduler { delay, task ->
+    val future = executor().schedule(Runnable { task() }, delay.inWholeMilliseconds, TimeUnit.MILLISECONDS)
+    return@Scheduler { future.cancel(false) }
 }

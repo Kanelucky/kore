@@ -17,10 +17,20 @@ import org.koremc.network.rtc.STUN_USE_CANDIDATE
 import org.koremc.network.rtc.dtlsClientEngine
 import org.koremc.network.rtc.encodeStun
 import org.koremc.network.rtc.parseStun
+import org.koremc.network.sctp.CookieAck
+import org.koremc.network.sctp.CookieEcho
+import org.koremc.network.sctp.DataChunk
+import org.koremc.network.sctp.Init
+import org.koremc.network.sctp.SctpPacket
+import org.koremc.network.sctp.Tsn
+import org.koremc.network.sctp.dcepOpen
+import org.koremc.network.sctp.encode
+import org.koremc.network.sctp.parsePacket
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import kotlin.random.Random
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -40,7 +50,11 @@ class NetherNetRtcHandlerTest {
         remoteFingerprints = listOf(clientCertificate.fingerprint),
     )
     private val peers = Peers().apply { add(peer) }
-    private val channel = EmbeddedChannel(NetherNetRtcHandler(peers, DtlsContext(serverCertificate)))
+    private val messages = mutableListOf<Pair<String, ByteArray>>()
+    private val channel = EmbeddedChannel(
+        NetherNetRtcHandler(peers, DtlsContext(serverCertificate)) { _, channel, data -> messages += channel.label to data },
+    )
+    private val toServer = ArrayDeque<ByteBuffer>()
 
     @Test
     fun `valid checks are answered and pick the client's address`() {
@@ -72,7 +86,7 @@ class NetherNetRtcHandlerTest {
     }
 
     @Test
-    fun `dtls from an address ice never picked is ignored`() {
+    fun `dtls from an address that never passed a check is ignored`() {
         channel.writeInbound(datagram(byteArrayOf(22, -2, -3, 0, 0), from = client))
 
         assertNull(channel.readOutbound<DatagramPacket>())
@@ -81,29 +95,78 @@ class NetherNetRtcHandlerTest {
 
     @Test
     fun `dtls connects once ice has picked a path`() {
-        channel.writeInbound(datagram(check(), from = client))
-        channel.readOutbound<DatagramPacket>().release()
-
-        val toServer = ArrayDeque<ByteBuffer>()
-        val dtlsClient = DtlsTransport(dtlsClientEngine(clientCertificate)) { toServer += it }
-        repeat(32) {
-            while (toServer.isNotEmpty()) channel.writeInbound(datagram(toServer.removeFirst().toBytes(), from = client))
-            while (true) {
-                val packet = channel.readOutbound<DatagramPacket>() ?: break
-                assertEquals(client, packet.recipient())
-                dtlsClient.receive(packet.content().nioBuffer())
-                packet.release()
-            }
-        }
+        val dtlsClient = connect()
 
         assertTrue(dtlsClient.isConnected)
         assertTrue(assertNotNull(peer.dtls).isConnected)
     }
 
-    private fun check(username: String = "kore:game", password: String = peer.localIce.pwd) = encodeStun(
+    @Test
+    fun `replies follow the client to another validated path`() {
+        val other = InetSocketAddress("198.51.100.4", 52001)
+        val dtlsClient = connect()
+        channel.writeInbound(datagram(check(useCandidate = false), from = other))
+        channel.readOutbound<DatagramPacket>().release()
+        assertEquals(client, peer.address)
+
+        dtlsClient.write(ByteBuffer.wrap(byteArrayOf(1)))
+        pump(dtlsClient, from = other)
+
+        assertEquals(other, peer.address)
+    }
+
+    @Test
+    fun `data channels open and deliver messages over the whole stack`() {
+        val dtlsClient = connect()
+
+        dtlsClient.write(SctpPacket(0, listOf(Init(false, 0x5EED, 1 shl 20, 1024, 1024, Tsn(1)))).encode())
+        val initAck = pump(dtlsClient).flatMap { parse(it).chunks }.filterIsInstance<Init>().single()
+
+        val open = DataChunk(Tsn(1), streamId = 0, ssn = 0, ppid = 50, payload = dcepOpen("ReliableDataChannel", 0x00))
+        val message = DataChunk(Tsn(2), streamId = 0, ssn = 1, ppid = 53, payload = byteArrayOf(4, 2))
+        dtlsClient.write(SctpPacket(initAck.initiateTag, listOf(CookieEcho(checkNotNull(initAck.parameter(7))), open, message)).encode())
+        val replies = pump(dtlsClient).flatMap { parse(it).chunks }
+
+        assertTrue(CookieAck in replies)
+        assertContentEquals(byteArrayOf(0x02), replies.filterIsInstance<DataChunk>().single().payload)
+        assertNotNull(peer.channels?.get("ReliableDataChannel"))
+        assertEquals(listOf("ReliableDataChannel"), messages.map { it.first })
+        assertContentEquals(byteArrayOf(4, 2), messages.single().second)
+    }
+
+    /** Passes ICE from [client], then runs the DTLS handshake. */
+    private fun connect(): DtlsTransport {
+        channel.writeInbound(datagram(check(), from = client))
+        channel.readOutbound<DatagramPacket>().release()
+        return DtlsTransport(dtlsClientEngine(clientCertificate)) { toServer += it }.also { pump(it) }
+    }
+
+    /** Moves datagrams both ways until both sides go quiet, returning the application data the client decrypted. */
+    private fun pump(dtlsClient: DtlsTransport, from: InetSocketAddress = client): List<ByteBuffer> = buildList {
+        repeat(32) {
+            while (toServer.isNotEmpty()) channel.writeInbound(datagram(toServer.removeFirst().toBytes(), from))
+            val outbound = generateSequence { channel.readOutbound<DatagramPacket>() }.toList()
+            if (outbound.isEmpty()) return@buildList
+            for (packet in outbound) {
+                addAll(dtlsClient.receive(packet.content().nioBuffer()))
+                packet.release()
+            }
+        }
+    }
+
+    private fun parse(packet: ByteBuffer) = checkNotNull(parsePacket(packet)) { "Kore sent a malformed SCTP packet" }
+
+    private fun check(
+        username: String = "kore:game",
+        password: String = peer.localIce.pwd,
+        useCandidate: Boolean = true,
+    ) = encodeStun(
         type = STUN_BINDING_REQUEST,
         transactionId = Random.nextBytes(12),
-        attributes = listOf(STUN_USERNAME to username.toByteArray(), STUN_USE_CANDIDATE to ByteArray(0)),
+        attributes = listOfNotNull(
+            STUN_USERNAME to username.toByteArray(),
+            (STUN_USE_CANDIDATE to ByteArray(0)).takeIf { useCandidate },
+        ),
         password = password,
     )
 
