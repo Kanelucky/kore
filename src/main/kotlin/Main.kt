@@ -1,5 +1,6 @@
 package org.koremc
 
+import io.netty.channel.nio.NioEventLoopGroup
 import org.koremc.auth.AuthService
 import org.koremc.network.NetherNetRtcHandler
 import org.koremc.network.NetherNetSignalingHandler
@@ -54,8 +55,10 @@ fun main() {
 
     val peers = Peers()
     val world = FlatWorld.vanilla(vanilla.blocks)
+    // One thread carries every client's UDP traffic and runs every session, so the world needs no locks.
+    val loop = NioEventLoopGroup(1)
     // Built once, on start, so no player's login pays to encode the definitions.
-    val sessions = Sessions(config, GameData.of(vanilla, world), LoginAuthenticator(auth.verifier, config.onlineMode))
+    val sessions = Sessions(config, GameData.of(vanilla, world), LoginAuthenticator(auth.verifier, config.onlineMode), loop.next())
 
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),
@@ -70,6 +73,7 @@ fun main() {
         ),
     )
     val rtc = RtcServer(
+        group = loop,
         address = InetSocketAddress(config.port),
         handler = NetherNetRtcHandler(
             peers = peers,

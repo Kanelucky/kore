@@ -25,6 +25,17 @@ enum class Face(val dx: Int, val dy: Int, val dz: Int) {
     /** Its name as block properties spell it. */
     val id: String get() = name.lowercase()
 
+    /** The side a quarter turn clockwise, seen from above. Only the four around are turned. */
+    val clockwise: Face get() = when (this) {
+        NORTH -> EAST
+        EAST -> SOUTH
+        SOUTH -> WEST
+        WEST -> NORTH
+        else -> this
+    }
+
+    val counterClockwise: Face get() = clockwise.opposite
+
     companion object {
         /** The face numbered [id], or null for a number that isn't one, like the 255 for clicking nothing. */
         fun of(id: Int): Face? = entries.getOrNull(id)
@@ -61,10 +72,11 @@ private val UNBREAKABLE = setOf(
     "minecraft:structure_block", "minecraft:jigsaw",
 )
 
-private const val UPPER_BLOCK = "upper_block_bit"
+internal const val UPPER_BLOCK = "upper_block_bit"
 private const val VERTICAL_HALF = "minecraft:vertical_half"
 private const val TORCH_FACING = "torch_facing_direction"
 private const val LEVER_DIRECTION = "lever_direction"
+private const val DOOR_HINGE = "door_hinge_bit"
 
 /** Where a torch that can't lean on the block it was placed against looks for one that can hold it, in the game's order. */
 private val TORCH_SUPPORTS = listOf(Face.SOUTH, Face.WEST, Face.NORTH, Face.EAST, Face.DOWN)
@@ -74,6 +86,13 @@ val BlockState.unbreakable get() = name in UNBREAKABLE
 
 /** Whether a placed block takes this one's place, rather than going beside it. */
 val BlockState.replaceable get() = name in REPLACEABLE
+
+/**
+ * The block placed by the item called [item] when the item isn't a block
+ * itself. A door's item carries no block state, but places the door of the
+ * same name. Null for any other item.
+ */
+fun BlockPalette.blockPlacedBy(item: String): BlockState? = if (item.endsWith("_door")) defaultOf(item) else null
 
 /**
  * Places [block] as a player does, against [face] of the block at
@@ -87,7 +106,9 @@ val BlockState.replaceable get() = name in REPLACEABLE
  *   placed on top of it.
  * - A slab onto the open half of the same slab, or into a space holding
  *   one, makes a double slab.
- * - A plant two blocks tall needs the space above as well.
+ * - A plant two blocks tall, or a door, needs the space above as well,
+ *   and a whole top to stand on. A door hinges on its right if there's a
+ *   door to its left to pair with, or a wall to its right and not its left.
  * - Buttons, levers and ladders need a whole face to be fixed to, like a
  *   full block's or the back of stairs.
  * - A torch leans on the block it was placed against, if that has a whole
@@ -120,6 +141,10 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
         val holder = state.heldFrom
         if (holder != null && stateAt(target.side(holder))?.hasFullFace(holder.opposite) != true) return emptyList()
     }
+    if (DOOR_HINGE in state.properties) {
+        val hinge = (if (hingesRight(target, facing)) 1 else 0).toByte()
+        state = blocks.find(state.name, state.properties + (DOOR_HINGE to hinge)) ?: state
+    }
     val upper = blocks.upperHalfOf(state)
     val above = target.side(Face.UP)
     if (upper != null && (above.y > MAX_Y || stateAt(above)?.replaceable != true)) return emptyList()
@@ -131,31 +156,43 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
 }
 
 /**
- * Breaks the block at [pos], leaving air, along with the other half of a
- * plant two blocks tall, and anything fixed to it, like a torch or a
- * button. Returns what broke, where.
+ * Breaks the block at [pos], leaving air, along with whatever goes with
+ * it: the other half of a door or a tall plant, and anything it held up,
+ * like a torch on its side or a door on its top, and so on from those.
+ * Returns what broke, where.
  */
 fun FlatWorld.breakBlock(pos: BlockPos): Map<BlockPos, BlockState> {
-    val state = stateAt(pos) ?: return emptyMap()
-    val broken = linkedMapOf(pos to state)
-    val otherHalf = when (state.properties[UPPER_BLOCK]) {
-        0.toByte() -> pos.side(Face.UP)
-        1.toByte() -> pos.side(Face.DOWN)
-        else -> null
-    }
-    otherHalf?.let { other -> stateAt(other)?.takeIf { it.name == state.name }?.let { broken[other] = it } }
-
     val air = blocks.stateOf(AIR)
-    broken.keys.forEach { set(it, air) }
-    for (gone in broken.keys.toList()) {
-        for (face in Face.entries) {
-            val next = gone.side(face)
-            val fixed = stateAt(next)?.takeIf { it.heldFrom == face.opposite } ?: continue
-            broken[next] = fixed
-            set(next, air)
-        }
+    val broken = linkedMapOf<BlockPos, BlockState>()
+    val toBreak = ArrayDeque(listOf(pos))
+    while (toBreak.isNotEmpty()) {
+        val at = toBreak.removeFirst()
+        val state = stateAt(at)?.takeIf { at !in broken && it != air } ?: continue
+        broken[at] = state
+        set(at, air)
+
+        state.otherHalf(at)?.takeIf { stateAt(it)?.name == state.name }?.let(toBreak::add)
+        Face.entries.map(at::side).filterTo(toBreak) { next -> stateAt(next)?.heldFrom?.let(next::side) == at }
     }
     return broken
+}
+
+/** Where the other half of a door or tall plant at [pos] is, or null for a block that's one block. */
+internal fun BlockState.otherHalf(pos: BlockPos): BlockPos? = when (properties[UPPER_BLOCK]) {
+    0.toByte() -> pos.side(Face.UP)
+    1.toByte() -> pos.side(Face.DOWN)
+    else -> null
+}
+
+/**
+ * Whether a door at [pos], placed by a player facing [facing], hinges on
+ * its right: when there's a door to its left to pair with, or a whole
+ * block to its right and not its left.
+ */
+private fun FlatWorld.hingesRight(pos: BlockPos, facing: Face): Boolean {
+    val left = stateAt(pos.side(facing.counterClockwise))
+    val right = stateAt(pos.side(facing.clockwise))
+    return left?.name?.endsWith("_door") == true || (right?.isFullCube == true && left?.isFullCube != true)
 }
 
 /**
@@ -176,11 +213,14 @@ private fun FlatWorld.torchAt(pos: BlockPos, face: Face, torch: BlockState): Blo
 }
 
 /**
- * For a block fixed to another, like a torch, button, lever or ladder, the
- * side the block holding it is on. Null for a block that stands by itself.
+ * For a block another holds up, like a torch, button, lever or ladder on
+ * its side, or a door or tall plant on its top, the side the block holding
+ * it is on. Null for a block that stands by itself. The top half of a door
+ * or plant is held by its bottom half, which [otherHalf] follows.
  */
 private val BlockState.heldFrom: Face?
     get() {
+        if (properties[UPPER_BLOCK] == 0.toByte()) return Face.DOWN
         properties[TORCH_FACING]?.let { leaning -> return if (leaning == "top") Face.DOWN else Face.entries.find { it.id == leaning } }
         // A lever names the face it points out of, or the axis it lies along on a floor (up) or ceiling (down).
         (properties[LEVER_DIRECTION] as? String)?.let { pointing ->
@@ -205,7 +245,9 @@ private val BlockState.heldFrom: Face?
  *   player clicks a block's underside or the top half of its side.
  * - Stairs climb the way the player faces.
  * - Blocks with a front, like furnaces, chests and glazed terracotta, turn
- *   it to the player.
+ *   it to the player. Doors and fence gates face the way the player does,
+ *   doors naming the side a quarter turn clockwise from it, and trapdoors
+ *   hinge on the side away from the player.
  * - Attachments, like buttons, levers and ladders, point out of the face.
  *   A lever on a floor or ceiling lies the way the player faces. Torches
  *   have rules of their own, which [place] follows.
@@ -221,7 +263,13 @@ fun BlockPalette.placedState(block: BlockState, face: Face, clickY: Float, facin
             VERTICAL_HALF -> if (top) "top" else "bottom"
             "upside_down_bit" -> (if (top) 1 else 0).toByte()
             "weirdo_direction" -> STAIRS_CLIMB.indexOf(facing)
-            "minecraft:cardinal_direction" -> facing.opposite.id
+            "minecraft:cardinal_direction" -> when {
+                block.name.endsWith("_door") -> facing.clockwise.id
+                block.name.endsWith("fence_gate") -> facing.id
+                else -> facing.opposite.id
+            }
+            // A trapdoor numbers the way it faces, from its hinge out, as stairs number the ways they climb.
+            "direction" -> if (block.name.endsWith("trapdoor")) STAIRS_CLIMB.indexOf(facing.opposite) else value
             "facing_direction" -> if (block.name.endsWith("glazed_terracotta")) facing.opposite.ordinal else face.ordinal
             "minecraft:block_face" -> face.id
             LEVER_DIRECTION -> when (face) {

@@ -69,15 +69,21 @@ import org.koremc.world.PLAYER_SNEAKING_HEIGHT
 import org.koremc.world.PLAYER_WALK_SPEED
 import org.koremc.world.PLAYER_WIDTH
 import org.koremc.world.Vec3
+import org.koremc.world.blockPlacedBy
 import org.koremc.world.breakBlock
 import org.koremc.world.centre
 import org.koremc.world.chunksAround
 import org.koremc.world.facing
 import org.koremc.world.place
+import org.koremc.world.releaseButton
 import org.koremc.world.side
 import org.koremc.world.unbreakable
+import org.koremc.world.usable
+import org.koremc.world.use
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 private val log = LoggerFactory.getLogger(Session::class.java)
@@ -87,6 +93,9 @@ private val packetLog = LoggerFactory.getLogger("org.koremc.packets")
 
 /** Batches this size or larger are compressed. Small ones cost more to compress than they save. */
 private const val COMPRESSION_THRESHOLD = 256
+
+/** How long the game's tick is. */
+private const val TICK_MILLIS = 50L
 
 /** The smallest view distance Kore settles on, whatever the client asks for. */
 private const val MIN_CHUNK_RADIUS = 2
@@ -161,7 +170,9 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * Players build and break as the client predicts, which Kore checks and
  * then shows to everyone who has the chunk. Placing comes as an inventory
  * transaction using the held item on a block. Breaking comes as one riding
- * in `PlayerAuthInput`, or in creative as a `PlayerAction`.
+ * in `PlayerAuthInput`, or in creative as a `PlayerAction`. Clicking a
+ * lever, button, door, trapdoor or fence gate uses it instead of placing
+ * against it, unless the player sneaks with something in hand.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
@@ -177,6 +188,8 @@ class Session(
     private val authenticator: LoginAuthenticator,
     /** Every player's session, this one included, for showing them what this player changes in the world. */
     private val viewers: () -> Collection<Session>,
+    /** Runs a task a number of ticks from now, on the same thread as the sessions, like a button popping back out. */
+    private val schedule: (ticks: Int, task: () -> Unit) -> Unit,
     private val send: (ByteArray) -> Unit,
 ) {
     private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, NEGOTIATING_RESOURCE_PACKS, LOADING_WORLD, SPAWNING, IN_GAME, CLOSED }
@@ -507,11 +520,57 @@ class Session(
 
     private fun onItemUse(use: ItemUse) {
         when (use.action) {
-            ItemUseAction.PLACE -> onPlace(use)
+            ItemUseAction.PLACE -> onClick(use)
             ItemUseAction.DESTROY -> onBreak(use.position, creativeOnly = false)
             // Using an item in the air, like eating, and attacking with one are for later.
             ItemUseAction.USE, ItemUseAction.USE_AS_ATTACK -> {}
         }
+    }
+
+    /**
+     * A click on a block, with whatever the player holds, which the client
+     * reports once it has predicted what happens. Clicking a block that
+     * does something, like a lever, uses it. Otherwise, or when the player
+     * sneaks with something in hand, the click places what they hold.
+     *
+     * The client checks some things Kore doesn't, like whether a torch has
+     * a face to stand on, or whether a block would go inside its player.
+     * When it finds a click does nothing, it changes nothing, and Kore
+     * leaves it at that. While the player holds the button down, the
+     * client tries again every frame, so that's often.
+     */
+    private fun onClick(use: ItemUse) {
+        if (!use.predictedToWork) return
+        val usable = world.stateAt(use.position)?.usable == true
+        if (usable && !(sneaking && use.heldItem != 0)) useBlock(use.position) else onPlace(use)
+    }
+
+    /**
+     * Uses the block at [pos], if the player can reach it and isn't a
+     * spectator. Everyone with the chunk sees what changes and hears it. A
+     * pressed button pops back out on its own, later. A use Kore refuses
+     * puts back what the client predicted.
+     */
+    private fun useBlock(pos: BlockPos) {
+        val used = if (config.gameMode != GameMode.SPECTATOR && inReach(pos)) world.use(pos, facing(yaw)) else null
+        if (used == null) {
+            log.debug("Refused {} using {} at {}", player?.displayName, world.stateAt(pos)?.name, pos)
+            send(UpdateBlock(pos, world.blockAt(pos)))
+            return
+        }
+        if (used.changed.isNotEmpty()) {
+            val updates = used.changed.map { UpdateBlock(it, world.blockAt(it)) }
+            val sound = used.sound?.let { LevelSoundEvent(it, pos.centre, used.soundData) }
+            showAround(pos, *(updates + listOfNotNull(sound)).toTypedArray())
+        }
+        used.releaseIn?.let { ticks -> schedule(ticks) { releaseButton(pos) } }
+        log.debug("{} used {} at {}", player?.displayName, world.stateAt(pos)?.name, pos)
+    }
+
+    /** Lets a button pop back out, for everyone with its chunk to see and hear, if it's still pressed in. */
+    private fun releaseButton(pos: BlockPos) {
+        if (!world.releaseButton(pos)) return
+        showAround(pos, UpdateBlock(pos, world.blockAt(pos)), LevelSoundEvent(LevelSoundEvent.BUTTON_CLICK_OFF, pos.centre, world.blockAt(pos)))
     }
 
     /**
@@ -526,19 +585,13 @@ class Session(
      * all of the client's. So the client also hears what's really at both
      * spots it may have changed, the block clicked and the space beyond the
      * face, which puts right any guess that differed.
-     *
-     * The client checks some things Kore doesn't, like whether a torch has
-     * a face to stand on, or whether a block would go inside its player.
-     * When it finds a placement doesn't work, it changes nothing, and Kore
-     * leaves it at that. While the player holds the button down, the
-     * client tries again every frame, so that's often.
      */
     private fun onPlace(use: ItemUse) {
-        if (!use.predictedToWork) return
         val face = Face.of(use.face) ?: return
         if (use.hotbarSlot in 0 until HOTBAR_SIZE) heldSlot = use.hotbarSlot
         // The client's item must be the one Kore has in the slot.
-        val block = inventory.items[heldSlot]?.stack?.takeIf { use.hotbarSlot == heldSlot && it.item.runtimeId == use.heldItem }?.block
+        val stack = inventory.items[heldSlot]?.stack?.takeIf { use.hotbarSlot == heldSlot && it.item.runtimeId == use.heldItem }
+        val block = stack?.let { it.block ?: world.blocks.blockPlacedBy(it.item.name) }
         val placed = if (block != null && canBuild() && inReach(use.position.side(face))) {
             world.place(block, use.position, face, use.clickPosition.y, facing(yaw))
         } else {
@@ -693,12 +746,23 @@ private fun names(packets: Array<out ServerPacket>): String {
 }
 
 /** Every connected player's session, driven by the transport's connection callbacks on the UDP event loop. */
-class Sessions(private val config: ServerConfig, private val game: GameData, private val authenticator: LoginAuthenticator) {
+class Sessions(
+    private val config: ServerConfig,
+    private val game: GameData,
+    private val authenticator: LoginAuthenticator,
+    /** The thread the sessions run on, which runs what the world does later, too. */
+    private val loop: ScheduledExecutorService,
+) {
     private val sessions = HashMap<NetherNetConnection, Session>()
     private var nextEntityId = 1L
 
     fun connect(connection: NetherNetConnection) {
-        sessions[connection] = Session(config, game, connection.networkId, nextEntityId++, connection.clientKey, authenticator, viewers = { sessions.values }) { message ->
+        sessions[connection] = Session(
+            config, game, connection.networkId, nextEntityId++, connection.clientKey, authenticator,
+            viewers = { sessions.values },
+            // A task that throws would otherwise fail quietly, in a future nobody looks at.
+            schedule = { ticks, task -> loop.schedule({ runCatching(task).onFailure { log.error("A scheduled task failed", it) } }, ticks * TICK_MILLIS, TimeUnit.MILLISECONDS) },
+        ) { message ->
             connection.send(message)
         }
     }

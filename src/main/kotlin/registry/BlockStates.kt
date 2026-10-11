@@ -72,6 +72,9 @@ data class BlockDefinition(val name: String, val data: NbtMap)
 class BlockPalette(val states: List<BlockState>) {
     private val byNetworkId = states.associateBy(BlockState::networkId)
 
+    /** Each block's first state, which in the game's palette is its default. */
+    private val defaults = states.reversed().associateBy(BlockState::name)
+
     init {
         require(byNetworkId.size == states.size) {
             "Block states share network IDs: " + states.groupBy(BlockState::networkId).values.filter { it.size > 1 }.take(3)
@@ -84,6 +87,9 @@ class BlockPalette(val states: List<BlockState>) {
     /** The state of [name] with [properties], or null if the client knows no such state. Mind the properties' types, as [blockStateHash] explains. */
     fun find(name: String, properties: Map<String, Any> = emptyMap()): BlockState? =
         get(blockStateHash(name, properties))?.takeIf { it.name == name }
+
+    /** The default state of the block called [name], or null if the client knows no such block. */
+    fun defaultOf(name: String): BlockState? = defaults[name]
 
     /** The state of [name] with [properties], which must be one the client knows. */
     fun stateOf(name: String, properties: Map<String, Any> = emptyMap()): BlockState =

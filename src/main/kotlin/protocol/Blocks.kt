@@ -116,6 +116,9 @@ data class LevelSoundEvent(val sound: String, val position: Vec3, val data: Int)
     companion object {
         /** A block being placed. The data is the block's network ID, so it makes the block's own sound. */
         const val PLACE = "place"
+
+        /** A button popping back out. The data is the button's network ID, for the click of what it's made of. */
+        const val BUTTON_CLICK_OFF = "button.click_off"
     }
 }
 

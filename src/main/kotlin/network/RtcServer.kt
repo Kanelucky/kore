@@ -3,19 +3,20 @@ package org.koremc.network
 import io.netty.bootstrap.Bootstrap
 import io.netty.channel.Channel
 import io.netty.channel.ChannelHandler
-import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.EventLoopGroup
 import io.netty.channel.socket.nio.NioDatagramChannel
 import java.net.SocketAddress
 
 /**
  * The UDP half of NetherNet: a single socket that carries every client's
- * ICE, DTLS and SCTP traffic once signaling is done.
+ * ICE, DTLS and SCTP traffic once signaling is done, on the threads of
+ * [group]. Closing the server shuts them down.
  */
 class RtcServer(
+    private val group: EventLoopGroup,
     private val address: SocketAddress,
     private val handler: ChannelHandler,
 ) : AutoCloseable {
-    private val group = NioEventLoopGroup(1)
 
     fun bind(): Channel = Bootstrap()
         .group(group)

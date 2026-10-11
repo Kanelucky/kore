@@ -53,9 +53,11 @@ import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemVersion
 import org.koremc.world.BlockPos
 import org.koremc.world.ChunkPos
+import org.koremc.world.Face
 import org.koremc.world.FlatWorld
 import org.koremc.world.Vec3
 import org.koremc.world.chunksAround
+import org.koremc.world.side
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
 import kotlin.test.Test
@@ -73,8 +75,9 @@ private const val START_SPRINTING = 25
 private const val STOP_SPRINTING = 26
 private const val START_FLYING = 42
 
-/** The runtime ID of the oak planks item. */
+/** The runtime IDs of the oak planks and oak door items. */
 private const val PLANKS_ITEM = 5
+private const val DOOR_ITEM = 324
 
 /** The PlayerAction for breaking a block in creative. */
 private const val CREATIVE_DESTROY_BLOCK = 13
@@ -95,18 +98,42 @@ class SessionTest {
     private val stone = BlockState("minecraft:stone", NbtMap.EMPTY, version = 18168865)
     private val planks = BlockState("minecraft:oak_planks", NbtMap.EMPTY, version = 18168865)
     private val torch = BlockState("minecraft:torch", NbtMap.builder().putString("torch_facing_direction", "east").build(), version = 18168865)
-    private val world = FlatWorld(BlockPalette(listOf(air, stone, planks, torch)), listOf(stone))
+    private val levers = (0..1).map { on -> state("minecraft:lever", "lever_direction" to "up_east_west", "open_bit" to on.toByte()) }
+    private val buttons = (0..1).map { pressed -> state("minecraft:wooden_button", "button_pressed_bit" to pressed.toByte(), "facing_direction" to 1) }
+    private val doors = listOf("south", "west", "north", "east").flatMap { direction ->
+        (0..7).map { bits ->
+            state(
+                "minecraft:wooden_door",
+                "minecraft:cardinal_direction" to direction,
+                "door_hinge_bit" to (bits and 1).toByte(),
+                "open_bit" to (bits shr 1 and 1).toByte(),
+                "upper_block_bit" to (bits shr 2).toByte(),
+            )
+        }
+    }
+    private val world = FlatWorld(BlockPalette(listOf(air, stone, planks, torch) + levers + buttons + doors), listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
-        listOf(CreativeItem(ItemStack(ItemDefinition("minecraft:oak_planks", PLANKS_ITEM, componentBased = false, ItemVersion.NONE), block = planks), group = 0)),
+        listOf(
+            CreativeItem(ItemStack(ItemDefinition("minecraft:oak_planks", PLANKS_ITEM, componentBased = false, ItemVersion.NONE), block = planks), group = 0),
+            // Door items place their door, without a block state of their own.
+            CreativeItem(ItemStack(ItemDefinition("minecraft:wooden_door", DOOR_ITEM, componentBased = false, ItemVersion.NONE)), group = 0),
+        ),
     )
 
     private val sent = mutableListOf<ByteArray>()
+
+    /** Tasks the session has asked to run later, by how many ticks from then. Tests run them. */
+    private val scheduled = mutableListOf<Pair<Int, () -> Unit>>()
     private val blockDefinitions = BlockDefinitions(listOf(BlockDefinition("minecraft:white_wool_stairs", NbtMap.builder().putInt("molangVersion", 13).build())))
     private val game = GameData(world, listOf(itemRegistry, biomes), blockDefinitions, creative)
     private val session: Session by lazy {
         // The only player, so the only one to see what they change.
-        Session(config, game, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator, viewers = { listOf(session) }) { sent += it }
+        Session(
+            config, game, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator,
+            viewers = { listOf(session) },
+            schedule = { ticks, task -> scheduled += ticks to task },
+        ) { sent += it }
     }
 
     /** The client's side of batching, which switches on compression when NetworkSettings arrives. */
@@ -531,6 +558,68 @@ class SessionTest {
     }
 
     @Test
+    fun `clicking a lever flips it, for everyone with the chunk to see and hear`() {
+        spawn()
+        val lever = BlockPos(1, -63, 0)
+        world[lever] = levers[0]
+
+        clientSends(placeBlock(against = lever, face = 1, slot = 0, held = 0)) // With nothing in hand
+
+        val (update, sound) = batches.decode(sent.single())
+        assertContentEquals(UpdateBlock(lever, levers[1].networkId).encode(), update)
+        assertContentEquals(LevelSoundEvent("power.on", Vec3(1.5f, -62.5f, 0.5f), levers[1].networkId).encode(), sound)
+    }
+
+    @Test
+    fun `a pressed button pops back out by itself`() {
+        spawn()
+        val button = BlockPos(1, -63, 0)
+        world[button] = buttons[0]
+        clientSends(placeBlock(against = button, face = 1, slot = 0, held = 0))
+        assertEquals(buttons[1], world.stateAt(button))
+        sent.clear()
+
+        // A wooden button stays in for 30 ticks.
+        val (ticks, release) = scheduled.single()
+        assertEquals(30, ticks)
+        release()
+
+        val (update, sound) = batches.decode(sent.single())
+        assertContentEquals(UpdateBlock(button, buttons[0].networkId).encode(), update)
+        assertContentEquals(LevelSoundEvent(LevelSoundEvent.BUTTON_CLICK_OFF, Vec3(1.5f, -62.5f, 0.5f), buttons[0].networkId).encode(), sound)
+    }
+
+    @Test
+    fun `sneaking with a block in hand places it, rather than using the block clicked`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        pickIntoHotbar(creativeItem = 1, slot = 0)
+        val lever = BlockPos(1, -63, 0)
+        world[lever] = levers[0]
+        clientSends(playerAuthInput(standing, inputs = listOf(SNEAKING)))
+        sent.clear()
+
+        clientSends(placeBlock(against = lever, face = 5, slot = 0))
+
+        assertEquals(levers[0], world.stateAt(lever))
+        assertEquals(planks, world.stateAt(lever.side(Face.EAST)))
+    }
+
+    @Test
+    fun `a door item places its door, both halves`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        pickIntoHotbar(creativeItem = 2, slot = 1)
+
+        clientSends(placeBlock(against = BlockPos(1, -64, 0), face = 1, slot = 1, held = DOOR_ITEM))
+
+        val (lower, upper) = listOf(BlockPos(1, -63, 0), BlockPos(1, -62, 0)).map { world.stateAt(it) }
+        assertEquals("minecraft:wooden_door", lower?.name)
+        assertEquals(1.toByte(), upper?.properties?.get("upper_block_bit"))
+        assertEquals(3, batches.decode(sent.first()).size) // Both halves and the sound
+    }
+
+    @Test
     fun `the held slot follows the client`() {
         spawn()
 
@@ -655,14 +744,17 @@ class SessionTest {
     )
 
     /** Picks a stack of oak planks from the creative inventory into hotbar slot 0, and forgets the answer. */
-    private fun pickPlanksIntoHotbar() {
+    private fun pickPlanksIntoHotbar() = pickIntoHotbar(creativeItem = 1, slot = 0)
+
+    /** Picks a stack of [creativeItem] from the creative inventory into an empty hotbar [slot], and forgets the answer. */
+    private fun pickIntoHotbar(creativeItem: Int, slot: Int) {
         clientSends(
             ByteBufUtil.getBytes(
                 Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(-1).writeVarUInt(2)
-                    .writeVarUInt(12).writeByte(14).writeVarUInt(1).writeByte(1) // Creative item 1, once
+                    .writeVarUInt(12).writeByte(14).writeVarUInt(creativeItem).writeByte(1) // The creative item, once
                     .writeVarUInt(0).writeByte(0).writeByte(64) // Taking all 64
                     .writeByte(60).writeBoolean(false).writeByte(50).writeIntLE(-1) // From the created output
-                    .writeByte(28).writeBoolean(false).writeByte(0).writeIntLE(0) // Into hotbar slot 0
+                    .writeByte(28).writeBoolean(false).writeByte(slot).writeIntLE(0) // Into the hotbar
                     .writeVarUInt(0).writeIntLE(0),
             ),
         )
@@ -670,27 +762,31 @@ class SessionTest {
     }
 
     /**
-     * An inventory transaction placing the oak planks in hotbar [slot]
-     * against [face] of the block at [against], clicked in the middle,
-     * which the client found works unless [predictedToWork] says otherwise.
+     * An inventory transaction clicking [face] of the block at [against] in
+     * the middle, holding the item [held] in hotbar [slot]: oak planks,
+     * unless it says otherwise, or nothing for 0. The client found the
+     * click works unless [predictedToWork] says otherwise.
      */
-    private fun placeBlock(against: BlockPos, face: Int, slot: Int, predictedToWork: Boolean = true) = ByteBufUtil.getBytes(
+    private fun placeBlock(against: BlockPos, face: Int, slot: Int, held: Int = PLANKS_ITEM, predictedToWork: Boolean = true) = ByteBufUtil.getBytes(
         Unpooled.buffer().writeVarUInt(30).writeVarInt(0).writeBoolean(false).writeVarUInt(2).writeVarUInt(0)
             .writeVarInt(0).writeByte(1).writeBlockPos(against).writeByte(face).writeVarInt(slot).writeByte(0)
-            .heldPlanks()
+            .heldItem(held)
             .writeFloatLE(standing.x).writeFloatLE(standing.y).writeFloatLE(standing.z)
             .writeFloatLE(0.5f).writeFloatLE(1f).writeFloatLE(0.5f)
             .writeVarUInt(stone.networkId).writeBoolean(predictedToWork).writeByte(0),
     )
 
     private fun mobEquipment(slot: Int) = ByteBufUtil.getBytes(
-        Unpooled.buffer().writeVarUInt(31).writeVarULong(7).heldPlanks().writeByte(slot).writeByte(slot).writeByte(0),
+        Unpooled.buffer().writeVarUInt(31).writeVarULong(7).heldItem(PLANKS_ITEM).writeByte(slot).writeByte(slot).writeByte(0),
     )
 
-    /** The stack of oak planks, as the client describes what it holds. */
-    private fun ByteBuf.heldPlanks(): ByteBuf =
-        writeShortLE(PLANKS_ITEM).writeShortLE(64).writeVarUInt(0).writeBoolean(true).writeVarInt(1).writeVarUInt(planks.networkId)
+    /** A stack of the item [id], as the client describes what it holds. */
+    private fun ByteBuf.heldItem(id: Int): ByteBuf =
+        writeShortLE(id).writeShortLE(if (id == 0) 0 else 64).writeVarUInt(0).writeBoolean(id != 0).apply { if (id != 0) writeVarInt(1) }
+            .writeVarUInt(if (id == PLANKS_ITEM) planks.networkId else 0)
             .writeByteArray(ByteArray(10))
+
+    private fun state(name: String, vararg properties: Pair<String, Any>) = BlockState(name, NbtMap.fromMap(mapOf(*properties)), version = 18168865)
 
     private fun setLocalPlayerAsInitialised(runtimeId: Long) =
         ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(113).writeVarULong(runtimeId))

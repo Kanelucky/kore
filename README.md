@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Players can join a flat world, walk around it and build in it, but they can't see each other yet.
+> Kore is in early development. Players can join a flat world, walk around it, build in it and open its doors, but they can't see each other yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -167,13 +167,15 @@ Building works the same way: the client predicts what happens, and Kore agrees o
 - slabs go in the half of the space the player clicked, and two make a double slab;
 - stairs climb the way the player faces;
 - logs and other pillars lie along the clicked face's axis;
-- furnaces, chests and other blocks with a front turn it to the player;
+- furnaces, chests and other blocks with a front turn it to the player, while fence gates face the way the player does and trapdoors hinge on the side away from them;
 - buttons, levers and ladders need a whole face to go on, like a full block's or the back of stairs, and point out of it. A lever on a floor or ceiling lies the way the player faces;
 - a torch leans on the block it was placed against, if that face is whole. If not, it leans on a neighbour's whole face, or stands on the floor;
 - anything fixed to a block falls when the block breaks;
-- tall plants, like sunflowers, take two blocks.
+- tall plants, like sunflowers, and doors take two blocks, and need a whole top to stand on. A door hinges on its right if there's a door to its left to pair with, or a wall to its right and not its left.
 
-Cloudburst's data has no block shapes, so Kore tells which blocks are whole cubes by name: slabs, stairs, fences, plants and the like come in families named alike. A slab's face on the side it fills is whole, and so are the backs and bottoms of stairs. Kore doesn't know every block's rules, like the corners stairs form, so after each placement it tells the client what's really at the spots it may have changed. That corrects any guess that differed. Doors, beds and signs are items rather than blocks in the creative inventory, so they can't be placed yet.
+Cloudburst's data has no block shapes, so Kore tells which blocks are whole cubes by name: slabs, stairs, fences, plants and the like come in families named alike. A slab's face on the side it fills is whole, and so are the backs and bottoms of stairs. Kore doesn't know every block's rules, like the corners stairs form, so after each placement it tells the client what's really at the spots it may have changed. That corrects any guess that differed. Door items carry no block state, so Kore places the door of the same name. Beds and signs are items too, and can't be placed yet.
+
+Clicking a lever, button, door, trapdoor or fence gate uses it instead, unless the player sneaks with something in hand. A lever flips, a button presses in and pops back out a second or so later, and doors, trapdoors and fence gates open and shut: a door's two halves together, and a gate away from the player. Everyone with the chunk sees the change and hears it. Each sound names the block making it, so the client plays that block's own: a lever's click, or a bamboo button's. Iron doors and trapdoors only open with redstone, and Kore has no redstone yet, so nothing levers and buttons switch on is powered.
 
 In creative, the client breaks a block at once and says so with a `PlayerAction`. Outside creative, it reports a finished break in its input. With server-authoritative block breaking off, Mojang leaves the timing of a break to the client, so Kore takes its word for it. Either way, everyone with the chunk sees the block go, with the particles and sound of it breaking: the client leaves those to the server, even for its own breaks. Outside creative, bedrock and other blocks only creative players break stay put. Survival mining doesn't show cracks yet, since their speed depends on each block's hardness, which Cloudburst's data doesn't have. Broken blocks drop nothing until there are item entities.
 
@@ -214,6 +216,7 @@ src/main/kotlin/
 │   ├── Chunk.kt                     # Chunk columns, and which are in a player's view
 │   ├── FlatWorld.kt                 # The same layers in every column, until players change them
 │   ├── Building.kt                  # Where placed blocks go and which way they turn, and breaking them
+│   ├── Using.kt                     # Levers, buttons, doors, trapdoors and fence gates, clicked
 │   └── Shapes.kt                    # Which blocks are whole cubes, and which faces can hold a torch or a button
 ├── inventory/
 │   ├── PlayerInventory.kt           # A player's slots: hotbar, inventory, offhand, armour and cursor
@@ -284,6 +287,8 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Creative inventory, from CloudburstMC's data
 - [x] Block placing and breaking, taking the client's word for break times
 - [ ] Survival mining: cracks as blocks break, and what they drop
+- [x] Using levers, buttons, doors, trapdoors and fence gates
+- [ ] Redstone
 - [x] Moving items around the player's inventory, and taking them from the creative inventory
 - [ ] Other inventories: chests, crafting and so on
 - [ ] Entities
