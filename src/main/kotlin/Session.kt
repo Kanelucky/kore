@@ -78,6 +78,7 @@ import org.koremc.world.place
 import org.koremc.world.releaseButton
 import org.koremc.world.side
 import org.koremc.world.unbreakable
+import org.koremc.world.updateAround
 import org.koremc.world.usable
 import org.koremc.world.use
 import org.slf4j.LoggerFactory
@@ -578,8 +579,9 @@ class Session(
      * the client predicted, if they can: their game mode builds, the spot
      * is in reach, and the client's item is the block item Kore has in
      * that hotbar slot. Everyone with the chunk sees the block appear and
-     * hears it go down. Placing doesn't use up the stack yet: only creative
-     * players can come by blocks so far.
+     * hears it go down, along with any blocks around it that join it, like
+     * fences. Placing doesn't use up the stack yet: only creative players
+     * can come by blocks so far.
      *
      * Kore's rules for where blocks go and which way they turn don't cover
      * all of the client's. So the client also hears what's really at both
@@ -601,10 +603,9 @@ class Session(
         if (placed.isEmpty()) {
             log.debug("Refused {} placing {} against {} {}", player?.displayName, block?.name ?: "item ${use.heldItem}", use.position, face)
         } else {
-            // A placement changes one column, so everyone with one of the blocks has them all.
             val first = placed.first()
-            val updates = placed.map { UpdateBlock(it, world.blockAt(it)) }
-            showAround(first, *updates.toTypedArray(), LevelSoundEvent(LevelSoundEvent.PLACE, first.centre, world.blockAt(first)))
+            val sound = first to LevelSoundEvent(LevelSoundEvent.PLACE, first.centre, world.blockAt(first))
+            showAround(placed.map(::updateOf) + sound + world.updateAround(placed).map(::updateOf))
             log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.name, first)
         }
         val corrections = (listOf(use.position, use.position.side(face)) - placed.toSet()).map { UpdateBlock(it, world.blockAt(it)) }
@@ -618,8 +619,9 @@ class Session(
      * break, like creative's instant one, also needs the player to be in
      * creative. Everyone with the chunk sees the block go, with its
      * particles and sound: the player too, since the client leaves those to
-     * the server. So do any torches the block held up. A break Kore refuses
-     * puts the block back.
+     * the server. So do any torches the block held up, and blocks around it
+     * that joined it, like fences, change. A break Kore refuses puts the
+     * block back.
      */
     private fun onBreak(pos: BlockPos, creativeOnly: Boolean) {
         val state = world.stateAt(pos)
@@ -632,11 +634,9 @@ class Session(
             send(UpdateBlock(pos, world.blockAt(pos)))
             return
         }
-        // What falls with the block, like a torch on its side, can be in the next chunk.
-        for ((chunk, broken) in world.breakBlock(pos).entries.groupBy { it.key.chunk }) {
-            val effects = broken.flatMap { (at, block) -> listOf(UpdateBlock(at, AIR_NETWORK_ID), LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, at.centre, block.networkId)) }
-            viewers().forEach { it.show(chunk, *effects.toTypedArray()) }
-        }
+        val broken = world.breakBlock(pos)
+        val effects = broken.flatMap { (at, block) -> listOf(at to UpdateBlock(at, AIR_NETWORK_ID), at to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, at.centre, block.networkId)) }
+        showAround(effects + world.updateAround(broken.keys).map(::updateOf))
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
     }
 
@@ -652,7 +652,23 @@ class Session(
     }
 
     /** Sends [packets] about the block at [pos] to every player who has its chunk, this one included. */
-    private fun showAround(pos: BlockPos, vararg packets: ServerPacket) = viewers().forEach { it.show(pos.chunk, *packets) }
+    private fun showAround(pos: BlockPos, vararg packets: ServerPacket) = showAround(packets.map { pos to it })
+
+    /**
+     * Sends each packet, about the block it's paired with, to every player
+     * who has that block's chunk, this one included: one batch for each
+     * chunk, in order. The blocks a change reaches, like a torch on a
+     * neighbour's side, can be in the next chunk.
+     */
+    private fun showAround(packets: List<Pair<BlockPos, ServerPacket>>) {
+        for ((chunk, inChunk) in packets.groupBy { (pos, _) -> pos.chunk }) {
+            val batch = inChunk.map { (_, packet) -> packet }.toTypedArray()
+            viewers().forEach { it.show(chunk, *batch) }
+        }
+    }
+
+    /** The block at [pos] as it is now, for the clients that have it. */
+    private fun updateOf(pos: BlockPos): Pair<BlockPos, ServerPacket> = pos to UpdateBlock(pos, world.blockAt(pos))
 
     /** Sends [packets] about the chunk at [chunk], if the client has it. Without it, there's nothing for them to change. */
     fun show(chunk: ChunkPos, vararg packets: ServerPacket) {

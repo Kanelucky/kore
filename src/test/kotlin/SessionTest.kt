@@ -75,9 +75,10 @@ private const val START_SPRINTING = 25
 private const val STOP_SPRINTING = 26
 private const val START_FLYING = 42
 
-/** The runtime IDs of the oak planks and oak door items. */
+/** The runtime IDs of the oak planks, oak door and oak fence items. */
 private const val PLANKS_ITEM = 5
 private const val DOOR_ITEM = 324
+private const val FENCE_ITEM = 85
 
 /** The PlayerAction for breaking a block in creative. */
 private const val CREATIVE_DESTROY_BLOCK = 13
@@ -111,13 +112,24 @@ class SessionTest {
             )
         }
     }
-    private val world = FlatWorld(BlockPalette(listOf(air, stone, planks, torch) + levers + buttons + doors), listOf(stone))
+    /** Oak fences, joined to the east, the west, both or neither. */
+    private val fences = (0..3).map { joins ->
+        state(
+            "minecraft:oak_fence",
+            "minecraft:connection_north" to 0.toByte(),
+            "minecraft:connection_east" to (joins and 1).toByte(),
+            "minecraft:connection_south" to 0.toByte(),
+            "minecraft:connection_west" to (joins shr 1).toByte(),
+        )
+    }
+    private val world = FlatWorld(BlockPalette(listOf(air, stone, planks, torch) + levers + buttons + doors + fences), listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
         listOf(
             CreativeItem(ItemStack(ItemDefinition("minecraft:oak_planks", PLANKS_ITEM, componentBased = false, ItemVersion.NONE), block = planks), group = 0),
             // Door items place their door, without a block state of their own.
             CreativeItem(ItemStack(ItemDefinition("minecraft:wooden_door", DOOR_ITEM, componentBased = false, ItemVersion.NONE)), group = 0),
+            CreativeItem(ItemStack(ItemDefinition("minecraft:oak_fence", FENCE_ITEM, componentBased = false, ItemVersion.NONE), block = fences[0]), group = 0),
         ),
     )
 
@@ -617,6 +629,22 @@ class SessionTest {
         assertEquals("minecraft:wooden_door", lower?.name)
         assertEquals(1.toByte(), upper?.properties?.get("upper_block_bit"))
         assertEquals(3, batches.decode(sent.first()).size) // Both halves and the sound
+    }
+
+    @Test
+    fun `a fence placed beside another joins it, and the other joins back`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        pickIntoHotbar(creativeItem = 3, slot = 2)
+        world[BlockPos(2, -63, 0)] = fences[0]
+
+        clientSends(placeBlock(against = BlockPos(1, -64, 0), face = 1, slot = 2, held = FENCE_ITEM))
+
+        // The new fence, its sound, then the fence it joined, all in the one batch for their chunk.
+        val shown = batches.decode(sent.first())
+        assertContentEquals(UpdateBlock(BlockPos(1, -63, 0), fences[1].networkId).encode(), shown[0])
+        assertContentEquals(UpdateBlock(BlockPos(2, -63, 0), fences[2].networkId).encode(), shown[2])
+        assertEquals(3, shown.size)
     }
 
     @Test

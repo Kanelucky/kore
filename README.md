@@ -171,6 +171,7 @@ Building works the same way: the client predicts what happens, and Kore agrees o
 - buttons, levers and ladders need a whole face to go on, like a full block's or the back of stairs, and point out of it. A lever on a floor or ceiling lies the way the player faces;
 - a torch leans on the block it was placed against, if that face is whole. If not, it leans on a neighbour's whole face, or stands on the floor;
 - anything fixed to a block falls when the block breaks;
+- fences, panes, bars and walls join what's beside them: their own kind, gates set across them and whole faces. Walls stand tall under a block that covers them, and raise a post where they stand alone, end or turn. A fence gate drops when set in a wall. Placing or breaking a block reshapes the ones around it;
 - tall plants, like sunflowers, and doors take two blocks, and need a whole top to stand on. A door hinges on its right if there's a door to its left to pair with, or a wall to its right and not its left.
 
 Cloudburst's data has no block shapes, so Kore tells which blocks are whole cubes by name: slabs, stairs, fences, plants and the like come in families named alike. A slab's face on the side it fills is whole, and so are the backs and bottoms of stairs. Kore doesn't know every block's rules, like the corners stairs form, so after each placement it tells the client what's really at the spots it may have changed. That corrects any guess that differed. Door items carry no block state, so Kore places the door of the same name. Beds and signs are items too, and can't be placed yet.
@@ -217,6 +218,7 @@ src/main/kotlin/
 │   ├── FlatWorld.kt                 # The same layers in every column, until players change them
 │   ├── Building.kt                  # Where placed blocks go and which way they turn, and breaking them
 │   ├── Using.kt                     # Levers, buttons, doors, trapdoors and fence gates, clicked
+│   ├── Connections.kt               # Fences, panes and walls joining the blocks beside them
 │   └── Shapes.kt                    # Which blocks are whole cubes, and which faces can hold a torch or a button
 ├── inventory/
 │   ├── PlayerInventory.kt           # A player's slots: hotbar, inventory, offhand, armour and cursor

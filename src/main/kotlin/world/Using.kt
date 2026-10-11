@@ -5,7 +5,7 @@ import org.koremc.registry.BlockState
 private const val LEVER = "minecraft:lever"
 private const val OPEN = "open_bit"
 private const val PRESSED = "button_pressed_bit"
-private const val CARDINAL = "minecraft:cardinal_direction"
+internal const val CARDINAL = "minecraft:cardinal_direction"
 
 /** How long a button stays pressed, in ticks: a second for stone ones, half as long again for wooden ones. */
 private const val STONE_BUTTON_TICKS = 20
@@ -89,4 +89,4 @@ private fun FlatWorld.change(pos: BlockPos, state: BlockState, vararg changes: P
 }
 
 /** A bit property's value, which block states keep as a byte. */
-private fun bit(on: Boolean): Byte = if (on) 1 else 0
+internal fun bit(on: Boolean): Byte = if (on) 1 else 0
