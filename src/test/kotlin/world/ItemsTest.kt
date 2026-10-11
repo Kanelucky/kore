@@ -79,6 +79,67 @@ class ItemsTest {
     }
 
     @Test
+    fun `items lying close together merge, the smaller stack into the larger`() {
+        val small = world.spawnItem(ItemStack(dirtItem), Vec3(0.5f, floor, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        val large = world.spawnItem(ItemStack(dirtItem, count = 3), Vec3(1.2f, floor, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+
+        // On the ground, they look for each other once a second.
+        repeat(19) { world.tickItems() }
+        assertEquals(2, world.items.size)
+        world.tickItems()
+
+        assertEquals(listOf(large), world.items.toList())
+        assertEquals(4, large.stack.count)
+        assertTrue(large.restacked)
+        world.tickItems()
+        assertFalse(large.restacked)
+        assertEquals(null, world.itemWith(small.id))
+    }
+
+    @Test
+    fun `of two stacks the same size, the first to look goes into the other, which waits as long as either to be picked up`() {
+        world.spawnItem(ItemStack(dirtItem), Vec3(0.5f, floor, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 100)
+        val second = world.spawnItem(ItemStack(dirtItem), Vec3(0.5f, floor, 1f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+
+        repeat(20) { world.tickItems() }
+
+        assertEquals(listOf(second), world.items.toList())
+        assertEquals(2, second.stack.count)
+        assertEquals(79, second.pickupDelay) // What the first had left, counted down as the second ticks after it
+    }
+
+    @Test
+    fun `items in the air pass by those on the ground, and merge with them once they land`() {
+        val lying = world.spawnItem(ItemStack(dirtItem), Vec3(0.5f, floor, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        repeat(18) { world.tickItems() }
+
+        // Falling past it as it looks for others, a second after it was dropped.
+        world.spawnItem(ItemStack(dirtItem), Vec3(0.5f, floor + 0.24f, 0.8f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        repeat(2) { world.tickItems() }
+        assertEquals(2, world.items.size)
+
+        // It lands in its fourth tick, and looks for others itself a second after it was dropped.
+        repeat(17) { world.tickItems() }
+        assertEquals(2, world.items.size)
+        world.tickItems()
+        assertEquals(listOf(lying), world.items.toList())
+        assertEquals(2, lying.stack.count)
+    }
+
+    @Test
+    fun `items too far apart, of different kinds, or too many for one stack don't merge`() {
+        world.spawnItem(ItemStack(dirtItem), Vec3(0.5f, floor, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        world.spawnItem(ItemStack(dirtItem), Vec3(1.3f, floor, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 0) // Their sides are 0.55 apart
+        world.spawnItem(ItemStack(cobblestone), Vec3(0.5f, floor, 1f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        world.spawnItem(ItemStack(dirtItem, count = 60), Vec3(5.5f, floor, 5.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        world.spawnItem(ItemStack(dirtItem, count = 5), Vec3(5.5f, floor, 6f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+
+        repeat(80) { world.tickItems() }
+
+        assertEquals(5, world.items.size)
+    }
+
+    @Test
     fun `items go after five minutes`() {
         world.spawnItem(ItemStack(dirtItem), Vec3(0.5f, floor, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
 

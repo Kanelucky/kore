@@ -6,6 +6,7 @@ import org.koremc.inventory.StackRequestHandler
 import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.ActorDataId
+import org.koremc.protocol.ActorEvent
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.AddItemActor
 import org.koremc.protocol.Attribute
@@ -810,8 +811,9 @@ class Session(
 
     /**
      * Shows the client the items lying in the chunks it has: those it hasn't
-     * seen appear, those that moved move, and those that are gone, picked
-     * up or out of view, go. Run once a tick.
+     * seen appear, those that moved move, those whose stacks changed size
+     * change, and those that are gone, picked up, merged or out of view, go.
+     * Run once a tick.
      */
     fun syncItems() {
         if (state != State.IN_GAME) return
@@ -819,10 +821,12 @@ class Session(
         val ids = inView.mapTo(HashSet()) { it.id }
         val packets = shownItems.filter { it !in ids }.map(::RemoveActor).toMutableList<ServerPacket>()
         for (item in inView) {
-            when {
-                item.id !in shownItems -> packets += AddItemActor(item.id, item.stack, item.position, item.velocity)
-                item.moved -> packets += MoveActorAbsolute(item.id, Vec3(item.position.x, item.position.y + ITEM_NETWORK_OFFSET, item.position.z), item.onGround)
+            if (item.id !in shownItems) {
+                packets += AddItemActor(item.id, item.stack, item.position, item.velocity)
+                continue
             }
+            if (item.moved) packets += MoveActorAbsolute(item.id, Vec3(item.position.x, item.position.y + ITEM_NETWORK_OFFSET, item.position.z), item.onGround)
+            if (item.restacked) packets += ActorEvent(item.id, ActorEvent.UPDATE_STACK_SIZE, item.stack.count)
         }
         shownItems.retainAll(ids)
         shownItems += ids

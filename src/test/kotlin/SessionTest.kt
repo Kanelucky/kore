@@ -13,6 +13,7 @@ import org.koremc.auth.XUID
 import org.koremc.auth.ecKeyPair
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.ActorDataId
+import org.koremc.protocol.ActorEvent
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.BiomeDefinitionList
 import org.koremc.protocol.BlockDefinitions
@@ -746,6 +747,22 @@ class SessionTest {
         assertEquals(40, thrown.pickupDelay)
         assertEquals(standing.y - 0.3f, thrown.position.y, 0.001f) // From just below the player's eyes
         assertTrue(thrown.velocity.z > 0) // The way they look: south, with a yaw of 0
+    }
+
+    @Test
+    fun `items that merge go from the client's world but one, which it hears holds them all`() {
+        spawn()
+        val stack = ItemStack(creative.items[0].stack.item, block = planks)
+        val smaller = world.spawnItem(stack, Vec3(5.5f, -63f, 5.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        val larger = world.spawnItem(stack.copy(count = 2), Vec3(5.5f, -63f, 6f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        session.syncItems()
+        sent.clear()
+
+        repeat(20) { world.tickItems() } // On the ground, they look for each other once a second
+        session.syncItems()
+
+        val expected = listOf(RemoveActor(smaller.id), ActorEvent(larger.id, ActorEvent.UPDATE_STACK_SIZE, 3))
+        assertEquals(expected.map { it.encode().toList() }, receivedPackets().map { it.toList() })
     }
 
     @Test

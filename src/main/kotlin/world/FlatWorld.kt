@@ -69,6 +69,9 @@ class FlatWorld(
     fun spawnItem(stack: ItemStack, position: Vec3, velocity: Vec3, pickupDelay: Int): ItemEntity =
         ItemEntity(newEntityId(), stack, position, velocity, pickupDelay).also { itemEntities[it.id] = it }
 
+    /** The item [id], or null if it's gone. */
+    fun itemWith(id: Long): ItemEntity? = itemEntities[id]
+
     fun removeItem(id: Long) {
         itemEntities.remove(id)
     }

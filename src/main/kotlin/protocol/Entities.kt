@@ -8,6 +8,7 @@ private const val REMOVE_ACTOR = 14
 private const val ADD_ITEM_ACTOR = 15
 private const val TAKE_ITEM_ACTOR = 17
 private const val MOVE_ACTOR_ABSOLUTE = 18
+private const val ACTOR_EVENT = 27
 private const val INVENTORY_SLOT = 50
 
 /** The window and container ID of a player's own items: the hotbar and the rest of the inventory. */
@@ -79,6 +80,23 @@ data class MoveActorAbsolute(val entityId: Long, val position: Vec3, val onGroun
 
     private companion object {
         const val ON_GROUND = 0b1
+    }
+}
+
+/** Something happening to the entity [entityId] that the client shows, like [UPDATE_STACK_SIZE], with [data] about it. */
+data class ActorEvent(val entityId: Long, val event: Int, val data: Int) : ServerPacket {
+    override val id get() = ACTOR_EVENT
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarULong(entityId)
+        out.writeByte(event)
+        out.writeVarInt(data)
+        out.writeBoolean(false) // A point to fire at, which only some events aim for
+    }
+
+    companion object {
+        /** An item entity's stack changing size, as when items merge. The data is how many it holds now. */
+        const val UPDATE_STACK_SIZE = 69
     }
 }
 

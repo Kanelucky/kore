@@ -2,6 +2,8 @@ package org.koremc.world
 
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
+import org.koremc.registry.maxStackSize
+import org.koremc.registry.sameKindAs
 import kotlin.math.abs
 import kotlin.math.floor
 
@@ -20,6 +22,12 @@ private const val GROUND_FRICTION = 0.6
 private const val HALF_WIDTH = 0.125
 private const val HEIGHT = 0.25
 
+/** How far across an item reaches for others to merge with, beyond its own sides. */
+private const val MERGE_REACH = 0.5
+
+/** How often, in ticks of its age, an item on the ground looks for others to merge with: once a second. */
+private const val MERGE_PERIOD = 20
+
 /**
  * How close to a surface counts as touching it. Positions are kept as
  * floats, which near the overworld's floor are only good to about 1e-5,
@@ -32,7 +40,13 @@ private const val TOUCHING = 1e-4
  * delay has run out. [position] is the middle of its bottom, and
  * [velocity] is in blocks a tick.
  */
-class ItemEntity(val id: Long, var stack: ItemStack, position: Vec3, velocity: Vec3, pickupDelay: Int) {
+class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3, pickupDelay: Int) {
+    var stack = stack
+        set(value) {
+            field = value
+            restacked = true
+        }
+
     var position = position
         private set
     var velocity = velocity
@@ -49,7 +63,22 @@ class ItemEntity(val id: Long, var stack: ItemStack, position: Vec3, velocity: V
     var moved = false
         private set
 
+    /**
+     * Whether its stack changed since the last tick began, by merging or
+     * being partly picked up, so those who see it need to hear how many it
+     * holds now.
+     */
+    var restacked = false
+        internal set
+
     private var age = 0
+
+    /**
+     * Whether it can take in more items, or go into another stack: it's
+     * landed, it isn't about to go, and its stack isn't full. Items in the
+     * air pass each other by.
+     */
+    private val mergeable get() = onGround && age < ITEM_LIFETIME && stack.count < stack.item.maxStackSize
 
     internal fun tick(world: FlatWorld): Boolean {
         age++
@@ -78,15 +107,62 @@ class ItemEntity(val id: Long, var stack: ItemStack, position: Vec3, velocity: V
         moved = position != start
         return true
     }
+
+    /**
+     * Once a second, merges this item with those of its kind close enough,
+     * as the game does, until it goes into one of them: both must be on the
+     * ground, and the side of one's box must come within [MERGE_REACH] of
+     * the other's, at a height they share. Of two that merge, the smaller
+     * stack goes into the larger, and into the other of two the same size.
+     * They only merge when they fit in one stack. Returns the items that
+     * went.
+     */
+    internal fun mergeWithNeighbours(world: FlatWorld): List<ItemEntity> {
+        if (age % MERGE_PERIOD != 0 || !mergeable) return emptyList()
+        val gone = mutableListOf<ItemEntity>()
+        for (other in world.items) {
+            if (other === this || !other.mergeable || !closeTo(other)) continue
+            if (!other.stack.sameKindAs(stack) || other.stack.count + stack.count > stack.item.maxStackSize) continue
+            if (other.stack.count < stack.count) {
+                absorb(other)
+                gone += other
+            } else {
+                other.absorb(this)
+                gone += this
+                break
+            }
+        }
+        return gone
+    }
+
+    private fun closeTo(other: ItemEntity) =
+        abs(other.position.x - position.x) < 2 * HALF_WIDTH + MERGE_REACH &&
+            abs(other.position.z - position.z) < 2 * HALF_WIDTH + MERGE_REACH &&
+            abs(other.position.y - position.y) < HEIGHT
+
+    /** Takes in [other]'s items. The stack waits as long as either did to be picked up, and lasts as long as the newer. */
+    private fun absorb(other: ItemEntity) {
+        stack = stack.copy(count = stack.count + other.stack.count)
+        pickupDelay = maxOf(pickupDelay, other.pickupDelay)
+        age = minOf(age, other.age)
+    }
 }
 
 /**
  * Moves every item along a tick: they fall, slide and land on blocks, and
- * one that's lain for five minutes, or fallen out of the world, is gone.
+ * merge with items of their kind close by. One that's lain for five
+ * minutes, or fallen out of the world, is gone.
  */
 fun FlatWorld.tickItems() {
+    // Before any item moves, since one may merge into another that has yet to.
+    items.forEach { it.restacked = false }
     for (item in items.toList()) {
-        if (!item.tick(this)) removeItem(item.id)
+        if (itemWith(item.id) == null) continue // Merged into another this tick
+        if (!item.tick(this)) {
+            removeItem(item.id)
+            continue
+        }
+        item.mergeWithNeighbours(this).forEach { removeItem(it.id) }
     }
 }
 

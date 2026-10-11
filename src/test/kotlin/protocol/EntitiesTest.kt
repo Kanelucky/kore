@@ -39,6 +39,11 @@ class EntitiesTest {
     }
 
     @Test
+    fun `an item entity's stack changing size is an entity event`() {
+        assertContentEquals(hex("1b" + "05" + "45" + "06" + "00"), ActorEvent(5, ActorEvent.UPDATE_STACK_SIZE, 3).encode())
+    }
+
+    @Test
     fun `a slot of the player's items holds a stack by its ID`() {
         val expected = "32" + "00" + "02" + "00" + "00" + // The inventory window, slot 2, no container or storage item
             "0300" + "0500" + "00" + "01" + "12" + "00" + extras // Five dirt, stack 9
