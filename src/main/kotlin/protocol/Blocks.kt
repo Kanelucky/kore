@@ -11,9 +11,6 @@ internal const val MOB_EQUIPMENT = 31
 internal const val PLAYER_ACTION = 36
 private const val LEVEL_SOUND_EVENT = 123
 
-/** The inventory transaction type that uses an item on a block. */
-private const val USE_ITEM_TRANSACTION = 2
-
 /** The client's prediction for an item use that works. One that fails is 0. */
 private const val PREDICTED_SUCCESS = 1
 
@@ -44,9 +41,44 @@ data class ItemUse(
 /**
  * A transaction from the inventory system that came before item stack
  * requests. The client still sends one when the player uses an item on a
- * block, which Kore reads as [use]. It leaves the other kinds unread.
+ * block, which Kore reads as [use], and when they drop what's in a hotbar
+ * slot outside the inventory screen, by pressing Q, which is a [NORMAL]
+ * one. Its [actions] are the slot changes the client predicts.
  */
-data class InventoryTransaction(val type: Int, val use: ItemUse?) : ClientPacket
+data class InventoryTransaction(val type: Int, val actions: List<InventoryAction>, val use: ItemUse?) : ClientPacket {
+    companion object {
+        /** Items moving between slots, without anything else happening. */
+        const val NORMAL = 0
+
+        /** An item used on a block. */
+        const val USE_ITEM = 2
+    }
+}
+
+/**
+ * A change the client predicts to one slot, from [before] to [after]. The
+ * slot is in a container, the window [windowId], or in the world, where
+ * the slot says what happens to the items, like [DROP_SLOT].
+ */
+data class InventoryAction(val source: Int, val windowId: Int?, val slot: Int, val before: ClientItem, val after: ClientItem) {
+    companion object {
+        /** A slot in a container, like the player's inventory. */
+        const val CONTAINER = 0
+
+        /** The world, which items go into and come out of. */
+        const val WORLD = 2
+
+        /** The world's slot for items the player drops. */
+        const val DROP_SLOT = 0
+    }
+}
+
+/**
+ * An item as the client sends it outside item stack requests: its runtime
+ * ID, which is 0 for none, how many there are, and the ID of the stack it
+ * comes from, when the client gives one.
+ */
+data class ClientItem(val runtimeId: Int, val count: Int, val stackId: Int?)
 
 /**
  * Something the player did that has no packet of its own, like breaking a
@@ -153,8 +185,8 @@ data class LevelSoundEvent(val sound: String, val position: Vec3, val data: Int)
 internal fun decodeInventoryTransaction(buffer: ByteBuf): InventoryTransaction {
     buffer.skipLegacyRequest()
     val type = buffer.readVarUInt()
-    buffer.skipActions()
-    return InventoryTransaction(type, if (type == USE_ITEM_TRANSACTION) buffer.readItemUse() else null)
+    val actions = buffer.readActions()
+    return InventoryTransaction(type, actions, if (type == InventoryTransaction.USE_ITEM) buffer.readItemUse() else null)
 }
 
 internal fun decodePlayerAction(buffer: ByteBuf): PlayerAction {
@@ -167,7 +199,7 @@ internal fun decodePlayerAction(buffer: ByteBuf): PlayerAction {
 
 internal fun decodeMobEquipment(buffer: ByteBuf): MobEquipment {
     val runtimeId = buffer.readVarULong()
-    val heldItem = buffer.readItemId()
+    val heldItem = buffer.readClientItem().runtimeId
     buffer.readUnsignedByte() // The slot, which for a player is the same hotbar slot as the next
     return MobEquipment(runtimeId, heldItem, selectedSlot = buffer.readUnsignedByte().toInt(), windowId = buffer.readUnsignedByte().toInt())
 }
@@ -175,7 +207,7 @@ internal fun decodeMobEquipment(buffer: ByteBuf): MobEquipment {
 /** An item use as `PlayerAuthInput` carries it: a transaction without the type, which can only be this one. */
 internal fun ByteBuf.readPackedItemUse(): ItemUse {
     skipLegacyRequest()
-    skipActions()
+    readActions() // The slot changes the client predicts, which an item use has no need of
     return readItemUse()
 }
 
@@ -187,16 +219,12 @@ private fun ByteBuf.skipLegacyRequest() {
     if (readBoolean()) readList { readUnsignedByte(); readByteArray() } // A container, then its slots
 }
 
-/** Skips the slot changes the client predicts a transaction makes, which Kore works out for itself. */
-private fun ByteBuf.skipActions() {
-    readList {
-        readVarUInt() // Where the items come from: a container, the world, the creative inventory
-        if (readBoolean()) readByte() // The container's window
-        if (readBoolean()) readVarUInt() // Flags, for items from the world
-        readVarUInt() // Slot
-        readItemId() // What was there
-        readItemId() // What's there now
-    }
+/** Reads the slot changes the client predicts a transaction makes. */
+private fun ByteBuf.readActions() = readList {
+    val source = readVarUInt()
+    val windowId = if (readBoolean()) readByte().toInt() else null
+    if (readBoolean()) readVarUInt() // Flags, for items from the world
+    InventoryAction(source, windowId, slot = readVarUInt(), before = readClientItem(), after = readClientItem())
 }
 
 private fun ByteBuf.readItemUse(): ItemUse {
@@ -206,7 +234,7 @@ private fun ByteBuf.readItemUse(): ItemUse {
     val face = readUnsignedByte().toInt()
     val hotbarSlot = readVarInt()
     readUnsignedByte() // The hand holding the item
-    val heldItem = readItemId()
+    val heldItem = readClientItem().runtimeId
     readVec3() // Where the player was
     val clickPosition = readVec3()
     val clickedBlock = readVarUInt()
@@ -216,17 +244,16 @@ private fun ByteBuf.readItemUse(): ItemUse {
 }
 
 /**
- * Reads an item as the client sends it outside item stack requests, and
- * returns its runtime ID, which is 0 for none. These items have a fixed
- * 16-bit ID and may carry a stack ID, unlike those the server sends. The
- * count, aux value, stack ID, block and extras are read past.
+ * Reads an item as the client sends it outside item stack requests. These
+ * items have a fixed 16-bit ID and may carry a stack ID, unlike those the
+ * server sends. The aux value, block and extras are read past.
  */
-private fun ByteBuf.readItemId(): Int {
+private fun ByteBuf.readClientItem(): ClientItem {
     val id = readShortLE().toInt()
-    readUnsignedShortLE() // Count
+    val count = readUnsignedShortLE()
     readVarUInt() // Aux value
-    if (readBoolean()) readVarInt() // Stack ID
+    val stackId = if (readBoolean()) readVarInt() else null
     readVarUInt() // Block network ID
     readByteArray() // Extras
-    return id
+    return ClientItem(id, count, stackId)
 }

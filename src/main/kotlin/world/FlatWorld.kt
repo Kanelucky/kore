@@ -3,6 +3,7 @@ package org.koremc.world
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
+import org.koremc.registry.ItemStack
 
 /**
  * Chunks name biomes by number, and Cloudburst's data has no numbers for
@@ -16,7 +17,8 @@ const val PLAINS_BIOME_ID = 1
  * from the bottom of the world up, air above them, and one biome
  * throughout. Until a player changes a block in a chunk, the chunk is that
  * same column, so the world holds just one of those, plus each chunk that
- * players have changed. Changes last until the server stops.
+ * players have changed. Changes last until the server stops, as do the
+ * items lying in it, until they're picked up or go.
  *
  * Like the sessions that change it, it runs on the UDP event loop.
  */
@@ -33,6 +35,12 @@ class FlatWorld(
 
     /** The chunks players have changed, which no longer match [generated]. */
     private val changed = HashMap<ChunkPos, Chunk>()
+
+    private val itemEntities = LinkedHashMap<Long, ItemEntity>()
+    private var nextEntityId = 1L
+
+    /** The items lying in the world, oldest first. */
+    val items: Collection<ItemEntity> get() = itemEntities.values
 
     init {
         require(layers.size < SUB_CHUNK_COUNT * 16) { "${layers.size} layers leave no room to stand in the overworld" }
@@ -53,6 +61,17 @@ class FlatWorld(
 
     /** The block at [pos], or null if it's one [blocks] doesn't have. */
     fun stateAt(pos: BlockPos): BlockState? = blocks[blockAt(pos)]
+
+    /** An ID for a new entity, unique among players and items alike. */
+    fun newEntityId() = nextEntityId++
+
+    /** Puts [stack] in the world at [position], moving at [velocity], for anyone to pick up after [pickupDelay] ticks. */
+    fun spawnItem(stack: ItemStack, position: Vec3, velocity: Vec3, pickupDelay: Int): ItemEntity =
+        ItemEntity(newEntityId(), stack, position, velocity, pickupDelay).also { itemEntities[it.id] = it }
+
+    fun removeItem(id: Long) {
+        itemEntities.remove(id)
+    }
 
     /** Puts [state] at [pos], which must be within the overworld's height. */
     operator fun set(pos: BlockPos, state: BlockState) {

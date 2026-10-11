@@ -8,6 +8,7 @@ import org.koremc.protocol.StackAction
 import org.koremc.protocol.StackRequest
 import org.koremc.protocol.StackResponse
 import org.koremc.registry.CreativeInventory
+import org.koremc.registry.ItemStack
 import org.koremc.registry.maxStackSize
 import org.koremc.registry.sameKindAs
 import org.slf4j.LoggerFactory
@@ -36,9 +37,9 @@ class StackRequestHandler(
     private val creative: CreativeInventory,
     /** Whether the player may take items from the creative inventory, and destroy them. */
     private val creativeMode: () -> Boolean,
+    /** Throws items the player dropped into the world, once the request dropping them is accepted. */
+    private val onDrop: (ItemStack) -> Unit,
 ) {
-    private var nextStackId = 1
-
     /** What each recent request left in the slots it changed, by request ID. */
     private val recent = object : LinkedHashMap<Int, Map<Location, Int>>() {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Map<Location, Int>>) = size > REMEMBERED_REQUESTS
@@ -49,6 +50,7 @@ class StackRequestHandler(
         return try {
             request.actions.forEach(transaction::apply)
             recent[request.id] = transaction.stackIds()
+            transaction.dropped.forEach(onDrop)
             StackResponse(request.id, accepted = true, transaction.changes())
         } catch (e: Rejection) {
             transaction.undo()
@@ -64,13 +66,16 @@ class StackRequestHandler(
         /** Each changed slot, by the container name and slot the client called it. */
         private val named = LinkedHashMap<Pair<Int, Int>, Location>()
 
+        /** What the player dropped, to throw into the world if the request goes through. */
+        val dropped = mutableListOf<ItemStack>()
+
         fun apply(action: StackAction) {
             when (action) {
                 is StackAction.Transfer -> transfer(action)
                 is StackAction.Swap -> swap(action)
                 is StackAction.Destroy -> destroy(action)
                 is StackAction.CraftCreative -> craftCreative(action)
-                is StackAction.Drop -> throw Rejection("dropping items needs item entities, which Kore doesn't have yet")
+                is StackAction.Drop -> drop(action)
                 is StackAction.Informational -> {}
                 is StackAction.Unsupported -> throw Rejection("action ${action.type} isn't supported yet")
             }
@@ -102,6 +107,14 @@ class StackRequestHandler(
             val sourceStack = source.content()
             set(action.source, source, destination.content())
             set(action.destination, destination, sourceStack)
+        }
+
+        private fun drop(action: StackAction.Drop) {
+            val source = verified(action.source)
+            val stack = source.content() ?: throw Rejection("${action.source} is empty")
+            if (action.count !in 1..stack.stack.count) throw Rejection("can't drop ${action.count} of ${stack.stack.count}")
+            set(action.source, source, stack.withCount(stack.stack.count - action.count))
+            dropped += stack.stack.copy(count = action.count)
         }
 
         private fun destroy(action: StackAction.Destroy) {
@@ -150,7 +163,7 @@ class StackRequestHandler(
         fun undo() = before.forEach { (location, stack) -> location.container[location.slot] = stack }
     }
 
-    private fun newStackId() = nextStackId++
+    private fun newStackId() = inventory.newStackId()
 }
 
 private fun Location.content(): SlotStack? = container[slot]

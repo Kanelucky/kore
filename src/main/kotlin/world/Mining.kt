@@ -41,10 +41,21 @@ fun breakTicks(mining: Mining, held: String?): Int? {
         kind == ToolKind.SHEARS -> 5.0
         else -> tier?.speed ?: 1.0
     }
-    val harvests = mining.harvestTier.let { needed -> needed == null || (suited && (tier?.level ?: 0) >= needed) }
-    val ticks = mining.hardness * (if (harvests) 30 else 100) / speed
+    val ticks = mining.hardness * (if (harvests(mining, held)) 30 else 100) / speed
     // Some hardness comes as a float, a hair over its true value, which mustn't round up to another tick.
     return if (ticks < 1) 0 else ceil(ticks - 1e-4).toInt()
+}
+
+/**
+ * Whether a player holding the item called [held], or nothing, harvests a
+ * block that takes to [mining] as it does, so it drops something when they
+ * break it: any player does, unless the block needs a tool of some kind
+ * and tier.
+ */
+fun harvests(mining: Mining, held: String?): Boolean {
+    val needed = mining.harvestTier ?: return true
+    val (kind, tier) = toolOf(held)
+    return kind != null && kind == mining.tool && (tier?.level ?: 0) >= needed
 }
 
 /** The kind and tier of tool the item called [item] is, as its name has them, like `minecraft:stone_pickaxe`. */

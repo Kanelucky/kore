@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Players can join a flat world, walk around it, build in it and open its doors, but they can't see each other yet.
+> Kore is in early development. Players can join a flat world, walk around it, mine it, build in it and open its doors, but they can't see each other yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -144,7 +144,7 @@ Clients expect the server to agree with them about the game itself: which items 
 - **Biomes** follow in the `BiomeDefinitionList`: each one's climate, colours and tags. Kore leaves out the world generation data, which only a client generating its own terrain would use, so the packet stays under 8 KB.
 - **The creative inventory** follows, as `CreativeContent`: 124 groups across the four tabs, and 1,980 items, including recent ones like the mushroom shelf and wool and concrete stairs and slabs. Each item names the block state it places and carries its NBT, like an enchanted book's enchantment. It's encoded once on start, too. Because Kore tells the client that the server owns inventories, the client can't even open its own inventory without asking: Kore answers with `ContainerOpen`, and agrees when the client closes it.
 
-For the same reason, Kore keeps each player's inventory itself. Every move the player makes is an item stack request: the client predicts the result, and Kore either agrees, listing each changed slot and the ID of the stack now there, or rejects it, which makes the client undo it. Each request names the stacks it expects to find, and one that doesn't match what Kore has is rejected whole. The client doesn't wait for one answer before the next request, so a request can name a stack that an earlier one made by that request's number. Kore remembers recent requests to follow those. Picking from the creative inventory puts a full stack in a hidden output slot for the client to take from. Dropping items waits for item entities, and crafting for recipes.
+For the same reason, Kore keeps each player's inventory itself. Every move the player makes is an item stack request: the client predicts the result, and Kore either agrees, listing each changed slot and the ID of the stack now there, or rejects it, which makes the client undo it. Each request names the stacks it expects to find, and one that doesn't match what Kore has is rejected whole. The client doesn't wait for one answer before the next request, so a request can name a stack that an earlier one made by that request's number. Kore remembers recent requests to follow those. Picking from the creative inventory puts a full stack in a hidden output slot for the client to take from. Dropping an item throws it into the world, and crafting waits for recipes.
 - **Blocks defined in data**, rather than in the game's code, go in `StartGame`. Since 26.50 that includes the wool and concrete stairs and slabs and the shelf mushroom. Without their definitions, the client knows these blocks exist but not how they look, and shows them as placeholders.
 - **Block states** are named on the network by a hash, not by their place in a palette: the 32-bit FNV-1a hash of the state's name and properties, written as little-endian NBT. Mojang's protocol docs don't spell the rule out, so the tests check it against the network ID the game gave each of the 22,091 states in its palette.
 - **Mining** takes each block's hardness, the tool that digs it quicker and whether it needs one to drop anything, from minecraft-data's `blocks.json`. Cloudburst's data only has these for the blocks defined in data, which use their own. minecraft-data's table is for 1.26.30, so the newer poplar wood borrows spruce's, and its leaves oak's. It names the tools that harvest a block by Java Edition item IDs, which Kore has no use for, but how many there are tells the tier: every tier, stone and up, iron and up, or diamond and up.
@@ -183,7 +183,11 @@ Clicking a lever, button, door, trapdoor or fence gate uses it instead, unless t
 
 In creative, the client breaks a block at once and says so with a `PlayerAction`. Outside creative, it reports a finished break in its input. With server-authoritative block breaking off, Mojang leaves the timing of a break to the client, so Kore takes its word for it. Either way, everyone with the chunk sees the block go, with the particles and sound of it breaking: the client leaves those to the server, even for its own breaks. Outside creative, bedrock and other blocks only creative players break stay put.
 
-In survival, the input also carries the steps of breaking: starting on a block, a crack every tick, and stopping. Kore works out how long the block takes the game's way: from its hardness, whether the player holds the right kind of tool and its tier, and whether that tool harvests the block. Then it shows everyone with the chunk the cracks spreading at that pace, and bits flying off the block each tick. A reported break that comes sooner after the player started than the block allows, with a quarter's slack, is refused and put back. The client counts the ticks itself, so the gap is exact whatever the network does. Kore doesn't count what slows a player down, like digging off the ground or under water, so it only ever expects too little time, never too much. Broken blocks drop nothing until there are item entities.
+In survival, the input also carries the steps of breaking: starting on a block, a crack every tick, and stopping. Kore works out how long the block takes the game's way: from its hardness, whether the player holds the right kind of tool and its tier, and whether that tool harvests the block. Then it shows everyone with the chunk the cracks spreading at that pace, and bits flying off the block each tick. A reported break that comes sooner after the player started than the block allows, with a quarter's slack, is refused and put back. The client counts the ticks itself, so the gap is exact whatever the network does. Kore doesn't count what slows a player down, like digging off the ground or under water, so it only ever expects too little time, never too much.
+
+In survival, a broken block drops its item, if what the player holds harvests it. Most blocks drop themselves; grass drops dirt and stone cobblestone, ores drop the least they can, and glass, leaves and ice drop nothing. Chance drops, like saplings, and Silk Touch and Fortune are for later.
+
+Items lie in the world as entities. The game ticks 20 times a second, on the same thread as the sessions. Each tick, items fall, slide along the ground and land on blocks as in the game, and each player sees the items in the chunks they have appear, move and go. An item can be picked up half a second after it drops from a block, or two seconds after a player throws it, by a player within a block or so. It joins stacks of its kind, hotbar first, then empty slots, and the client hears which slots changed, since it didn't ask. An item no one picks up goes after five minutes. Dropping an item from the inventory throws it the way the player looks, and placing a block in survival uses one up.
 
 Chunks name biomes by number, and Cloudburst's data has none for vanilla biomes. For now, plains is hard-coded as biome `1`.
 
@@ -214,6 +218,7 @@ src/main/kotlin/
 │   ├── ItemStackRequest.kt          # Inventory requests from the client, and the answers
 │   ├── CreativeContent.kt           # The creative inventory, and items on the wire
 │   ├── Blocks.kt                    # Using items on blocks, block updates, and the effects players see
+│   ├── Entities.kt                  # Item entities appearing, moving, going and being picked up, and inventory slots
 │   └── LoginRequest.kt              # Reading who a client claims to be
 ├── world/
 │   ├── Positions.kt                 # Block, chunk and exact positions
@@ -224,6 +229,9 @@ src/main/kotlin/
 │   ├── Building.kt                  # Where placed blocks go and which way they turn, and breaking them
 │   ├── Using.kt                     # Levers, buttons, doors, trapdoors and fence gates, clicked
 │   ├── Connections.kt               # Fences, panes and walls joining the blocks beside them
+│   ├── Mining.kt                    # How long a block takes to break, and whether it drops anything
+│   ├── Drops.kt                     # What each block drops
+│   ├── Items.kt                     # Items lying in the world, falling and sliding
 │   └── Shapes.kt                    # Which blocks are whole cubes, and which faces can hold a torch or a button
 ├── inventory/
 │   ├── PlayerInventory.kt           # A player's slots: hotbar, inventory, offhand, armour and cursor
@@ -233,6 +241,7 @@ src/main/kotlin/
 │   ├── Items.kt                     # Items, as the client's item registry lists them
 │   ├── Biomes.kt                    # Biomes, as the client's biome definitions describe them
 │   ├── Creative.kt                  # The creative inventory's tabs, groups and items
+│   ├── Mining.kt                    # Each block's hardness and tools, from minecraft-data
 │   └── BlockStates.kt               # Block states and the hashes the client knows them by
 └── network/
     ├── SignalingServer.kt           # TCP bootstrap and HTTP pipeline
@@ -294,12 +303,12 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Creative inventory, from CloudburstMC's data
 - [x] Block placing and breaking, taking the client's word for break times
 - [x] Survival mining: cracks as blocks break, and how long each takes, from minecraft-data
-- [ ] Drops, which need item entities
+- [x] Item entities: blocks drop them, players throw and pick them up
 - [x] Using levers, buttons, doors, trapdoors and fence gates
 - [ ] Redstone
 - [x] Moving items around the player's inventory, and taking them from the creative inventory
 - [ ] Other inventories: chests, crafting and so on
-- [ ] Entities
+- [ ] Other entities: players seeing each other, mobs
 - [ ] Commands
 
 ## 🤝 Contributing

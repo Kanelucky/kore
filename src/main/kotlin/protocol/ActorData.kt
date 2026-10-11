@@ -51,28 +51,33 @@ data class SetActorData(val runtimeId: Long, val items: List<DataItem>, val tick
 
     override fun encodeBody(out: ByteBuf) {
         out.writeVarULong(runtimeId)
-        out.writeVarUInt(items.size)
-        // In order of ID, which some of the client's handling relies on.
-        for (item in items.sortedBy { it.id.id }) {
-            out.writeVarUInt(item.id.id)
-            when (item) {
-                is ShortItem -> out.writeType(SHORT).writeShortLE(item.value.toInt())
-                is FloatItem -> out.writeType(FLOAT).writeFloatLE(item.value)
-                is LongItem -> out.writeType(LONG).writeVarLong(item.value)
-            }
-        }
+        out.writeActorData(items)
         out.writeVarUInt(0) // Int properties, which only entities from behaviour packs have
         out.writeVarUInt(0) // Float properties, likewise
         out.writeVarULong(tick)
     }
 
-    private companion object {
-        // Each value's type, as Mojang numbers them.
-        const val SHORT = 1
-        const val FLOAT = 3
-        const val LONG = 7
-
-        /** A value's type goes out twice: as a varint, then again as a single byte, which 1.26.40 added. */
-        fun ByteBuf.writeType(type: Int): ByteBuf = writeVarUInt(type).writeByte(type)
-    }
 }
+
+// Each value's type, as Mojang numbers them.
+private const val SHORT = 1
+private const val FLOAT = 3
+private const val LONG = 7
+
+/** [items] as an actor's synced data list, as both `SetActorData` and the packets adding actors carry it. */
+internal fun ByteBuf.writeActorData(items: List<DataItem>): ByteBuf {
+    writeVarUInt(items.size)
+    // In order of ID, which some of the client's handling relies on.
+    for (item in items.sortedBy { it.id.id }) {
+        writeVarUInt(item.id.id)
+        when (item) {
+            is ShortItem -> writeType(SHORT).writeShortLE(item.value.toInt())
+            is FloatItem -> writeType(FLOAT).writeFloatLE(item.value)
+            is LongItem -> writeType(LONG).writeVarLong(item.value)
+        }
+    }
+    return this
+}
+
+/** A value's type goes out twice: as a varint, then again as a single byte, which 1.26.40 added. */
+private fun ByteBuf.writeType(type: Int): ByteBuf = writeVarUInt(type).writeByte(type)

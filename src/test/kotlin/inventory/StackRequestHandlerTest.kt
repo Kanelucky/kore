@@ -34,7 +34,8 @@ class StackRequestHandlerTest {
 
     private val inventory = PlayerInventory()
     private var creativeMode = true
-    private val handler = StackRequestHandler(inventory, creative) { creativeMode }
+    private val dropped = mutableListOf<ItemStack>()
+    private val handler = StackRequestHandler(inventory, creative, creativeMode = { creativeMode }, onDrop = { dropped += it })
 
     @Test
     fun `a creative pick fills the created output, and the client takes from it`() {
@@ -148,11 +149,48 @@ class StackRequestHandlerTest {
     }
 
     @Test
-    fun `dropping waits for item entities`() {
+    fun `dropped items leave the slot, to be thrown once the request goes through`() {
         pickToCursor(requestId = -1, count = 64)
 
-        assertFalse(handler.handle(StackRequest(-3, listOf(StackAction.Drop(1, cursor(1))))).accepted)
-        assertEquals(64, inventory.ui[0]?.stack?.count)
+        assertTrue(handler.handle(StackRequest(-3, listOf(StackAction.Drop(10, cursor(1))))).accepted)
+        assertEquals(54, inventory.ui[0]?.stack?.count)
+        assertEquals(listOf(ItemStack(stick, count = 10)), dropped)
+
+        // A request that fails after dropping drops nothing.
+        val response = handler.handle(StackRequest(-5, listOf(StackAction.Drop(4, cursor(1)), StackAction.Drop(1, cursor(9)))))
+        assertFalse(response.accepted)
+        assertEquals(54, inventory.ui[0]?.stack?.count)
+        assertEquals(1, dropped.size)
+    }
+
+    @Test
+    fun `picked-up items join stacks of their kind, then fill empty slots, hotbar first`() {
+        inventory.items[3] = SlotStack(ItemStack(stick, count = 60), 7)
+
+        val (changed, left) = inventory.add(ItemStack(stick, count = 10))
+
+        assertEquals(listOf(3, 0), changed)
+        assertEquals(0, left)
+        assertEquals(SlotStack(ItemStack(stick, count = 64), 7), inventory.items[3]) // It keeps its ID as it grows
+        assertEquals(6, inventory.items[0]?.stack?.count)
+
+        // Swords don't stack, so each goes in a slot of its own, until there's no room.
+        repeat(34) { inventory.items[it + 2] = SlotStack(ItemStack(stick, count = 64), 100 + it) }
+        val (swords, unplaced) = inventory.add(ItemStack(sword, count = 3))
+        assertEquals(listOf(1), swords)
+        assertEquals(2, unplaced)
+    }
+
+    @Test
+    fun `items taken from a slot leave the rest of the stack, and the last empties it`() {
+        inventory.items[0] = SlotStack(ItemStack(stick, count = 5), 5)
+
+        inventory.remove(0)
+        assertEquals(SlotStack(ItemStack(stick, count = 4), 5), inventory.items[0])
+        inventory.remove(0, count = 3)
+        assertEquals(SlotStack(ItemStack(stick, count = 1), 5), inventory.items[0])
+        inventory.remove(0)
+        assertNull(inventory.items[0])
     }
 
     private fun pickToCursor(requestId: Int, count: Int) =

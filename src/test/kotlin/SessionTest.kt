@@ -21,7 +21,10 @@ import org.koremc.protocol.ContainerOpen
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.LevelEvent
+import org.koremc.protocol.InventorySlot
 import org.koremc.protocol.LevelSoundEvent
+import org.koremc.protocol.RemoveActor
+import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.SetActorData
 import org.koremc.protocol.flagsItem
@@ -55,6 +58,8 @@ import org.koremc.registry.Mining
 import org.koremc.registry.ToolKind
 import org.koremc.world.BlockPos
 import org.koremc.world.ChunkPos
+import org.koremc.world.Drops
+import org.koremc.world.tickItems
 import org.koremc.world.Face
 import org.koremc.world.FlatWorld
 import org.koremc.world.Vec3
@@ -130,7 +135,8 @@ class SessionTest {
             "minecraft:connection_west" to (joins shr 1).toByte(),
         )
     }
-    private val world = FlatWorld(BlockPalette(listOf(air, stone, planks, torch) + levers + buttons + doors + fences), listOf(stone))
+    private val palette = BlockPalette(listOf(air, stone, planks, torch) + levers + buttons + doors + fences)
+    private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
         listOf(
@@ -148,7 +154,7 @@ class SessionTest {
     private val blockDefinitions = BlockDefinitions(listOf(BlockDefinition("minecraft:white_wool_stairs", NbtMap.builder().putInt("molangVersion", 13).build())))
     /** Stone takes 150 ticks to break by hand, as it needs a pickaxe. */
     private val mining = mapOf(stone.name to Mining(1.5, ToolKind.PICKAXE, harvestTier = 0))
-    private val game = GameData(world, listOf(itemRegistry, biomes), blockDefinitions, creative, mining)
+    private val game = GameData(world, listOf(itemRegistry, biomes), blockDefinitions, creative, mining, Drops(creative.items.map { it.stack.item }, creative, palette))
     private val session: Session by lazy {
         // The only player, so the only one to see what they change.
         Session(
@@ -690,6 +696,100 @@ class SessionTest {
     }
 
     @Test
+    fun `a survival break drops the block, which the player sees land and picks up`() {
+        spawn()
+        val block = BlockPos(1, -63, 0)
+        world[block] = planks
+        clientSends(breakingInput(tick = 200, START_DESTROY to block))
+        clientSends(breakingInput(tick = 260, STOP_DESTROY to block, destroying = block))
+
+        val dropped = world.items.single()
+        assertEquals(ItemStack(creative.items[0].stack.item, block = planks), dropped.stack)
+        sent.clear()
+        session.syncItems()
+        assertEquals(0x0F, receivedPacket()[0].toInt()) // AddItemActor
+
+        // It can't be picked up for ten ticks. It pops out a random way, so the player then walks over to it.
+        session.collectItems()
+        assertTrue(world.items.isNotEmpty())
+        repeat(10) { world.tickItems() }
+        clientSends(playerAuthInput(Vec3(dropped.position.x, dropped.position.y + 1.62f, dropped.position.z)))
+        sent.clear()
+        session.collectItems()
+
+        val (slot, taken) = sent.map { batches.decode(it).single() }
+        assertContentEquals(InventorySlot(0, dropped.stack, stackId = 1).encode(), slot)
+        assertContentEquals(TakeItemActor(dropped.id, takerId = 7).encode(), taken)
+        assertTrue(world.items.isEmpty())
+        sent.clear()
+        session.syncItems()
+        assertContentEquals(RemoveActor(dropped.id).encode(), receivedPacket())
+    }
+
+    @Test
+    fun `a dropped item is thrown from the player, out of their reach for two seconds`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        pickPlanksIntoHotbar()
+
+        // Request -3 drops 10 of the stack in hotbar slot 0, which is stack 1.
+        clientSends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(-3).writeVarUInt(1)
+                    .writeVarUInt(3).writeByte(3).writeByte(10).writeByte(28).writeBoolean(false).writeByte(0).writeIntLE(1).writeBoolean(false)
+                    .writeVarUInt(0).writeIntLE(0),
+            ),
+        )
+
+        val thrown = world.items.single()
+        assertEquals(10, thrown.stack.count)
+        assertEquals(40, thrown.pickupDelay)
+        assertEquals(standing.y - 0.3f, thrown.position.y, 0.001f) // From just below the player's eyes
+        assertTrue(thrown.velocity.z > 0) // The way they look: south, with a yaw of 0
+    }
+
+    @Test
+    fun `pressing Q throws from a hotbar slot, if the client had there what Kore has`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        pickPlanksIntoHotbar()
+        val planksStack = creative.items[0].stack
+
+        clientSends(dropFromSlot(slot = 0, had = 64, dropping = 1))
+        val thrown = world.items.single()
+        assertEquals(1, thrown.stack.count)
+        assertEquals(40, thrown.pickupDelay)
+        assertContentEquals(InventorySlot(0, planksStack.copy(count = 63), stackId = 1).encode(), receivedPacket())
+
+        // A client that still counts 64 is out of step: nothing is thrown, and it hears what the slot holds.
+        clientSends(dropFromSlot(slot = 0, had = 64, dropping = 64))
+        assertEquals(1, world.items.size)
+        assertContentEquals(InventorySlot(0, planksStack.copy(count = 63), stackId = 1).encode(), receivedPacket())
+
+        // Ctrl+Q throws the whole stack.
+        clientSends(dropFromSlot(slot = 0, had = 63, dropping = 63))
+        assertEquals(63, world.items.last().stack.count)
+        assertContentEquals(InventorySlot(0, stack = null, stackId = 0).encode(), receivedPacket())
+    }
+
+    @Test
+    fun `placing in survival uses up the stack, and the client is put right if a placement fails`() {
+        spawn()
+        world.spawnItem(ItemStack(creative.items[0].stack.item, count = 2, block = planks), Vec3(1f, -63f, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        session.collectItems()
+
+        clientSends(placeBlock(against = BlockPos(1, -64, 0), face = 1, slot = 0))
+        clientSends(placeBlock(against = BlockPos(2, -64, 0), face = 1, slot = 0))
+        assertEquals(planks, world.stateAt(BlockPos(2, -63, 0)))
+
+        // Both are used up, so a third placement fails, and the client hears its slot is empty.
+        sent.clear()
+        clientSends(placeBlock(against = BlockPos(3, -64, 0), face = 1, slot = 0))
+        assertEquals(AIR_NETWORK_ID, world.blockAt(BlockPos(3, -63, 0)))
+        assertContentEquals(InventorySlot(0, stack = null, stackId = 0).encode(), receivedPacket())
+    }
+
+    @Test
     fun `the held slot follows the client`() {
         spawn()
 
@@ -882,9 +982,22 @@ class SessionTest {
         Unpooled.buffer().writeVarUInt(31).writeVarULong(7).heldItem(PLANKS_ITEM).writeByte(slot).writeByte(slot).writeByte(0),
     )
 
-    /** A stack of the item [id], as the client describes what it holds. */
-    private fun ByteBuf.heldItem(id: Int): ByteBuf =
-        writeShortLE(id).writeShortLE(if (id == 0) 0 else 64).writeVarUInt(0).writeBoolean(id != 0).apply { if (id != 0) writeVarInt(1) }
+    /**
+     * An inventory transaction dropping [dropping] of the [had] oak planks
+     * in hotbar [slot], as pressing Q does: they leave the slot and go into
+     * the world.
+     */
+    private fun dropFromSlot(slot: Int, had: Int, dropping: Int) = ByteBufUtil.getBytes(
+        Unpooled.buffer().writeVarUInt(30).writeVarInt(0).writeBoolean(false).writeVarUInt(0).writeVarUInt(2)
+            .writeVarUInt(2).writeBoolean(false).writeBoolean(true).writeVarUInt(0).writeVarUInt(0) // Into the world, dropped
+            .heldItem(0).heldItem(PLANKS_ITEM, dropping)
+            .writeVarUInt(0).writeBoolean(true).writeByte(0).writeBoolean(false).writeVarUInt(slot) // Out of the inventory
+            .heldItem(PLANKS_ITEM, had).heldItem(if (had > dropping) PLANKS_ITEM else 0, had - dropping),
+    )
+
+    /** A stack of [count] of the item [id], as the client describes what it holds. */
+    private fun ByteBuf.heldItem(id: Int, count: Int = if (id == 0) 0 else 64): ByteBuf =
+        writeShortLE(id).writeShortLE(count).writeVarUInt(0).writeBoolean(id != 0).apply { if (id != 0) writeVarInt(1) }
             .writeVarUInt(if (id == PLANKS_ITEM) planks.networkId else 0)
             .writeByteArray(ByteArray(10))
 

@@ -8,6 +8,7 @@ import org.koremc.protocol.ServerPacket
 import org.koremc.registry.CreativeInventory
 import org.koremc.registry.Mining
 import org.koremc.registry.VanillaData
+import org.koremc.world.Drops
 import org.koremc.world.FlatWorld
 
 /**
@@ -25,6 +26,8 @@ class GameData(
     val creative: CreativeInventory,
     /** How each block takes to mining, by block name, which sets how long survival players take to break it. */
     val mining: Map<String, Mining>,
+    /** What blocks drop when survival players break them. */
+    val drops: Drops,
 ) {
     companion object {
         fun of(vanilla: VanillaData, world: FlatWorld) = GameData(
@@ -33,6 +36,7 @@ class GameData(
             blockDefinitions = BlockDefinitions(vanilla.blockDefinitions),
             creative = vanilla.creative,
             mining = vanilla.mining,
+            drops = Drops(vanilla.items, vanilla.creative, vanilla.blocks),
         )
     }
 }

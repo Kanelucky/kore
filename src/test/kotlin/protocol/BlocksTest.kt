@@ -23,11 +23,11 @@ class BlocksTest {
         }
 
         val expected = ItemUse(ItemUseAction.PLACE, clicked, face = 1, hotbarSlot = 4, heldItem = 5, click, clickedBlock = GRASS, predictedToWork = true)
-        assertEquals(InventoryTransaction(2, expected), decodeClientPacket(packet))
+        assertEquals(InventoryTransaction(2, actions = emptyList(), expected), decodeClientPacket(packet))
     }
 
     @Test
-    fun `a legacy request and the slot changes the client predicts are read past`() {
+    fun `a legacy request is read past, and the slot changes the client predicts are read`() {
         val packet = packet(30) {
             writeVarInt(-2).writeBoolean(true).writeVarUInt(1).writeByte(28).writeByteArray(bytes(4)) // Resend hotbar slot 4
             writeVarUInt(2)
@@ -38,14 +38,30 @@ class BlocksTest {
             itemUse(action = 0, face = 5)
         }
 
-        assertEquals(5, (decodeClientPacket(packet) as InventoryTransaction).use?.face)
+        val transaction = decodeClientPacket(packet) as InventoryTransaction
+        assertEquals(listOf(InventoryAction(0, windowId = 0, slot = 4, ClientItem(5, 1, stackId = 3), ClientItem(0, 0, stackId = null))), transaction.actions)
+        assertEquals(5, transaction.use?.face)
     }
 
     @Test
-    fun `transactions other than item uses are left unread`() {
-        val packet = packet(30) { writeVarInt(0).writeBoolean(false).writeVarUInt(0).writeVarUInt(0) }
+    fun `pressing Q is a normal transaction, of items leaving a slot and going into the world`() {
+        val packet = packet(30) {
+            writeVarInt(0).writeBoolean(false)
+            writeVarUInt(0) // Normal
+            writeVarUInt(2)
+            writeVarUInt(2).writeBoolean(false).writeBoolean(true).writeVarUInt(0).writeVarUInt(0) // The world, dropping
+            item(id = 0, stackId = null)
+            item(id = 5, stackId = null)
+            writeVarUInt(0).writeBoolean(true).writeByte(0).writeBoolean(false).writeVarUInt(4) // The inventory's slot 4
+            item(id = 5, stackId = 3)
+            item(id = 0, stackId = null)
+        }
 
-        assertEquals(InventoryTransaction(0, use = null), decodeClientPacket(packet))
+        val expected = listOf(
+            InventoryAction(InventoryAction.WORLD, windowId = null, InventoryAction.DROP_SLOT, ClientItem(0, 0, null), ClientItem(5, 1, null)),
+            InventoryAction(InventoryAction.CONTAINER, windowId = 0, slot = 4, ClientItem(5, 1, stackId = 3), ClientItem(0, 0, null)),
+        )
+        assertEquals(InventoryTransaction(InventoryTransaction.NORMAL, expected, use = null), decodeClientPacket(packet))
     }
 
     @Test

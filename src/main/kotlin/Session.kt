@@ -7,6 +7,7 @@ import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorFlag
+import org.koremc.protocol.AddItemActor
 import org.koremc.protocol.Attribute
 import org.koremc.protocol.BlockAction
 import org.koremc.protocol.BatchCodec
@@ -19,6 +20,8 @@ import org.koremc.protocol.Disconnect
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.Interact
+import org.koremc.protocol.InventorySlot
+import org.koremc.protocol.InventoryAction
 import org.koremc.protocol.InventoryTransaction
 import org.koremc.protocol.ItemStackRequest
 import org.koremc.protocol.ItemStackResponse
@@ -32,6 +35,7 @@ import org.koremc.protocol.LevelSoundEvent
 import org.koremc.protocol.Login
 import org.koremc.protocol.LoginRequest
 import org.koremc.protocol.MobEquipment
+import org.koremc.protocol.MoveActorAbsolute
 import org.koremc.protocol.NetworkChunkPublisherUpdate
 import org.koremc.protocol.NetworkSettings
 import org.koremc.protocol.PacketException
@@ -40,6 +44,7 @@ import org.koremc.protocol.PlayStatus
 import org.koremc.protocol.PlayerAction
 import org.koremc.protocol.PlayerAuthInput
 import org.koremc.protocol.RequestChunkRadius
+import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.RequestNetworkSettings
 import org.koremc.protocol.ResourcePackClientResponse
 import org.koremc.protocol.ResourcePackStack
@@ -49,6 +54,7 @@ import org.koremc.protocol.SetActorData
 import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.ShortItem
 import org.koremc.protocol.StartGame
+import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateAbilities
 import org.koremc.protocol.UpdateAttributes
 import org.koremc.protocol.UpdateBlock
@@ -60,9 +66,12 @@ import org.koremc.protocol.flagsItem
 import org.koremc.protocol.parseConnectionRequest
 import org.koremc.registry.AIR
 import org.koremc.registry.AIR_NETWORK_ID
+import org.koremc.registry.BlockState
+import org.koremc.registry.ItemStack
 import org.koremc.world.BlockPos
 import org.koremc.world.ChunkPos
 import org.koremc.world.Face
+import org.koremc.world.ItemEntity
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
 import org.koremc.world.PLAYER_MAX_AIR
@@ -77,9 +86,11 @@ import org.koremc.world.corner
 import org.koremc.world.centre
 import org.koremc.world.chunksAround
 import org.koremc.world.facing
+import org.koremc.world.harvests
 import org.koremc.world.place
 import org.koremc.world.releaseButton
 import org.koremc.world.side
+import org.koremc.world.tickItems
 import org.koremc.world.updateAround
 import org.koremc.world.usable
 import org.koremc.world.use
@@ -88,6 +99,9 @@ import java.security.interfaces.ECPublicKey
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.random.Random
 
 private val log = LoggerFactory.getLogger(Session::class.java)
 
@@ -99,6 +113,27 @@ private const val COMPRESSION_THRESHOLD = 256
 
 /** How long the game's tick is. */
 private const val TICK_MILLIS = 50L
+
+/** How long an item that drops from a block waits before anyone can pick it up, in ticks. */
+private const val DROPPED_PICKUP_DELAY = 10
+
+/** How long an item a player throws waits, long enough for it to clear them: two seconds. */
+private const val THROWN_PICKUP_DELAY = 40
+
+/** How fast a thrown item leaves the player's hand, in blocks a tick, and the lift it gets. */
+private const val THROW_SPEED = 0.3
+private const val THROW_LIFT = 0.1f
+
+/** How high above where an item lies the client puts it, an eighth of a block. */
+private const val ITEM_NETWORK_OFFSET = 0.125f
+
+/** How far players reach to pick items up: a block either way of the item, and half a block up and down. */
+private const val PICKUP_REACH = 1f
+private const val PICKUP_REACH_UP = 0.5f
+
+/** An item entity's half width and height. */
+private const val ITEM_HALF_WIDTH = 0.125f
+private const val ITEM_HEIGHT = 0.25f
 
 /** The smallest view distance Kore settles on, whatever the client asks for. */
 private const val MIN_CHUNK_RADIUS = 2
@@ -208,7 +243,7 @@ class Session(
     private val batches = BatchCodec()
     private val world = game.world
     private val inventory = PlayerInventory()
-    private val stackRequests = StackRequestHandler(inventory, game.creative) { config.gameMode == GameMode.CREATIVE }
+    private val stackRequests = StackRequestHandler(inventory, game.creative, creativeMode = { config.gameMode == GameMode.CREATIVE }, onDrop = ::throwItem)
     private var state = State.AWAITING_NETWORK_SETTINGS_REQUEST
 
     /** The player, once their login has authenticated. */
@@ -253,6 +288,12 @@ class Session(
 
     /** Which way the player looks, around the vertical, as the client last reported. Blocks they place turn by it. */
     private var yaw = 0f
+
+    /** How far the player looks up or down, as the client last reported. Items they throw go that way. */
+    private var pitch = 0f
+
+    /** The items the client has been shown, by entity ID. */
+    private val shownItems = HashSet<Long>()
 
     /** The hotbar slot the player holds, as the client last said. */
     var heldSlot = 0
@@ -307,7 +348,7 @@ class Session(
                 is Interact -> if (packet.action == Interact.OPEN_INVENTORY) openInventory()
                 is ContainerClose -> onContainerClose(packet)
                 is ItemStackRequest -> send(ItemStackResponse(packet.requests.map(stackRequests::handle)))
-                is InventoryTransaction -> packet.use?.let(::onItemUse)
+                is InventoryTransaction -> onTransaction(packet)
                 is PlayerAction -> if (packet.action == PlayerAction.CREATIVE_DESTROY_BLOCK) onBreak(packet.position, creativeOnly = true)
                 is MobEquipment -> onEquip(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
@@ -438,6 +479,7 @@ class Session(
         }
         position = reported
         yaw = packet.yaw
+        pitch = packet.pitch
         onInputs(packet)
 
         val chunk = reported.toBlockPos().chunk
@@ -537,6 +579,44 @@ class Session(
         if (packet.windowId == INVENTORY_WINDOW && packet.selectedSlot in 0 until HOTBAR_SIZE) heldSlot = packet.selectedSlot
     }
 
+    /** A transaction from before item stack requests, which the client still sends for a few things. */
+    private fun onTransaction(packet: InventoryTransaction) {
+        when (packet.type) {
+            InventoryTransaction.USE_ITEM -> packet.use?.let(::onItemUse)
+            InventoryTransaction.NORMAL -> onDropFromSlot(packet.actions)
+        }
+    }
+
+    /**
+     * Throws items from one of the player's slots, as pressing Q outside
+     * the inventory screen does: one item, or the whole stack with Ctrl. On
+     * mobile, the slot needn't be the one held. The client sends it as two
+     * slot changes it has already made, the items leaving the slot and going
+     * into the world, rather than as an item stack request. Kore throws them
+     * if what it has in the slot is what the client had there. Either way,
+     * the client hears what the slot holds now, which puts back a drop Kore
+     * refused.
+     */
+    private fun onDropFromSlot(actions: List<InventoryAction>) {
+        val drop = actions.singleOrNull { it.source == InventoryAction.WORLD && it.slot == InventoryAction.DROP_SLOT }
+        val from = actions.singleOrNull { it.source == InventoryAction.CONTAINER && it.windowId == INVENTORY_WINDOW }
+        if (actions.size != 2 || drop == null || from == null || from.slot !in 0 until inventory.items.size) {
+            log.debug("Ignored a transaction of {} from {}", actions, player?.displayName)
+            return
+        }
+        val there = inventory.items[from.slot]
+        val count = drop.after.count
+        // The client's stack must be Kore's: the same item, and as many of it.
+        val same = there != null && there.stack.item.runtimeId == from.before.runtimeId && there.stack.count == from.before.count
+        if (same && count in 1..there.stack.count && config.gameMode != GameMode.SPECTATOR) {
+            inventory.remove(from.slot, count)
+            throwItem(there.stack.copy(count = count))
+        } else {
+            log.debug("Refused {} dropping {} of {} from slot {}", player?.displayName, count, there?.stack?.item?.name, from.slot)
+        }
+        send(slotOf(from.slot))
+    }
+
     /** The player using their item, at the client's [tick] when it came in their input. */
     private fun onItemUse(use: ItemUse, tick: Long? = null) {
         when (use.action) {
@@ -599,8 +679,7 @@ class Session(
      * is in reach, and the client's item is the block item Kore has in
      * that hotbar slot. Everyone with the chunk sees the block appear and
      * hears it go down, along with any blocks around it that join it, like
-     * fences. Placing doesn't use up the stack yet: only creative players
-     * can come by blocks so far.
+     * fences. Outside creative, placing uses up one of the stack.
      *
      * Kore's rules for where blocks go and which way they turn don't cover
      * all of the client's. So the client also hears what's really at both
@@ -625,11 +704,16 @@ class Session(
             val first = placed.first()
             val sound = first to LevelSoundEvent(LevelSoundEvent.PLACE, first.centre, world.blockAt(first))
             showAround(placed.map(::updateOf) + sound + world.updateAround(placed).map(::updateOf))
+            if (!creative) inventory.remove(heldSlot)
             log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.name, first)
         }
         val corrections = (listOf(use.position, use.position.side(face)) - placed.toSet()).map { UpdateBlock(it, world.blockAt(it)) }
         if (corrections.isNotEmpty()) send(*corrections.toTypedArray())
+        // Outside creative, the client used up the item it placed, which it gets back if nothing was placed.
+        if (placed.isEmpty() && !creative) send(slotOf(heldSlot))
     }
+
+    private val creative get() = config.gameMode == GameMode.CREATIVE
 
     /**
      * Breaks the block at [pos], as the client predicted, if the player
@@ -663,8 +747,92 @@ class Session(
         val broken = world.breakBlock(pos)
         val effects = broken.flatMap { (at, block) -> listOf(at to UpdateBlock(at, AIR_NETWORK_ID), at to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, at.centre, block.networkId)) }
         showAround(effects + world.updateAround(broken.keys).map(::updateOf))
+        if (!creative) broken.forEach(::dropFrom)
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
     }
+
+    /**
+     * Drops what [block], broken at [pos], drops, if what the player holds
+     * harvests it: each stack somewhere near the block's middle, popping
+     * up and out a little, as the game drops them.
+     */
+    private fun dropFrom(pos: BlockPos, block: BlockState) {
+        if (game.mining[block.name]?.let { harvests(it, heldItem()) } == false) return
+        for (stack in game.drops.of(block)) {
+            fun jitter() = Random.nextFloat() * 0.5f - 0.25f
+            val at = Vec3(pos.x + 0.5f + jitter(), pos.y + 0.5f - ITEM_HEIGHT / 2 + jitter(), pos.z + 0.5f + jitter())
+            val velocity = Vec3(Random.nextFloat() * 0.2f - 0.1f, 0.2f, Random.nextFloat() * 0.2f - 0.1f)
+            world.spawnItem(stack, at, velocity, DROPPED_PICKUP_DELAY)
+        }
+    }
+
+    /**
+     * Throws [stack] the way the player looks, from just below their eyes,
+     * as dropping an item from the inventory does.
+     */
+    private fun throwItem(stack: ItemStack) {
+        val yaw = Math.toRadians(yaw.toDouble())
+        val pitch = Math.toRadians(pitch.toDouble())
+        val velocity = Vec3(
+            (-sin(yaw) * cos(pitch) * THROW_SPEED).toFloat(),
+            (-sin(pitch) * THROW_SPEED).toFloat() + THROW_LIFT,
+            (cos(yaw) * cos(pitch) * THROW_SPEED).toFloat(),
+        )
+        world.spawnItem(stack, Vec3(position.x, position.y - 0.3f, position.z), velocity, THROWN_PICKUP_DELAY)
+        log.debug("{} dropped {} {}", player?.displayName, stack.count, stack.item.name)
+    }
+
+    /**
+     * Picks up every item in the player's reach that's ready to be, as much
+     * of each as fits. The player sees their slots fill, and everyone with
+     * the chunk sees the item fly to them. Run once a tick.
+     */
+    fun collectItems() {
+        if (state != State.IN_GAME || config.gameMode == GameMode.SPECTATOR) return
+        for (item in world.items.toList()) {
+            if (item.pickupDelay > 0 || !inPickupReach(item)) continue
+            val (slots, left) = inventory.add(item.stack)
+            if (slots.isEmpty()) continue
+            send(*slots.map(::slotOf).toTypedArray())
+            showAround(item.position.toBlockPos(), TakeItemActor(item.id, entityId))
+            log.debug("{} picked up {} {}", player?.displayName, item.stack.count - left, item.stack.item.name)
+            if (left == 0) world.removeItem(item.id) else item.stack = item.stack.copy(count = left)
+        }
+    }
+
+    /** Whether [item] is in the player's reach: its box, grown by [PICKUP_REACH] across and [PICKUP_REACH_UP] up and down, meets theirs. */
+    private fun inPickupReach(item: ItemEntity): Boolean {
+        val feet = position.y - PLAYER_EYE_HEIGHT
+        val across = PLAYER_WIDTH / 2 + ITEM_HALF_WIDTH + PICKUP_REACH
+        return abs(item.position.x - position.x) < across && abs(item.position.z - position.z) < across &&
+            item.position.y - PICKUP_REACH_UP < feet + playerHeight() && item.position.y + ITEM_HEIGHT + PICKUP_REACH_UP > feet
+    }
+
+    /**
+     * Shows the client the items lying in the chunks it has: those it hasn't
+     * seen appear, those that moved move, and those that are gone, picked
+     * up or out of view, go. Run once a tick.
+     */
+    fun syncItems() {
+        if (state != State.IN_GAME) return
+        val inView = world.items.filter { it.position.toBlockPos().chunk in sentChunks }
+        val ids = inView.mapTo(HashSet()) { it.id }
+        val packets = shownItems.filter { it !in ids }.map(::RemoveActor).toMutableList<ServerPacket>()
+        for (item in inView) {
+            when {
+                item.id !in shownItems -> packets += AddItemActor(item.id, item.stack, item.position, item.velocity)
+                item.moved -> packets += MoveActorAbsolute(item.id, Vec3(item.position.x, item.position.y + ITEM_NETWORK_OFFSET, item.position.z), item.onGround)
+            }
+        }
+        shownItems.retainAll(ids)
+        shownItems += ids
+        if (packets.isNotEmpty()) send(*packets.toTypedArray())
+    }
+
+    /** The slot of the player's items numbered [slot], as it is now, for the client. */
+    private fun slotOf(slot: Int) = inventory.items[slot].let { InventorySlot(slot, it?.stack, it?.id ?: 0) }
+
+    private fun heldItem() = inventory.items[heldSlot]?.stack?.item?.name
 
     /**
      * Whether a break the client reported at its [tick] came sooner after
@@ -720,7 +888,7 @@ class Session(
     }
 
     /** How many ticks the player takes to break the block called [name], with what they hold, if Kore knows. */
-    private fun ticksToBreak(name: String): Int? = game.mining[name]?.let { breakTicks(it, inventory.items[heldSlot]?.stack?.item?.name) }
+    private fun ticksToBreak(name: String): Int? = game.mining[name]?.let { breakTicks(it, heldItem()) }
 
     private fun canBuild() = config.gameMode == GameMode.SURVIVAL || config.gameMode == GameMode.CREATIVE
 
@@ -843,7 +1011,12 @@ private fun names(packets: Array<out ServerPacket>): String {
     return runs.joinToString { (name, count) -> if (count == 1) name else "$name x$count" }
 }
 
-/** Every connected player's session, driven by the transport's connection callbacks on the UDP event loop. */
+/**
+ * Every connected player's session, driven by the transport's connection
+ * callbacks on the UDP event loop. The game ticks on the same thread, 20
+ * times a second: items move, players pick up those in reach, then each
+ * player sees what changed.
+ */
 class Sessions(
     private val config: ServerConfig,
     private val game: GameData,
@@ -852,11 +1025,20 @@ class Sessions(
     private val loop: ScheduledExecutorService,
 ) {
     private val sessions = HashMap<NetherNetConnection, Session>()
-    private var nextEntityId = 1L
+
+    init {
+        loop.scheduleAtFixedRate({ runCatching(::tick).onFailure { log.error("A tick failed", it) } }, TICK_MILLIS, TICK_MILLIS, TimeUnit.MILLISECONDS)
+    }
+
+    private fun tick() {
+        game.world.tickItems()
+        sessions.values.forEach { it.collectItems() }
+        sessions.values.forEach { it.syncItems() }
+    }
 
     fun connect(connection: NetherNetConnection) {
         sessions[connection] = Session(
-            config, game, connection.networkId, nextEntityId++, connection.clientKey, authenticator,
+            config, game, connection.networkId, game.world.newEntityId(), connection.clientKey, authenticator,
             viewers = { sessions.values },
             // A task that throws would otherwise fail quietly, in a future nobody looks at.
             schedule = { ticks, task -> loop.schedule({ runCatching(task).onFailure { log.error("A scheduled task failed", it) } }, ticks * TICK_MILLIS, TimeUnit.MILLISECONDS) },

@@ -1,0 +1,145 @@
+package org.koremc.world
+
+import org.koremc.registry.BlockState
+import org.koremc.registry.ItemStack
+import kotlin.math.abs
+import kotlin.math.floor
+
+/** How long an item lies in the world before it's gone, in ticks: five minutes. */
+private const val ITEM_LIFETIME = 6000
+
+/** How far below the world an item falls before it's gone. */
+private const val VOID_DEPTH = 64
+
+// How items move each tick, as in the game: they fall, slow in the air, and slow more along the ground.
+private const val GRAVITY = 0.04
+private const val DRAG = 0.98
+private const val GROUND_FRICTION = 0.6
+
+/** Half an item's width, and its height: an item entity is a quarter of a block each way. */
+private const val HALF_WIDTH = 0.125
+private const val HEIGHT = 0.25
+
+/**
+ * How close to a surface counts as touching it. Positions are kept as
+ * floats, which near the overworld's floor are only good to about 1e-5,
+ * and an item a hair inside a block mustn't fall through it.
+ */
+private const val TOUCHING = 1e-4
+
+/**
+ * An item lying in the world: a stack anyone can pick up once its pickup
+ * delay has run out. [position] is the middle of its bottom, and
+ * [velocity] is in blocks a tick.
+ */
+class ItemEntity(val id: Long, var stack: ItemStack, position: Vec3, velocity: Vec3, pickupDelay: Int) {
+    var position = position
+        private set
+    var velocity = velocity
+        private set
+
+    /** Ticks until it can be picked up. */
+    var pickupDelay = pickupDelay
+        private set
+
+    var onGround = false
+        private set
+
+    /** Whether it moved in the last tick, so those who see it need to hear where it is now. */
+    var moved = false
+        private set
+
+    private var age = 0
+
+    internal fun tick(world: FlatWorld): Boolean {
+        age++
+        if (pickupDelay > 0) pickupDelay--
+        if (age >= ITEM_LIFETIME || position.y < MIN_Y - VOID_DEPTH) return false
+
+        var (vx, vy, vz) = velocity.toDoubles()
+        vy -= GRAVITY
+        val start = position
+        var box = Box.around(position)
+        val dy = world.clip(box, Axis.Y, vy)
+        box = box.shifted(Axis.Y, dy)
+        val dx = world.clip(box, Axis.X, vx)
+        box = box.shifted(Axis.X, dx)
+        val dz = world.clip(box, Axis.Z, vz)
+        box = box.shifted(Axis.Z, dz)
+
+        onGround = vy < 0 && dy != vy
+        // Hitting something stops the item that way.
+        if (dy != vy) vy = 0.0
+        if (dx != vx) vx = 0.0
+        if (dz != vz) vz = 0.0
+        val friction = if (onGround) DRAG * GROUND_FRICTION else DRAG
+        velocity = Vec3((vx * friction).toFloat(), (vy * DRAG).toFloat(), (vz * friction).toFloat())
+        position = box.bottom()
+        moved = position != start
+        return true
+    }
+}
+
+/**
+ * Moves every item along a tick: they fall, slide and land on blocks, and
+ * one that's lain for five minutes, or fallen out of the world, is gone.
+ */
+fun FlatWorld.tickItems() {
+    for (item in items.toList()) {
+        if (!item.tick(this)) removeItem(item.id)
+    }
+}
+
+private enum class Axis { X, Y, Z }
+
+/** A box in the world, from its lowest corner to its highest. */
+private class Box(val min: DoubleArray, val max: DoubleArray) {
+    fun shifted(axis: Axis, by: Double) = Box(min.copyOf().also { it[axis.ordinal] += by }, max.copyOf().also { it[axis.ordinal] += by })
+
+    fun bottom() = Vec3(((min[0] + max[0]) / 2).toFloat(), min[1].toFloat(), ((min[2] + max[2]) / 2).toFloat())
+
+    companion object {
+        fun around(bottom: Vec3) = Box(
+            doubleArrayOf(bottom.x - HALF_WIDTH, bottom.y.toDouble(), bottom.z - HALF_WIDTH),
+            doubleArrayOf(bottom.x + HALF_WIDTH, bottom.y + HEIGHT, bottom.z + HALF_WIDTH),
+        )
+    }
+}
+
+/**
+ * How far [box] can move along [axis] of the distance it wants to, [by],
+ * before it meets a block's solid part.
+ */
+private fun FlatWorld.clip(box: Box, axis: Axis, by: Double): Double {
+    if (by == 0.0) return 0.0
+    val a = axis.ordinal
+    val reach = Box(box.min.copyOf().also { it[a] += minOf(by, 0.0) }, box.max.copyOf().also { it[a] += maxOf(by, 0.0) })
+    var allowed = by
+    for (x in blocksAcross(reach, 0)) for (y in blocksAcross(reach, 1)) for (z in blocksAcross(reach, 2)) {
+        val heights = stateAt(BlockPos(x, y, z))?.solidHeights() ?: continue
+        val block = Box(doubleArrayOf(x.toDouble(), y + heights.start, z.toDouble()), doubleArrayOf(x + 1.0, y + heights.endInclusive, z + 1.0))
+        // Only a block the box overlaps on the other two axes is in the way.
+        if ((0..2).any { it != a && (box.max[it] <= block.min[it] + TOUCHING || box.min[it] >= block.max[it] - TOUCHING) }) continue
+        if (by > 0 && box.max[a] <= block.min[a] + TOUCHING) allowed = minOf(allowed, block.min[a] - box.max[a])
+        if (by < 0 && box.min[a] >= block.max[a] - TOUCHING) allowed = maxOf(allowed, block.max[a] - box.min[a])
+    }
+    // Rounding can leave a hair of a gap either way, which isn't worth moving across.
+    return if (abs(allowed) < TOUCHING) 0.0 else allowed
+}
+
+private fun blocksAcross(box: Box, axis: Int) = floor(box.min[axis]).toInt()..floor(box.max[axis] - TOUCHING).toInt()
+
+/**
+ * The heights within a block that items land on and bump into, or null for
+ * a block they fall through. Whole cubes fill the block, slabs fill their
+ * half, and stairs at least the half they stand on.
+ */
+private fun BlockState.solidHeights(): ClosedFloatingPointRange<Double>? = when {
+    isFullCube -> 0.0..1.0
+    properties["minecraft:vertical_half"] == "top" -> 0.5..1.0
+    properties["minecraft:vertical_half"] == "bottom" -> 0.0..0.5
+    "weirdo_direction" in properties -> if (properties["upside_down_bit"] == 1.toByte()) 0.5..1.0 else 0.0..0.5
+    else -> null
+}
+
+private fun Vec3.toDoubles() = Triple(x.toDouble(), y.toDouble(), z.toDouble())

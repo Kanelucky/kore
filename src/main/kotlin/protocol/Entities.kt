@@ -1,0 +1,100 @@
+package org.koremc.protocol
+
+import io.netty.buffer.ByteBuf
+import org.koremc.registry.ItemStack
+import org.koremc.world.Vec3
+
+private const val REMOVE_ACTOR = 14
+private const val ADD_ITEM_ACTOR = 15
+private const val TAKE_ITEM_ACTOR = 17
+private const val MOVE_ACTOR_ABSOLUTE = 18
+private const val INVENTORY_SLOT = 50
+
+/** The window and container ID of a player's own items: the hotbar and the rest of the inventory. */
+private const val INVENTORY_WINDOW = 0
+
+/** An item entity's size, a quarter of a block each way. */
+private const val ITEM_SIZE = 0.25f
+
+/** The actor data every item entity has: it falls, and it's an item's size. */
+private val ITEM_DATA = listOf(
+    flagsItem(setOf(ActorFlag.HAS_GRAVITY, ActorFlag.CAN_CLIMB)),
+    FloatItem(ActorDataId.WIDTH, ITEM_SIZE),
+    FloatItem(ActorDataId.HEIGHT, ITEM_SIZE),
+)
+
+/**
+ * An item lying in the world, appearing to the client: the entity
+ * [entityId], with the [stack] it holds, at [position] and moving at
+ * [velocity] blocks a tick. Kore gives entities the same unique and
+ * runtime IDs.
+ */
+data class AddItemActor(val entityId: Long, val stack: ItemStack, val position: Vec3, val velocity: Vec3) : ServerPacket {
+    override val id get() = ADD_ITEM_ACTOR
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarLong(entityId)
+        out.writeVarULong(entityId)
+        out.writeItemInstance(stack)
+        out.writeVec3(position)
+        out.writeVec3(velocity)
+        out.writeActorData(ITEM_DATA)
+        out.writeBoolean(false) // Whether it came from fishing
+    }
+}
+
+/** An entity gone from the client's world, by its unique ID. */
+data class RemoveActor(val entityId: Long) : ServerPacket {
+    override val id get() = REMOVE_ACTOR
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarLong(entityId)
+    }
+}
+
+/** The item entity [itemId] flying to the entity [takerId] that picked it up. The client shows it, then the item goes. */
+data class TakeItemActor(val itemId: Long, val takerId: Long) : ServerPacket {
+    override val id get() = TAKE_ITEM_ACTOR
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarULong(itemId)
+        out.writeVarULong(takerId)
+    }
+}
+
+/**
+ * An entity at a new [position], which the client moves it to smoothly.
+ * The position is the client's for the entity, which for an item is an
+ * eighth of a block above where it lies.
+ */
+data class MoveActorAbsolute(val entityId: Long, val position: Vec3, val onGround: Boolean) : ServerPacket {
+    override val id get() = MOVE_ACTOR_ABSOLUTE
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarULong(entityId)
+        out.writeByte(if (onGround) ON_GROUND else 0)
+        out.writeVec3(position)
+        out.writeZero(3) // Pitch, yaw and head yaw, a byte each, which an item doesn't have
+    }
+
+    private companion object {
+        const val ON_GROUND = 0b1
+    }
+}
+
+/**
+ * A slot of the player's own items holding [stack], with the ID [stackId],
+ * or nothing. The client takes it as it is, as it does when the server
+ * changes items outside a request of its own, like picking one up.
+ */
+data class InventorySlot(val slot: Int, val stack: ItemStack?, val stackId: Int) : ServerPacket {
+    override val id get() = INVENTORY_SLOT
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarUInt(INVENTORY_WINDOW)
+        out.writeVarUInt(slot)
+        out.writeBoolean(false) // A container within the window, which the player's own items don't need
+        out.writeBoolean(false) // A storage item, like a bundle, to put it in
+        out.writeItemInstance(stack, stackId)
+    }
+}

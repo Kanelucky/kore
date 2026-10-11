@@ -43,10 +43,10 @@ class CreativeContent(val inventory: CreativeInventory) : ServerPacket {
 }
 
 /**
- * [stack] as a network item: its runtime ID, count, aux value and block,
- * then a buffer of extras. The buffer holds its NBT, the blocks it may be
- * placed on and break (none, for now), and for a shield, when it was last
- * raised. No stack at all is an item of ID 0 with an empty buffer.
+ * [stack] as a network item, the way the server describes items that
+ * aren't in an inventory, like the creative inventory's: its runtime ID,
+ * count, aux value and block, then a buffer of extras. No stack at all is
+ * an item of ID 0 with an empty buffer.
  */
 fun ByteBuf.writeItem(stack: ItemStack?): ByteBuf {
     if (stack == null) return writeVarInt(0).writeShortLE(0).writeVarUInt(0).writeVarInt(0).writeVarUInt(0)
@@ -55,7 +55,32 @@ fun ByteBuf.writeItem(stack: ItemStack?): ByteBuf {
     writeShortLE(stack.count)
     writeVarUInt(stack.aux)
     writeVarInt(stack.block?.networkId ?: 0)
+    return writeItemExtras(stack)
+}
 
+/**
+ * [stack] as a network item that may carry the ID of the stack it is, the
+ * way slots and item entities describe theirs: its runtime ID in a fixed
+ * 16 bits, count, aux value, stack ID if it has one (0 for none), block
+ * and extras. No stack at all is an item of ID 0 with an empty buffer.
+ */
+fun ByteBuf.writeItemInstance(stack: ItemStack?, stackId: Int = 0): ByteBuf {
+    if (stack == null) return writeShortLE(0).writeShortLE(0).writeVarUInt(0).writeBoolean(false).writeVarUInt(0).writeVarUInt(0)
+
+    writeShortLE(stack.item.runtimeId)
+    writeShortLE(stack.count)
+    writeVarUInt(stack.aux)
+    writeBoolean(stackId != 0)
+    if (stackId != 0) writeVarInt(stackId)
+    writeVarUInt(stack.block?.networkId ?: 0)
+    return writeItemExtras(stack)
+}
+
+/**
+ * A buffer of [stack]'s extras: its NBT, the blocks it may be placed on
+ * and break (none, for now), and for a shield, when it was last raised.
+ */
+private fun ByteBuf.writeItemExtras(stack: ItemStack): ByteBuf {
     val extras = Unpooled.buffer()
     if (stack.nbt.isEmpty()) {
         extras.writeShortLE(0)
