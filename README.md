@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Players can join a flat world, walk around it, mine it, build in it and open its doors, but they can't see each other yet.
+> Kore is in early development. Players can join a flat world, walk around it, mine it, build in it and open its doors, and see each other doing it.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -189,6 +189,8 @@ In survival, a broken block drops its item, if what the player holds harvests it
 
 Items lie in the world as entities. The game ticks 20 times a second, on the same thread as the sessions. Each tick, items fall, slide along the ground and land on blocks as in the game, and each player sees the items in the chunks they have appear, move and go. An item can be picked up half a second after it drops from a block, or two seconds after a player throws it, by a player within a block or so. It joins stacks of its kind, hotbar first, then empty slots, and the client hears which slots changed, since it didn't ask. Items of a kind lying close together on the ground merge into one stack, when they fit in one; each looks for others once a second. An item no one picks up goes after five minutes. Dropping an item from the inventory throws it the way the player looks, and placing a block in survival uses one up.
 
+Players see each other. Everyone in the game is on each player's list, which the pause screen shows, with the skin their client described when they logged in. Each tick, each player sees the others in the chunks they have appear, move, sneak and sprint, change what they hold and go, and sees their arms swing as they mine and build. A persona skin, made in the game's character creator, also comes with the pieces it's made of; Kore leaves those out, as Dragonfly does, since the skin's image already shows them.
+
 Chunks name biomes by number, and Cloudburst's data has none for vanilla biomes. For now, plains is hard-coded as biome `1`.
 
 > [!NOTE]
@@ -219,6 +221,8 @@ src/main/kotlin/
 │   ├── CreativeContent.kt           # The creative inventory, and items on the wire
 │   ├── Blocks.kt                    # Using items on blocks, block updates, and the effects players see
 │   ├── Entities.kt                  # Item entities appearing, moving, going and being picked up, and inventory slots
+│   ├── Players.kt                   # Other players: the player list, appearing, moving, holding and swinging
+│   ├── Skins.kt                     # How players look, from their client data to the wire
 │   └── LoginRequest.kt              # Reading who a client claims to be
 ├── world/
 │   ├── Positions.kt                 # Block, chunk and exact positions
@@ -308,7 +312,8 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [ ] Redstone
 - [x] Moving items around the player's inventory, and taking them from the creative inventory
 - [ ] Other inventories: chests, crafting and so on
-- [ ] Other entities: players seeing each other, mobs
+- [x] Players seeing each other
+- [ ] Mobs
 - [ ] Commands
 
 ## 🤝 Contributing
@@ -320,6 +325,7 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before openin
 - [NetherNet HTTP Signaling: Partner Onboarding Guide](https://mojang.github.io/bedrock-protocol-docs/guides/nether-net-onboarding-guide/) from Mojang
 - [NetherNet](https://minecraft.wiki/w/NetherNet) and [Bedrock Edition protocol](https://minecraft.wiki/w/Bedrock_Edition_protocol) on the Minecraft Wiki
 - [CloudburstMC](https://github.com/CloudburstMC) for the [NBT library](https://github.com/CloudburstMC/NBT) and the [game data](https://github.com/CloudburstMC/Data) Kore reads
+- [gophertunnel](https://github.com/Sandertv/gophertunnel) and [Dragonfly](https://github.com/df-mc/dragonfly), which Kore checks its encodings of skins and the player list against
 
 ## 📄 License
 

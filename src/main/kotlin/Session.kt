@@ -9,9 +9,12 @@ import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorEvent
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.AddItemActor
+import org.koremc.protocol.AddPlayer
+import org.koremc.protocol.Animate
 import org.koremc.protocol.Attribute
 import org.koremc.protocol.BlockAction
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.ByteItem
 import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
 import org.koremc.protocol.ClientPacket
@@ -37,6 +40,7 @@ import org.koremc.protocol.Login
 import org.koremc.protocol.LoginRequest
 import org.koremc.protocol.MobEquipment
 import org.koremc.protocol.MoveActorAbsolute
+import org.koremc.protocol.MovePlayer
 import org.koremc.protocol.NetworkChunkPublisherUpdate
 import org.koremc.protocol.NetworkSettings
 import org.koremc.protocol.PacketException
@@ -44,6 +48,8 @@ import org.koremc.protocol.PermissionLevel
 import org.koremc.protocol.PlayStatus
 import org.koremc.protocol.PlayerAction
 import org.koremc.protocol.PlayerAuthInput
+import org.koremc.protocol.PlayerList
+import org.koremc.protocol.PlayerListEntry
 import org.koremc.protocol.RequestChunkRadius
 import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.RequestNetworkSettings
@@ -54,7 +60,10 @@ import org.koremc.protocol.ServerPacket
 import org.koremc.protocol.SetActorData
 import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.ShortItem
+import org.koremc.protocol.ShowEquipment
+import org.koremc.protocol.Skin
 import org.koremc.protocol.StartGame
+import org.koremc.protocol.StringItem
 import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateAbilities
 import org.koremc.protocol.UpdateAttributes
@@ -65,6 +74,7 @@ import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
 import org.koremc.protocol.flagsItem
 import org.koremc.protocol.parseConnectionRequest
+import org.koremc.protocol.skinFrom
 import org.koremc.registry.AIR
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockState
@@ -97,6 +107,7 @@ import org.koremc.world.usable
 import org.koremc.world.use
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
+import java.util.UUID
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
@@ -171,6 +182,9 @@ private const val CREATIVE_REACH = 14f
 /** How far cracks have to spread for a block to break, in the units `LevelEvent` counts their pace in. */
 private const val CRACKED = 65535
 
+/** The device a player plays on, when their client doesn't say. */
+private const val UNKNOWN_PLATFORM = -1
+
 /** The flags a player always has: they breathe, fall, collide and climb. */
 private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, ActorFlag.HAS_COLLISION, ActorFlag.CAN_CLIMB)
 
@@ -221,6 +235,11 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * chunk the cracks spreading at the pace the block breaks at, and checks a
  * reported break didn't come too soon after the player started on it.
  *
+ * Players see each other. Each tick, the client hears who's on the player
+ * list, with their skins, and sees the players in the chunks it has appear,
+ * move, sneak, change what they hold and go. Their arm swings reach it as
+ * they come in.
+ *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
 class Session(
@@ -229,7 +248,7 @@ class Session(
     private val game: GameData,
     private val networkId: String,
     /** The player's entity ID, unique across the server. */
-    private val entityId: Long,
+    val entityId: Long,
     /** The key the client proved when it connected, which its login must match. */
     private val offerKey: ECPublicKey?,
     private val authenticator: LoginAuthenticator,
@@ -288,10 +307,29 @@ class Session(
     private var flying = false
 
     /** Which way the player looks, around the vertical, as the client last reported. Blocks they place turn by it. */
-    private var yaw = 0f
+    var yaw = 0f
+        private set
 
     /** How far the player looks up or down, as the client last reported. Items they throw go that way. */
-    private var pitch = 0f
+    var pitch = 0f
+        private set
+
+    /** Which way the player's head faces, around the vertical, which can be a little off their body's. */
+    var headYaw = 0f
+        private set
+
+    /** Whether the player stood on something, as their input last said. */
+    var onGround = false
+        private set
+
+    /** How the player looks to everyone else, from their login. */
+    private var skin: Skin? = null
+
+    /** The players on the client's player list, by entity ID. */
+    private val listedPlayers = HashMap<Long, UUID>()
+
+    /** What the client was last shown of each other player in view, by entity ID. */
+    private val shownPlayers = HashMap<Long, Look>()
 
     /** The items the client has been shown, by entity ID. */
     private val shownItems = HashSet<Long>()
@@ -352,6 +390,7 @@ class Session(
                 is InventoryTransaction -> onTransaction(packet)
                 is PlayerAction -> if (packet.action == PlayerAction.CREATIVE_DESTROY_BLOCK) onBreak(packet.position, creativeOnly = true)
                 is MobEquipment -> onEquip(packet)
+                is Animate -> if (packet.action == Animate.SWING_ARM) viewers().forEach { it.showSwing(entityId, packet.swingSource) }
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
                 is SetLocalPlayerAsInitialised -> if (state == State.SPAWNING) onPlayerInitialised(packet) else unexpected(packet)
                 // Movement and the rest of gameplay arrive many times a second, and Kore has nothing for them yet.
@@ -391,6 +430,7 @@ class Session(
         }
         this.player = player
         login = request
+        skin = skinFrom(request.clientData, config.version)
 
         val client = request.clientInfo
         log.info(
@@ -481,6 +521,8 @@ class Session(
         position = reported
         yaw = packet.yaw
         pitch = packet.pitch
+        headYaw = packet.headYaw
+        onGround = InputFlag.VERTICAL_COLLISION in packet.inputs
         onInputs(packet)
 
         val chunk = reported.toBlockPos().chunk
@@ -833,6 +875,110 @@ class Session(
         if (packets.isNotEmpty()) send(*packets.toTypedArray())
     }
 
+    /**
+     * What others see of a player at a moment: where they are and which way
+     * they look, whether they sneak or sprint, and what they hold.
+     */
+    private data class Look(
+        val position: Vec3,
+        val pitch: Float,
+        val yaw: Float,
+        val headYaw: Float,
+        val onGround: Boolean,
+        val sneaking: Boolean,
+        val sprinting: Boolean,
+        val heldSlot: Int,
+        val held: ItemStack?,
+    )
+
+    private fun look() = Look(position, pitch, yaw, headYaw, onGround, sneaking, sprinting, heldSlot, inventory.items[heldSlot]?.stack)
+
+    /**
+     * Shows the client the other players. Everyone in the game is on its
+     * player list, this player included, which is where the client finds
+     * their skins. Those in the chunks it has appear, move, sneak, sprint,
+     * change what they hold and go, as they do. Run once a tick.
+     */
+    fun syncPlayers() {
+        if (state != State.IN_GAME) return
+        val players = viewers().filter { it.isInGame }
+        val packets = mutableListOf<ServerPacket>()
+
+        val ids = players.mapTo(HashSet()) { it.entityId }
+        val entries = mutableListOf<PlayerListEntry>()
+        listedPlayers.entries.removeIf { (id, uuid) -> (id !in ids).also { gone -> if (gone) entries += PlayerListEntry.Remove(uuid) } }
+        for (other in players) {
+            if (other.entityId in listedPlayers) continue
+            val entry = other.listEntry()
+            listedPlayers[other.entityId] = entry.uuid
+            entries += entry
+        }
+        if (entries.isNotEmpty()) packets += PlayerList(entries)
+
+        val inView = players.filter { it !== this && it.position.toBlockPos().chunk in sentChunks }
+        val viewIds = inView.mapTo(HashSet()) { it.entityId }
+        for (gone in shownPlayers.keys.filter { it !in viewIds }) {
+            shownPlayers.remove(gone)
+            packets += RemoveActor(gone)
+        }
+        for (other in inView) {
+            val now = other.look()
+            val before = shownPlayers.put(other.entityId, now)
+            if (before == null) {
+                packets += other.addPlayer(now)
+                log.debug("{} sees {}", player?.displayName, other.player?.displayName)
+                continue
+            }
+            if (now.position != before.position || now.pitch != before.pitch || now.yaw != before.yaw || now.headYaw != before.headYaw || now.onGround != before.onGround) {
+                packets += MovePlayer(other.entityId, now.position, now.pitch, now.yaw, now.headYaw, now.onGround)
+            }
+            if (now.sneaking != before.sneaking || now.sprinting != before.sprinting) {
+                packets += SetActorData(other.entityId, listOf(flagsItem(shownFlags(now)), FloatItem(ActorDataId.HEIGHT, heightOf(now))))
+            }
+            if (now.held != before.held || now.heldSlot != before.heldSlot) packets += ShowEquipment(other.entityId, now.held, now.heldSlot)
+        }
+        if (packets.isNotEmpty()) send(*packets.toTypedArray())
+    }
+
+    /** This player's entry on everyone's player list. They must have logged in. */
+    private fun listEntry(): PlayerListEntry.Add {
+        val identity = checkNotNull(player) { "a player in the game has logged in" }
+        return PlayerListEntry.Add(
+            identity.uuid, entityId, identity.displayName, identity.xuid.orEmpty(),
+            platform = login?.clientInfo?.deviceOs ?: UNKNOWN_PLATFORM,
+            skin = checkNotNull(skin) { "a player in the game has a skin from their login" },
+        )
+    }
+
+    /** This player, appearing to someone else as they [look]. */
+    private fun addPlayer(look: Look): AddPlayer {
+        val identity = checkNotNull(player) { "a player in the game has logged in" }
+        val data = listOf(
+            flagsItem(shownFlags(look)),
+            StringItem(ActorDataId.NAME, identity.displayName),
+            ByteItem(ActorDataId.ALWAYS_SHOW_NAME, 1),
+            FloatItem(ActorDataId.SCALE, 1f),
+            FloatItem(ActorDataId.WIDTH, PLAYER_WIDTH),
+            FloatItem(ActorDataId.HEIGHT, heightOf(look)),
+        )
+        val feet = Vec3(look.position.x, look.position.y - PLAYER_EYE_HEIGHT, look.position.z)
+        return AddPlayer(
+            identity.uuid, identity.displayName, entityId, feet, look.pitch, look.yaw, look.headYaw, look.held,
+            config.gameMode, data, abilitiesFor(config.gameMode), platform = login?.clientInfo?.deviceOs ?: UNKNOWN_PLATFORM,
+        )
+    }
+
+    /** The flags others see a player with as they [look]: their own, and that their name shows above them. */
+    private fun shownFlags(look: Look) = PLAYER_FLAGS + ActorFlag.SHOW_NAME + ActorFlag.ALWAYS_SHOW_NAME +
+        listOfNotNull(ActorFlag.SPRINTING.takeIf { look.sprinting }, ActorFlag.SNEAKING.takeIf { look.sneaking })
+
+    private fun heightOf(look: Look) = if (look.sneaking) PLAYER_SNEAKING_HEIGHT else PLAYER_HEIGHT
+
+    /** Shows the client the player [entityId] swinging their arm, for [source], if it can see them. */
+    private fun showSwing(entityId: Long, source: String?) {
+        if (entityId in shownPlayers) send(Animate(Animate.SWING_ARM, entityId, swingSource = source))
+    }
+
     /** The slot of the player's items numbered [slot], as it is now, for the client. */
     private fun slotOf(slot: Int) = inventory.items[slot].let { InventorySlot(slot, it?.stack, it?.id ?: 0) }
 
@@ -1038,6 +1184,7 @@ class Sessions(
         game.world.tickItems()
         sessions.values.forEach { it.collectItems() }
         sessions.values.forEach { it.syncItems() }
+        sessions.values.forEach { it.syncPlayers() }
     }
 
     fun connect(connection: NetherNetConnection) {

@@ -91,6 +91,9 @@ enum class InputFlag(val id: Int) {
     STOP_SPRINTING(26),
     START_FLYING(42),
     STOP_FLYING(43),
+
+    /** Set on every tick the player bumps into something above or below, which is mostly standing on the ground. */
+    VERTICAL_COLLISION(50),
 }
 
 private val INPUT_FLAGS = InputFlag.entries.associateBy(InputFlag::id)
@@ -440,6 +443,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             ITEM_STACK_REQUEST -> decodeItemStackRequest(buffer)
             INVENTORY_TRANSACTION -> decodeInventoryTransaction(buffer)
             MOB_EQUIPMENT -> decodeMobEquipment(buffer)
+            ANIMATE -> decodeAnimate(buffer)
             PLAYER_ACTION -> decodePlayerAction(buffer)
             PLAYER_AUTH_INPUT -> decodePlayerAuthInput(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)

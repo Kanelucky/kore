@@ -8,11 +8,15 @@ private const val SET_ACTOR_DATA = 39
 enum class ActorDataId(val id: Int) {
     /** A bitmask of [ActorFlag]s. */
     FLAGS(0),
+    /** The name above an actor's head. */
+    NAME(4),
     AIR_SUPPLY(7),
     SCALE(38),
     AIR_SUPPLY_MAX(42),
     WIDTH(53),
     HEIGHT(54),
+    /** Whether the name shows even when the actor is hidden from view, as a byte. */
+    ALWAYS_SHOW_NAME(81),
 }
 
 /** Bits in an actor's [ActorDataId.FLAGS]: what it's doing, and what the game should do with it. */
@@ -20,6 +24,8 @@ enum class ActorFlag(val bit: Int) {
     ON_FIRE(0),
     SNEAKING(1),
     SPRINTING(3),
+    SHOW_NAME(14),
+    ALWAYS_SHOW_NAME(15),
     CAN_CLIMB(19),
     /** Without this, the client counts the player's air down as though they were underwater. */
     BREATHING(35),
@@ -33,11 +39,15 @@ sealed interface DataItem {
     val id: ActorDataId
 }
 
+data class ByteItem(override val id: ActorDataId, val value: Byte) : DataItem
+
 data class ShortItem(override val id: ActorDataId, val value: Short) : DataItem
 
 data class FloatItem(override val id: ActorDataId, val value: Float) : DataItem
 
 data class LongItem(override val id: ActorDataId, val value: Long) : DataItem
+
+data class StringItem(override val id: ActorDataId, val value: String) : DataItem
 
 /** The flags item for [flags]. */
 fun flagsItem(flags: Set<ActorFlag>) = LongItem(ActorDataId.FLAGS, flags.fold(0L) { bits, flag -> bits or (1L shl flag.bit) })
@@ -60,8 +70,10 @@ data class SetActorData(val runtimeId: Long, val items: List<DataItem>, val tick
 }
 
 // Each value's type, as Mojang numbers them.
+private const val BYTE = 0
 private const val SHORT = 1
 private const val FLOAT = 3
+private const val STRING = 4
 private const val LONG = 7
 
 /** [items] as an actor's synced data list, as both `SetActorData` and the packets adding actors carry it. */
@@ -71,9 +83,11 @@ internal fun ByteBuf.writeActorData(items: List<DataItem>): ByteBuf {
     for (item in items.sortedBy { it.id.id }) {
         writeVarUInt(item.id.id)
         when (item) {
+            is ByteItem -> writeType(BYTE).writeByte(item.value.toInt())
             is ShortItem -> writeType(SHORT).writeShortLE(item.value.toInt())
             is FloatItem -> writeType(FLOAT).writeFloatLE(item.value)
             is LongItem -> writeType(LONG).writeVarLong(item.value)
+            is StringItem -> writeType(STRING).writeString(item.value)
         }
     }
     return this

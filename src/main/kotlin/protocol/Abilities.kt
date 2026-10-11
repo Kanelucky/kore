@@ -58,15 +58,27 @@ data class UpdateAbilities(
     override val id get() = UPDATE_ABILITIES
 
     override fun encodeBody(out: ByteBuf) {
-        out.writeLongLE(entityId)
-        out.writeByte(permissions.ordinal)
-        out.writeByte(0) // Command permissions: the lowest
-        out.writeVarUInt(1)
-        out.writeShortLE(BASE_LAYER)
-        out.writeIntLE((1 shl Ability.entries.size) - 1) // Which abilities this layer settles: all of them
-        out.writeIntLE(abilities.fold(0) { bits, ability -> bits or (1 shl ability.ordinal) })
-        out.writeFloatLE(flySpeed)
-        out.writeFloatLE(verticalFlySpeed)
-        out.writeFloatLE(walkSpeed)
+        out.writeAbilities(entityId, permissions, abilities, walkSpeed, flySpeed, verticalFlySpeed)
     }
+}
+
+/** A player's abilities as `UpdateAbilities` and `AddPlayer` carry them. */
+internal fun ByteBuf.writeAbilities(
+    entityId: Long,
+    permissions: PermissionLevel,
+    abilities: Set<Ability>,
+    walkSpeed: Float = 0.1f,
+    flySpeed: Float = 0.05f,
+    verticalFlySpeed: Float = 1f,
+): ByteBuf {
+    writeLongLE(entityId)
+    writeByte(permissions.ordinal)
+    writeByte(0) // Command permissions: the lowest
+    writeVarUInt(1)
+    writeShortLE(BASE_LAYER)
+    writeIntLE((1 shl Ability.entries.size) - 1) // Which abilities this layer settles: all of them
+    writeIntLE(abilities.fold(0) { bits, ability -> bits or (1 shl ability.ordinal) })
+    writeFloatLE(flySpeed)
+    writeFloatLE(verticalFlySpeed)
+    return writeFloatLE(walkSpeed)
 }

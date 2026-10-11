@@ -472,7 +472,7 @@ class SessionTest {
         logger.addAppender(packetLog)
         try {
             clientSends(playerAuthInput(standing))
-            clientSends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(44).writeZero(4))) // A packet Kore doesn't handle
+            clientSends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(123).writeZero(4))) // A packet Kore doesn't handle
         } finally {
             logger.detachAppender(packetLog)
             logger.level = null
