@@ -116,8 +116,8 @@ fun BlockPalette.blockPlacedBy(item: String): BlockState? = if (item.endsWith("_
  *   the floor. With none of those, it isn't placed.
  * - Blocks that turn take their state from the face and the player, as
  *   [placedState] explains.
- * - Fences, panes, walls and fence gates take their shape from the blocks
- *   around them, as [joined] explains. The blocks around don't change
+ * - Fences, panes, walls, fence gates and stairs take their shape from the
+ *   blocks around them, as [joined] explains. The blocks around don't change
  *   here: [updateAround] brings them in line.
  */
 fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Float, facing: Face): List<BlockPos> {

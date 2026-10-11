@@ -21,7 +21,10 @@ class ConnectionsTest {
             listOf("none", "short", "tall").let { heights ->
                 heights.flatMap { n -> heights.flatMap { e -> heights.flatMap { s -> heights.flatMap { w -> (0..1).map { wall(n, e, s, w, it) } } } } }
             } +
-            listOf("north", "east", "south", "west").flatMap { facing -> (0..1).flatMap { inWall -> (0..1).map { gate(facing, inWall, it) } } },
+            listOf("north", "east", "south", "west").flatMap { facing -> (0..1).flatMap { inWall -> (0..1).map { gate(facing, inWall, it) } } } +
+            STAIRS_CLIMB.flatMap { climb ->
+                listOf("none", "inner_left", "inner_right", "outer_left", "outer_right").flatMap { corner -> (0..1).map { stairs(climb, corner, it) } }
+            },
     )
 
     // One layer of stone at the bottom of the world, to stand things on.
@@ -129,8 +132,67 @@ class ConnectionsTest {
         assertEquals(fence(), world.stateAt(elsewhere.side(Face.NORTH)))
     }
 
-    /** Places [block] standing on the ground at [pos], with the player facing north. */
-    private fun place(block: BlockState, pos: BlockPos) = world.place(block, pos.side(Face.DOWN), Face.UP, clickY = 0f, Face.NORTH)
+    @Test
+    fun `stairs round an outer corner where their back meets stairs set across them`() {
+        val other = BlockPos(10, spot.y, 4)
+        place(stairs(Face.NORTH), spot)
+        place(stairs(Face.NORTH), other)
+
+        // Turned to climb east behind the first, west behind the second.
+        place(stairs(Face.EAST), spot.side(Face.NORTH), facing = Face.EAST)
+        place(stairs(Face.WEST), other.side(Face.NORTH), facing = Face.WEST)
+        assertEquals(listOf(spot), world.updateAround(listOf(spot.side(Face.NORTH))))
+        world.updateAround(listOf(other.side(Face.NORTH)))
+
+        assertEquals(stairs(Face.NORTH, "outer_right"), world.stateAt(spot))
+        assertEquals(stairs(Face.NORTH, "outer_left"), world.stateAt(other))
+    }
+
+    @Test
+    fun `stairs fill an inner corner where their step meets stairs set across them`() {
+        val other = BlockPos(10, spot.y, 4)
+        place(stairs(Face.EAST), spot.side(Face.SOUTH), facing = Face.EAST)
+        place(stairs(Face.WEST), other.side(Face.SOUTH), facing = Face.WEST)
+
+        place(stairs(Face.NORTH), spot)
+        place(stairs(Face.NORTH), other)
+
+        assertEquals(stairs(Face.NORTH, "inner_right"), world.stateAt(spot))
+        assertEquals(stairs(Face.NORTH, "inner_left"), world.stateAt(other))
+    }
+
+    @Test
+    fun `stairs stay straight in a run, and turn only against stairs of their own half`() {
+        // A run of two climbing north, with stairs across the back of the first that would round it.
+        place(stairs(Face.NORTH), spot.side(Face.EAST))
+        world[spot.side(Face.NORTH)] = stairs(Face.WEST)
+        place(stairs(Face.NORTH), spot)
+        assertEquals(stairs(Face.NORTH), world.stateAt(spot))
+
+        // Upside-down stairs across the back of upright ones leave them straight.
+        val other = BlockPos(10, spot.y, 4)
+        world[other.side(Face.NORTH)] = stairs(Face.WEST, upsideDown = 1)
+        place(stairs(Face.NORTH), other)
+        assertEquals(stairs(Face.NORTH), world.stateAt(other))
+    }
+
+    @Test
+    fun `corners change which sides of stairs are whole`() {
+        assertEquals(listOf(Face.DOWN, Face.NORTH), Face.entries.filter(stairs(Face.NORTH)::hasFullFace))
+        assertEquals(listOf(Face.DOWN, Face.NORTH, Face.WEST), Face.entries.filter(stairs(Face.NORTH, "inner_left")::hasFullFace))
+        assertEquals(listOf(Face.DOWN, Face.NORTH, Face.EAST), Face.entries.filter(stairs(Face.NORTH, "inner_right")::hasFullFace))
+        assertEquals(listOf(Face.DOWN), Face.entries.filter(stairs(Face.NORTH, "outer_left")::hasFullFace))
+    }
+
+    /** Places [block] standing on the ground at [pos], with the player facing [facing]. */
+    private fun place(block: BlockState, pos: BlockPos, facing: Face = Face.NORTH) = world.place(block, pos.side(Face.DOWN), Face.UP, clickY = 0f, facing)
+
+    private fun stairs(climb: Face, corner: String = "none", upsideDown: Int = 0) = state(
+        "minecraft:oak_stairs",
+        "upside_down_bit" to upsideDown.toByte(),
+        "weirdo_direction" to STAIRS_CLIMB.indexOf(climb),
+        "minecraft:corner" to corner,
+    )
 
     private fun fence(n: Int = 0, e: Int = 0, s: Int = 0, w: Int = 0) = joining("minecraft:oak_fence", n, e, s, w)
 

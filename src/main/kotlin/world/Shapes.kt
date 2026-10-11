@@ -44,14 +44,20 @@ val BlockState.isFullCube: Boolean
         return !replaceable && name !in PARTIAL_NAMES && PARTIAL_ENDINGS.none(name::endsWith)
     }
 
-/** The way stairs climb, by their `weirdo_direction`. Their back, the side they climb towards, is whole. */
+/** The way stairs climb, by their `weirdo_direction`. Their back is on the side they climb towards. */
 internal val STAIRS_CLIMB = listOf(Face.EAST, Face.WEST, Face.SOUTH, Face.NORTH)
+
+/** The corner stairs turn: none, or an inner or outer one, to their left or right as they climb. */
+internal const val STAIRS_CORNER = "minecraft:corner"
 
 /**
  * Whether this block's [face] is whole and flat, so that torches, buttons,
  * levers and ladders can be fixed to it. Every face of a whole cube is. Of
- * the rest, a slab's is on the side it fills, and stairs have whole backs,
- * and bottoms, or tops when they're upside down.
+ * the rest, a slab's is on the side it fills, and stairs have whole
+ * bottoms, or tops when they're upside down. Straight stairs have a whole
+ * back too, and stairs filling an inner corner have whole sides on both
+ * the back and the side the corner turns to. Stairs rounding an outer
+ * corner have no whole side.
  */
 fun BlockState.hasFullFace(face: Face): Boolean {
     if (isFullCube) return true
@@ -61,9 +67,13 @@ fun BlockState.hasFullFace(face: Face): Boolean {
     }
     val climb = (properties["weirdo_direction"] as? Int)?.let(STAIRS_CLIMB::getOrNull) ?: return false
     val upsideDown = properties["upside_down_bit"] == 1.toByte()
-    // Stairs that turn a corner, as Kore doesn't yet make them, have no whole back.
-    val straight = properties["minecraft:corner"] in listOf(null, "none")
-    return face == (if (upsideDown) Face.UP else Face.DOWN) || (face == climb && straight)
+    val wholeSides = when (properties[STAIRS_CORNER] ?: "none") {
+        "none" -> listOf(climb)
+        "inner_left" -> listOf(climb, climb.counterClockwise)
+        "inner_right" -> listOf(climb, climb.clockwise)
+        else -> emptyList()
+    }
+    return face == (if (upsideDown) Face.UP else Face.DOWN) || face in wholeSides
 }
 
 /** Whether a torch can stand on this block: one with a whole top can hold it, and so can a fence or wall post. */

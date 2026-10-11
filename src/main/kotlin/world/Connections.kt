@@ -16,6 +16,9 @@ private val BlockState.isPane get() = name.endsWith("glass_pane") || name.endsWi
 private val BlockState.isWall get() = WALL_POST in properties
 private val BlockState.isGate get() = name.endsWith("fence_gate")
 
+/** Which way stairs climb, or null for a block that isn't stairs. */
+private val BlockState.climb get() = (properties["weirdo_direction"] as? Int)?.let(STAIRS_CLIMB::getOrNull)
+
 /**
  * Whether fences, panes and walls keep apart from this block, whole though
  * it is: leaves, barriers, pumpkins, melons and shulker boxes. Bedrock
@@ -31,11 +34,13 @@ private val BlockState.gateFacing get() = Face.entries.find { it.id == propertie
  * join their neighbours. Fences, panes and walls reach out to the blocks
  * they join. A wall's sides stand tall under a block that covers them,
  * and it raises a post where it ends or turns. A fence gate drops when
- * set in a wall. Any other block is as it is.
+ * set in a wall. Stairs turn a corner against stairs set across them.
+ * Any other block is as it is.
  */
 fun FlatWorld.joined(pos: BlockPos, state: BlockState): BlockState {
     val changes = when {
         state.isWall -> wallShape(pos, state)
+        STAIRS_CORNER in state.properties -> mapOf(STAIRS_CORNER to stairsCorner(pos, state))
         state.isFence || state.isPane -> AROUND.associate { side -> connection(side) to bit(joins(state, side, stateAt(pos.side(side)))) }
         state.isGate -> {
             val span = state.gateFacing?.clockwise ?: return state
@@ -88,6 +93,30 @@ private const val NETHER_BRICK_FENCE = "minecraft:nether_brick_fence"
 
 /** Whole blocks that nothing joins, besides leaves and shulker boxes, which come in many kinds. */
 private val KEPT_APART = setOf("minecraft:barrier", "minecraft:pumpkin", "minecraft:carved_pumpkin", "minecraft:lit_pumpkin", "minecraft:melon_block")
+
+/**
+ * The corner [stairs] at [pos] turn, as Java Edition works it out, from
+ * the stairs around them of the same half, upright or upside down. Stairs
+ * whose tall back meets stairs set across them round an outer corner, and
+ * stairs whose low step meets them fill an inner one. Neither happens
+ * where it would break a straight run of stairs beside them. A corner is
+ * left or right as the stairs climb.
+ */
+private fun FlatWorld.stairsCorner(pos: BlockPos, stairs: BlockState): String {
+    val climb = stairs.climb ?: return "none"
+    val upsideDown = stairs.properties["upside_down_bit"]
+    fun climbOf(side: Face) = stateAt(pos.side(side))?.takeIf { it.properties["upside_down_bit"] == upsideDown }?.climb
+    // Stairs climbing alongside these, in a run a corner would break.
+    fun inRun(side: Face) = climbOf(side) == climb
+
+    climbOf(climb)?.takeIf { it.axis != climb.axis && !inRun(it.opposite) }?.let { across ->
+        return if (across == climb.counterClockwise) "outer_left" else "outer_right"
+    }
+    climbOf(climb.opposite)?.takeIf { it.axis != climb.axis && !inRun(it) }?.let { across ->
+        return if (across == climb.counterClockwise) "inner_left" else "inner_right"
+    }
+    return "none"
+}
 
 /**
  * A wall's sides and post. A side it joins on is tall when the block
