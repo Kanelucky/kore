@@ -16,6 +16,21 @@ private const val MAX_REASSEMBLED_SIZE = 8 shl 20
 /** Thrown when a client breaks NetherNet's framing rules. */
 class FramingException(message: String) : Exception(message)
 
+/** Why a connection ended. */
+enum class DisconnectReason {
+    /** The client closed its DTLS connection or SCTP association. */
+    CLOSED_BY_CLIENT,
+
+    /** The client stopped answering: no ICE consent check for 30 seconds. */
+    TIMED_OUT,
+
+    /** The client broke the DTLS protocol mid-connection. */
+    PROTOCOL_ERROR,
+
+    /** Kore's UDP socket closed, usually because the server is stopping. */
+    SERVER_STOPPED,
+}
+
 /**
  * One client's NetherNet connection: its two data channels, with NetherNet's
  * framing on top (Mojang's NetherNet onboarding guide, §6.1).

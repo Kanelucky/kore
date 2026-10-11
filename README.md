@@ -71,7 +71,15 @@ Kore keeps its side of WebRTC as small as possible. It runs **ICE-lite** and tak
 
 **SCTP is written in Kotlin**, with no native libraries. It covers only what data channels need: one path, no multihoming, and partial reliability so the unreliable channel can drop messages instead of retransmitting them.
 
-Game code sees none of this. Each client is a `NetherNetConnection` that sends and receives whole messages, reliably or not.
+Game code sees none of this. Each client is a `NetherNetConnection` that sends and receives whole messages, reliably or not, through three callbacks:
+
+| Callback | When it runs |
+| --- | --- |
+| `onConnect` | Once, as soon as the client's reliable channel opens and it can be sent to |
+| `onMessage` | For every complete message |
+| `onDisconnect` | Once, with a reason, for every client `onConnect` announced: it closed, timed out, broke the protocol, or the server stopped |
+
+All three run on the UDP event loop, so they must never block. If one throws, the error is logged and the connection carries on.
 
 ## 🚀 Getting Started
 

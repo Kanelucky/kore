@@ -36,13 +36,20 @@ private val SWEEP_INTERVAL = 5.seconds
  * Kore runs ICE-lite, so the STUN side only answers the client's checks.
  * Every address that passes a check is a valid path for that client, and
  * replies follow the path the client is currently using. Inside DTLS, SCTP
- * carries the data channels, NetherNet framing rides on those, and every
- * complete message goes to [onMessage] on this event loop.
+ * carries the data channels, and NetherNet framing rides on those.
+ *
+ * Game code hears about each client through three callbacks, all on this
+ * event loop, so they must not block:
+ * - [onConnect] once the client's reliable channel opens and it can be sent to,
+ * - [onMessage] for every complete message,
+ * - [onDisconnect] once when it goes, for every client [onConnect] announced.
  */
 class NetherNetRtcHandler(
     private val peers: Peers,
     private val dtls: DtlsContext,
+    private val onConnect: (connection: NetherNetConnection) -> Unit = {},
     private val onMessage: (connection: NetherNetConnection, message: ByteArray) -> Unit = { _, _ -> },
+    private val onDisconnect: (connection: NetherNetConnection, reason: DisconnectReason) -> Unit = { _, _ -> },
 ) : SimpleChannelInboundHandler<DatagramPacket>() {
     // Only touched on this channel's event loop.
     private val byAddress = HashMap<InetSocketAddress, Peer>()
@@ -52,6 +59,11 @@ class NetherNetRtcHandler(
         val interval = SWEEP_INTERVAL.inWholeMilliseconds
         ctx.executor().scheduleAtFixedRate(::sweep, interval, interval, TimeUnit.MILLISECONDS)
         super.channelActive(ctx)
+    }
+
+    override fun channelInactive(ctx: ChannelHandlerContext) {
+        connections.keys.toList().forEach { forget(it, DisconnectReason.SERVER_STOPPED) }
+        super.channelInactive(ctx)
     }
 
     override fun channelRead0(ctx: ChannelHandlerContext, packet: DatagramPacket) {
@@ -108,7 +120,7 @@ class NetherNetRtcHandler(
             transport.receive(datagram)
         } catch (e: SSLException) {
             log.warn("DTLS failed for network {}: {}", peer.networkId, e.message)
-            drop(peer)
+            drop(peer, DisconnectReason.PROTOCOL_ERROR)
             return
         }
 
@@ -116,16 +128,14 @@ class NetherNetRtcHandler(
             log.info("DTLS connected for network {} ({})", peer.networkId, transport.cipherSuite)
         }
         if (transport.isClosed) {
-            log.info("Network {} closed its DTLS connection", peer.networkId)
-            drop(peer)
+            drop(peer, DisconnectReason.CLOSED_BY_CLIENT)
             return
         }
 
         for (packet in received) {
             onSctp(ctx, peer, transport, packet)
             if (peer.channels?.association?.isClosed == true) {
-                log.info("Network {} closed its SCTP association", peer.networkId)
-                drop(peer)
+                drop(peer, DisconnectReason.CLOSED_BY_CLIENT)
                 return
             }
         }
@@ -151,6 +161,7 @@ class NetherNetRtcHandler(
 
     private fun onChannelOpened(peer: Peer, channel: DataChannel) {
         val connection = connections.getOrPut(peer) { NetherNetConnection(peer.networkId, peer.maxMessageSize) }
+        val wasOpen = connection.isOpen
         if (!connection.bind(channel)) {
             log.warn("Network {} opened '{}', which NetherNet doesn't use", peer.networkId, channel.label)
             return
@@ -161,6 +172,11 @@ class NetherNetRtcHandler(
             if (channel.ordered) "ordered" else "unordered",
             channel.maxRetransmits?.let { "max $it retransmits" } ?: "reliable",
         )
+
+        if (!wasOpen && connection.isOpen) {
+            log.info("Network {} connected", peer.networkId)
+            callGameCode("onConnect", peer) { onConnect(connection) }
+        }
     }
 
     private fun onChannelMessage(peer: Peer, channel: DataChannel, data: ByteArray) {
@@ -172,26 +188,41 @@ class NetherNetRtcHandler(
             return
         }
         log.debug("{}-byte message on '{}' from network {}", message.size, channel.label, peer.networkId)
-        onMessage(connection, message)
+        callGameCode("onMessage", peer) { onMessage(connection, message) }
     }
 
     private fun sweep() {
         val cutoff = System.nanoTime() - PEER_TIMEOUT.inWholeNanoseconds
         for (peer in peers.removeIdle(cutoff)) {
-            forget(peer)
-            log.info(if (peer.address == null) "Network {} never connected" else "Network {} timed out", peer.networkId)
+            if (peer.address == null) log.info("Network {} never connected", peer.networkId)
+            forget(peer, DisconnectReason.TIMED_OUT)
         }
     }
 
-    private fun drop(peer: Peer) {
+    private fun drop(peer: Peer, reason: DisconnectReason) {
         peers.remove(peer)
-        forget(peer)
+        forget(peer, reason)
     }
 
-    private fun forget(peer: Peer) {
+    /** The one way out for every client, so [onDisconnect] fires exactly once for each connection announced. */
+    private fun forget(peer: Peer, reason: DisconnectReason) {
         peer.validatedAddresses.forEach { byAddress.remove(it, peer) }
         peer.channels?.association?.close()
-        connections.remove(peer)
+
+        val connection = connections.remove(peer) ?: return
+        if (connection.isOpen) {
+            log.info("Network {} disconnected ({})", peer.networkId, reason)
+            callGameCode("onDisconnect", peer) { onDisconnect(connection, reason) }
+        }
+    }
+
+    /** A bug in game code shouldn't take the transport down with it. */
+    private inline fun callGameCode(callback: String, peer: Peer, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            log.error("{} failed for network {}", callback, peer.networkId, e)
+        }
     }
 }
 

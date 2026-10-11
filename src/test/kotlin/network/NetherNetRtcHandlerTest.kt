@@ -17,6 +17,8 @@ import org.koremc.network.rtc.STUN_USE_CANDIDATE
 import org.koremc.network.rtc.dtlsClientEngine
 import org.koremc.network.rtc.encodeStun
 import org.koremc.network.rtc.parseStun
+import org.koremc.network.sctp.Abort
+import org.koremc.network.sctp.Chunk
 import org.koremc.network.sctp.CookieAck
 import org.koremc.network.sctp.CookieEcho
 import org.koremc.network.sctp.DataChunk
@@ -28,6 +30,7 @@ import org.koremc.network.sctp.encode
 import org.koremc.network.sctp.parsePacket
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
+import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -35,6 +38,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.minutes
+
+private const val NETWORK_ID = "9876543210123456789"
 
 class NetherNetRtcHandlerTest {
     private val server = InetSocketAddress("203.0.113.7", 19132)
@@ -44,16 +50,29 @@ class NetherNetRtcHandlerTest {
     private val clientCertificate = DtlsCertificate.generate()
 
     private val peer = Peer(
-        networkId = "9876543210123456789",
+        networkId = NETWORK_ID,
         localIce = IceCredentials("kore", "korekorekorekorekorekore"),
         remoteUfrag = "game",
         remoteFingerprints = listOf(clientCertificate.fingerprint),
         maxMessageSize = 262144,
     )
     private val peers = Peers().apply { add(peer) }
-    private val messages = mutableListOf<Pair<String, ByteArray>>()
+
+    // What game code saw, in order.
+    private val events = mutableListOf<String>()
+    private var onConnect: (NetherNetConnection) -> Unit = {}
+
     private val channel = EmbeddedChannel(
-        NetherNetRtcHandler(peers, DtlsContext(serverCertificate)) { connection, message -> messages += connection.networkId to message },
+        NetherNetRtcHandler(
+            peers = peers,
+            dtls = DtlsContext(serverCertificate),
+            onConnect = { connection ->
+                events += "connect ${connection.networkId}"
+                onConnect(connection)
+            },
+            onMessage = { _, message -> events += "message ${message.toList()}" },
+            onDisconnect = { connection, reason -> events += "disconnect ${connection.networkId} $reason" },
+        ),
     )
     private val toServer = ArrayDeque<ByteBuffer>()
 
@@ -118,23 +137,108 @@ class NetherNetRtcHandlerTest {
 
     @Test
     fun `data channels open and deliver messages over the whole stack`() {
-        val dtlsClient = connect()
+        val stack = ClientStack()
 
-        dtlsClient.write(SctpPacket(0, listOf(Init(false, 0x5EED, 1 shl 20, 1024, 1024, Tsn(1)))).encode())
-        val initAck = pump(dtlsClient).flatMap { parse(it).chunks }.filterIsInstance<Init>().single()
-
-        val open = DataChunk(Tsn(1), streamId = 0, ssn = 0, ppid = 50, payload = dcepOpen("ReliableDataChannel", 0x00))
+        val replies = stack.open("ReliableDataChannel", stream = 0)
         // Two NetherNet fragments: header 1 (one more to come), then header 0.
-        val first = DataChunk(Tsn(2), streamId = 0, ssn = 1, ppid = 53, payload = byteArrayOf(1, 4))
-        val last = DataChunk(Tsn(3), streamId = 0, ssn = 2, ppid = 53, payload = byteArrayOf(0, 2))
-        dtlsClient.write(SctpPacket(initAck.initiateTag, listOf(CookieEcho(checkNotNull(initAck.parameter(7))), open, first, last)).encode())
-        val replies = pump(dtlsClient).flatMap { parse(it).chunks }
+        stack.message(stream = 0, payload = byteArrayOf(1, 4))
+        stack.message(stream = 0, payload = byteArrayOf(0, 2))
 
-        assertTrue(CookieAck in replies)
         assertContentEquals(byteArrayOf(0x02), replies.filterIsInstance<DataChunk>().single().payload)
         assertNotNull(peer.channels?.get("ReliableDataChannel"))
-        assertEquals(listOf(peer.networkId), messages.map { it.first })
-        assertContentEquals(byteArrayOf(4, 2), messages.single().second)
+        assertEquals(listOf("connect $NETWORK_ID", "message [4, 2]"), events)
+    }
+
+    @Test
+    fun `connect waits for the reliable channel`() {
+        val stack = ClientStack()
+
+        stack.open("UnreliableDataChannel", stream = 2, channelType = 0x81)
+        assertTrue(events.isEmpty())
+
+        stack.open("ReliableDataChannel", stream = 0)
+        assertEquals(listOf("connect $NETWORK_ID"), events)
+    }
+
+    @Test
+    fun `disconnect follows the client closing`() {
+        val stack = ClientStack()
+        stack.open("ReliableDataChannel", stream = 0)
+
+        stack.exchange(Abort(ByteArray(0)))
+
+        assertEquals(listOf("connect $NETWORK_ID", "disconnect $NETWORK_ID CLOSED_BY_CLIENT"), events)
+        assertNull(peers[peer.localIce.ufrag])
+    }
+
+    @Test
+    fun `clients that go quiet time out`() {
+        ClientStack().open("ReliableDataChannel", stream = 0)
+
+        peer.lastSeen = System.nanoTime() - 1.minutes.inWholeNanoseconds
+        runSweep()
+
+        assertEquals(listOf("connect $NETWORK_ID", "disconnect $NETWORK_ID TIMED_OUT"), events)
+    }
+
+    @Test
+    fun `clients that never connected leave without a disconnect`() {
+        connect()
+
+        peer.lastSeen = System.nanoTime() - 1.minutes.inWholeNanoseconds
+        runSweep()
+
+        assertTrue(events.isEmpty())
+        assertNull(peers[peer.localIce.ufrag])
+    }
+
+    @Test
+    fun `stopping the server disconnects everyone`() {
+        ClientStack().open("ReliableDataChannel", stream = 0)
+
+        channel.close()
+
+        assertEquals(listOf("connect $NETWORK_ID", "disconnect $NETWORK_ID SERVER_STOPPED"), events)
+    }
+
+    @Test
+    fun `a failing callback doesn't take the connection down`() {
+        onConnect = { error("game code bug") }
+        val stack = ClientStack()
+
+        stack.open("ReliableDataChannel", stream = 0)
+        stack.message(stream = 0, payload = byteArrayOf(0, 9))
+
+        assertEquals(listOf("connect $NETWORK_ID", "message [9]"), events)
+    }
+
+    /** A client that has passed ICE, DTLS and the SCTP handshake, and can open channels and send on them. */
+    private inner class ClientStack {
+        private val dtls = connect()
+        private var tag = 0
+        private var nextTsn = Tsn(1)
+        private val nextSsn = HashMap<Int, Int>()
+
+        init {
+            val initAck = exchange(Init(false, 0x5EED, 1 shl 20, 1024, 1024, nextTsn)).filterIsInstance<Init>().single()
+            tag = initAck.initiateTag
+            check(CookieAck in exchange(CookieEcho(checkNotNull(initAck.parameter(7)))))
+        }
+
+        fun open(label: String, stream: Int, channelType: Int = 0x00) = exchange(data(stream, ppid = 50, dcepOpen(label, channelType)))
+
+        fun message(stream: Int, payload: ByteArray) = exchange(data(stream, ppid = 53, payload))
+
+        /** Sends [chunks] in one packet and returns every chunk Kore sends back. */
+        fun exchange(vararg chunks: Chunk): List<Chunk> {
+            dtls.write(SctpPacket(tag, chunks.toList()).encode())
+            return pump(dtls).flatMap { checkNotNull(parsePacket(it)) { "Kore sent a malformed SCTP packet" }.chunks }
+        }
+
+        private fun data(stream: Int, ppid: Int, payload: ByteArray): DataChunk {
+            val ssn = nextSsn.getOrDefault(stream, 0).also { nextSsn[stream] = it + 1 }
+            return DataChunk(nextTsn, stream, ssn, ppid, payload).also { nextTsn += 1 }
+        }
     }
 
     /** Passes ICE from [client], then runs the DTLS handshake. */
@@ -157,7 +261,10 @@ class NetherNetRtcHandlerTest {
         }
     }
 
-    private fun parse(packet: ByteBuffer) = checkNotNull(parsePacket(packet)) { "Kore sent a malformed SCTP packet" }
+    private fun runSweep() {
+        channel.advanceTimeBy(5, TimeUnit.SECONDS)
+        channel.runScheduledPendingTasks()
+    }
 
     private fun check(
         username: String = "kore:game",
