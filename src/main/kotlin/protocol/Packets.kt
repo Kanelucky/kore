@@ -39,7 +39,10 @@ sealed interface ClientPacket
 data class RequestNetworkSettings(val protocol: Int) : ClientPacket
 
 /** The client's protocol version again, and its connection request: who it claims to be, plus its client data. */
-class Login(val protocol: Int, val connectionRequest: ByteArray) : ClientPacket
+class Login(val protocol: Int, val connectionRequest: ByteArray) : ClientPacket {
+    // The connection request holds the player's tokens, so logs only get its size.
+    override fun toString() = "Login(protocol=$protocol, ${connectionRequest.size} bytes)"
+}
 
 /** Whether the client supports the blob cache, which saves resending chunk data it already has. */
 data class ClientCacheStatus(val supported: Boolean) : ClientPacket

@@ -26,6 +26,7 @@ import org.koremc.protocol.ResourcePacksInfo
 import org.koremc.protocol.ServerPacket
 import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.StartGame
+import org.koremc.protocol.UnhandledPacket
 import org.koremc.protocol.VoxelShapes
 import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
@@ -39,6 +40,9 @@ import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
 
 private val log = LoggerFactory.getLogger(Session::class.java)
+
+/** Every batch in and out, by packet. The console leaves it out, and each run's log file has it all. */
+private val packetLog = LoggerFactory.getLogger("org.koremc.packets")
 
 /** Batches this size or larger are compressed. Small ones cost more to compress than they save. */
 private const val COMPRESSION_THRESHOLD = 256
@@ -129,6 +133,12 @@ class Session(
         } catch (e: PacketException) {
             log.warn("Dropped a batch from network {}: {}", networkId, e.message)
             return
+        }
+        // Movement and the like arrive many times a second in game, and Kore ignores them, so they only go to trace.
+        if (state == State.IN_GAME && packets.all { it is UnhandledPacket }) {
+            packetLog.trace("<- {}: {} ({} bytes)", who, packets.joinToString(), message.size)
+        } else {
+            packetLog.debug("<- {}: {} ({} bytes)", who, packets.joinToString(), message.size)
         }
         packets.forEach(::handle)
     }
@@ -295,7 +305,25 @@ class Session(
     }
 
     /** Sends [packets] together in one batch. */
-    private fun send(vararg packets: ServerPacket) = send(batches.encode(packets.map { it.encode() }))
+    private fun send(vararg packets: ServerPacket) {
+        val batch = batches.encode(packets.map { it.encode() })
+        packetLog.debug("-> {}: {} ({} bytes)", who, names(packets), batch.size)
+        send(batch)
+    }
+
+    /** Who the logs call this session: the player once they've logged in, their network until then. */
+    private val who get() = player?.displayName ?: "network $networkId"
+}
+
+/** Packet names, with a run of the same packet counted rather than repeated: `LevelChunk x16`. */
+private fun names(packets: Array<out ServerPacket>): String {
+    val runs = mutableListOf<Pair<String, Int>>()
+    for (packet in packets) {
+        val name = packet::class.simpleName.orEmpty()
+        val last = runs.lastOrNull()
+        if (last != null && last.first == name) runs[runs.lastIndex] = name to last.second + 1 else runs += name to 1
+    }
+    return runs.joinToString { (name, count) -> if (count == 1) name else "$name x$count" }
 }
 
 /** Every connected player's session, driven by the transport's connection callbacks on the UDP event loop. */

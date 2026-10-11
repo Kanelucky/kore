@@ -26,6 +26,8 @@ import kotlin.system.exitProcess
 private val log = LoggerFactory.getLogger("Kore")
 
 fun main() {
+    // A crash on any thread lands in the log file too, not just the console.
+    Thread.setDefaultUncaughtExceptionHandler { thread, e -> log.error("Uncaught exception on {}", thread.name, e) }
     val config = ServerConfig()
     val vanilla = try {
         VanillaData.load(config.dataDirectory)

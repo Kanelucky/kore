@@ -106,7 +106,14 @@ curl -i http://localhost:19132/v1/join
 {"name":"Kore Server","protocol":2193,"version":"1.26.50","level":"world","players":0,"maxPlayers":20,"gameType":0}
 ```
 
-Every request is logged to the console. Set the `org.koremc` logger to `DEBUG` in `src/main/resources/logback.xml` (the default) to also see headers and SDP offers. Player identity tokens are redacted from those logs.
+The console shows what's happening at `INFO`. Each run also writes everything, at `DEBUG`, to its own file in `logs/`, named for when the server started (for example, `logs/kore-2026-10-11_14-10-57.log`). The file has:
+- requests and their headers, and SDP offers;
+- each step of every connection;
+- every packet batch in and out, listed by packet.
+
+Once a player is in the game, batches holding only packets Kore ignores, mostly movement, are left out. Set the `org.koremc.packets` logger to `TRACE` in [`logback.xml`](src/main/resources/logback.xml) to include them.
+
+Player identity tokens are redacted, and logins are logged only by size. Kore never deletes old logs, so clear out `logs/` now and then.
 
 ### 🔑 The Operator Key
 

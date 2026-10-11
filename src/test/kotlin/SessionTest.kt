@@ -1,5 +1,8 @@
 package org.koremc
 
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
 import org.cloudburstmc.nbt.NbtMap
@@ -24,6 +27,7 @@ import org.koremc.registry.BlockState
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemVersion
 import org.koremc.world.FlatWorld
+import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -164,6 +168,31 @@ class SessionTest {
 
         clientSends(setLocalPlayerAsInitialised(runtimeId = 7))
         assertTrue(session.isInGame)
+    }
+
+    @Test
+    fun `every batch in and out goes to the packet log, and logins only by size`() {
+        val packetLog = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger("org.koremc.packets") as Logger
+        logger.addAppender(packetLog)
+        try {
+            loadWorld()
+            clientSends(requestChunkRadius(radius = 2, maxRadius = 2))
+        } finally {
+            logger.detachAppender(packetLog)
+        }
+
+        val lines = packetLog.list.map { it.formattedMessage.substringBefore(" (") }
+        assertTrue(lines.any { it.startsWith("<- network 9876543210123456789: Login(protocol=2193, ") })
+        assertEquals(
+            listOf(
+                "<- Steve: RequestChunkRadius(radius=2, maxRadius=2)",
+                "-> Steve: ChunkRadiusUpdated, NetworkChunkPublisherUpdate",
+                "-> Steve: LevelChunk x13",
+                "-> Steve: PlayStatus",
+            ),
+            lines.takeLast(4),
+        )
     }
 
     @Test
