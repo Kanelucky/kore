@@ -20,6 +20,9 @@ class Container(val size: Int) {
 /** A slot in one of a player's containers. */
 data class Location(val container: Container, val slot: Int)
 
+/** How many slots the hotbar has: the first of the player's items. */
+const val HOTBAR_SIZE = 9
+
 /** Where the creative inventory puts the stack a player picks, for them to move from there. */
 const val CREATED_OUTPUT_SLOT = 50
 
@@ -29,7 +32,7 @@ const val CREATED_OUTPUT_SLOT = 50
  * the cursor and the created output.
  */
 class PlayerInventory {
-    /** Slots 0 to 8 are the hotbar, and 9 to 35 the rest. */
+    /** The hotbar comes first, then the rest of the inventory, up to slot 35. */
     val items = Container(36)
     val offhand = Container(1)
     val armour = Container(4)

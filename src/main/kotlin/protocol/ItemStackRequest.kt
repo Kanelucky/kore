@@ -102,24 +102,31 @@ data class ItemStackResponse(val responses: List<StackResponse>) : ServerPacket 
 internal fun decodeItemStackRequest(buffer: ByteBuf): ItemStackRequest {
     val requests = ArrayList<StackRequest>()
     repeat(buffer.readVarUInt().also { if (it > 100) throw PacketException("$it item stack requests in one packet") }) {
-        val id = buffer.readVarInt()
-        val actions = ArrayList<StackAction>()
-        val count = buffer.readVarUInt()
-        if (count > 100) throw PacketException("$count actions in one item stack request")
-        for (i in 0 until count) {
-            val action = buffer.readStackAction()
-            actions += action
-            if (action is StackAction.Unsupported && action.type in UNREADABLE_ACTIONS) {
-                requests += StackRequest(id, actions)
-                return ItemStackRequest(requests)
-            }
-        }
-        buffer.readList { readString() } // Strings to filter, like an anvil's new name
-        buffer.readIntLE() // Why they need filtering
-        requests += StackRequest(id, actions)
+        val request = buffer.readStackRequest()
+        requests += request
+        if (request.cutShort) return ItemStackRequest(requests)
     }
     return ItemStackRequest(requests)
 }
+
+/** Reads one request, which ends early if it's [cutShort]. */
+internal fun ByteBuf.readStackRequest(): StackRequest {
+    val id = readVarInt()
+    val actions = ArrayList<StackAction>()
+    val count = readVarUInt()
+    if (count > 100) throw PacketException("$count actions in one item stack request")
+    for (i in 0 until count) {
+        val action = readStackAction()
+        actions += action
+        if (action is StackAction.Unsupported && action.type in UNREADABLE_ACTIONS) return StackRequest(id, actions)
+    }
+    readList { readString() } // Strings to filter, like an anvil's new name
+    readIntLE() // Why they need filtering
+    return StackRequest(id, actions)
+}
+
+/** Whether reading this request stopped at an action Kore can't read past, so nothing after it could be read either. */
+internal val StackRequest.cutShort get() = (actions.lastOrNull() as? StackAction.Unsupported)?.type in UNREADABLE_ACTIONS
 
 // Action types, as Mojang numbers them now.
 private const val TAKE = 0

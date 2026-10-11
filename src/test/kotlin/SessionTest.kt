@@ -3,6 +3,7 @@ package org.koremc
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
+import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
 import org.cloudburstmc.nbt.NbtMap
@@ -18,6 +19,10 @@ import org.koremc.protocol.BlockDefinitions
 import org.koremc.protocol.ContainerClose
 import org.koremc.protocol.ContainerOpen
 import org.koremc.protocol.FloatItem
+import org.koremc.protocol.GameMode
+import org.koremc.protocol.LevelEvent
+import org.koremc.protocol.LevelSoundEvent
+import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.SetActorData
 import org.koremc.protocol.flagsItem
 import org.koremc.protocol.ItemRegistry
@@ -27,15 +32,24 @@ import org.koremc.protocol.connectionRequest
 import org.koremc.protocol.encode
 import org.koremc.protocol.loginPacket
 import org.koremc.protocol.tokenAuthentication
+import org.koremc.protocol.writeBlockPos
+import org.koremc.protocol.writeByteArray
 import org.koremc.protocol.writeString
 import org.koremc.protocol.writeVarInt
 import org.koremc.protocol.writeVarUInt
 import org.koremc.protocol.writeVarULong
+import org.koremc.registry.AIR
+import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BiomeDefinition
-import org.koremc.registry.CreativeInventory
 import org.koremc.registry.BlockDefinition
+import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
+import org.koremc.registry.CreativeCategory
+import org.koremc.registry.CreativeGroup
+import org.koremc.registry.CreativeInventory
+import org.koremc.registry.CreativeItem
 import org.koremc.registry.ItemDefinition
+import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemVersion
 import org.koremc.world.BlockPos
 import org.koremc.world.ChunkPos
@@ -59,20 +73,41 @@ private const val START_SPRINTING = 25
 private const val STOP_SPRINTING = 26
 private const val START_FLYING = 42
 
+/** The runtime ID of the oak planks item. */
+private const val PLANKS_ITEM = 5
+
+/** The PlayerAction for breaking a block in creative. */
+private const val CREATIVE_DESTROY_BLOCK = 13
+
 class SessionTest {
     private val authority = TestAuthority()
     private val client = ecKeyPair()
     private val clientKey = client.public as ECPublicKey
     private val authenticator = LoginAuthenticator(MultiplayerTokenVerifier(keys = { authority.keys }), onlineMode = true)
 
-    private val config = ServerConfig(protocol = PROTOCOL, viewDistance = 8)
+    /** Survival, unless a test switches to creative before the session starts. */
+    private var config = ServerConfig(protocol = PROTOCOL, viewDistance = 8, gameMode = GameMode.SURVIVAL)
     private val itemRegistry = ItemRegistry(listOf(ItemDefinition("minecraft:stick", 323, componentBased = false, ItemVersion.NONE)))
     private val biomes = BiomeDefinitionList(listOf(BiomeDefinition("minecraft:plains", null, 0.8f, 0.4f, 0f, 0.125f, 0.05f, 0, rain = true, listOf("plains"))))
-    private val world = FlatWorld(listOf(BlockState("minecraft:stone", NbtMap.EMPTY, version = 18168865)))
+
+    // A world of one layer of stone, and a creative inventory of oak planks.
+    private val air = BlockState(AIR, NbtMap.EMPTY, version = 18168865)
+    private val stone = BlockState("minecraft:stone", NbtMap.EMPTY, version = 18168865)
+    private val planks = BlockState("minecraft:oak_planks", NbtMap.EMPTY, version = 18168865)
+    private val torch = BlockState("minecraft:torch", NbtMap.builder().putString("torch_facing_direction", "east").build(), version = 18168865)
+    private val world = FlatWorld(BlockPalette(listOf(air, stone, planks, torch)), listOf(stone))
+    private val creative = CreativeInventory(
+        listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
+        listOf(CreativeItem(ItemStack(ItemDefinition("minecraft:oak_planks", PLANKS_ITEM, componentBased = false, ItemVersion.NONE), block = planks), group = 0)),
+    )
+
     private val sent = mutableListOf<ByteArray>()
     private val blockDefinitions = BlockDefinitions(listOf(BlockDefinition("minecraft:white_wool_stairs", NbtMap.builder().putInt("molangVersion", 13).build())))
-    private val game = GameData(world, listOf(itemRegistry, biomes), blockDefinitions, CreativeInventory(emptyList(), emptyList()))
-    private val session = Session(config, game, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
+    private val game = GameData(world, listOf(itemRegistry, biomes), blockDefinitions, creative)
+    private val session: Session by lazy {
+        // The only player, so the only one to see what they change.
+        Session(config, game, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator, viewers = { listOf(session) }) { sent += it }
+    }
 
     /** The client's side of batching, which switches on compression when NetworkSettings arrives. */
     private val batches = BatchCodec()
@@ -407,6 +442,106 @@ class SessionTest {
     }
 
     @Test
+    fun `creative players break blocks, and see them go with particles`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+
+        clientSends(playerAction(CREATIVE_DESTROY_BLOCK, BlockPos(1, -64, 0)))
+
+        val (update, particles) = batches.decode(sent.single())
+        assertContentEquals(UpdateBlock(BlockPos(1, -64, 0), AIR_NETWORK_ID).encode(), update)
+        assertContentEquals(LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, Vec3(1.5f, -63.5f, 0.5f), stone.networkId).encode(), particles)
+        assertEquals(AIR_NETWORK_ID, world.blockAt(BlockPos(1, -64, 0)))
+
+        // The client can report the same break twice, and the second changes nothing.
+        sent.clear()
+        clientSends(playerAction(CREATIVE_DESTROY_BLOCK, BlockPos(1, -64, 0)))
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun `a torch falls with the block holding it up, though it's in the next chunk`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        // Chunk 0, 0 starts at x 0, so the torch is in chunk -1, 0.
+        world[BlockPos(0, -63, 1)] = stone
+        world[BlockPos(-1, -63, 1)] = torch
+
+        clientSends(playerAction(CREATIVE_DESTROY_BLOCK, BlockPos(0, -63, 1)))
+
+        val (block, fallen) = sent.map { batches.decode(it) }
+        assertContentEquals(UpdateBlock(BlockPos(0, -63, 1), AIR_NETWORK_ID).encode(), block[0])
+        assertContentEquals(UpdateBlock(BlockPos(-1, -63, 1), AIR_NETWORK_ID).encode(), fallen[0])
+        assertContentEquals(LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, Vec3(-0.5f, -62.5f, 1.5f), torch.networkId).encode(), fallen[1])
+    }
+
+    @Test
+    fun `breaks kore refuses are put back`() {
+        spawn()
+
+        // A creative break, from a player in survival.
+        clientSends(playerAction(CREATIVE_DESTROY_BLOCK, BlockPos(1, -64, 0)))
+        assertContentEquals(UpdateBlock(BlockPos(1, -64, 0), stone.networkId).encode(), receivedPacket())
+
+        // A block 19 away, past even creative reach.
+        clientSends(playerAction(CREATIVE_DESTROY_BLOCK, BlockPos(20, -64, 0)))
+        assertContentEquals(UpdateBlock(BlockPos(20, -64, 0), stone.networkId).encode(), receivedPacket())
+        assertEquals(stone.networkId, world.blockAt(BlockPos(1, -64, 0)))
+    }
+
+    @Test
+    fun `a held block is placed, heard, and the client is told what's at both spots`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        pickPlanksIntoHotbar()
+
+        clientSends(placeBlock(against = BlockPos(1, -64, 0), face = 1, slot = 0))
+
+        val (shown, corrections) = sent.map { batches.decode(it) }
+        assertContentEquals(UpdateBlock(BlockPos(1, -63, 0), planks.networkId).encode(), shown[0])
+        assertContentEquals(LevelSoundEvent(LevelSoundEvent.PLACE, Vec3(1.5f, -62.5f, 0.5f), planks.networkId).encode(), shown[1])
+        assertContentEquals(UpdateBlock(BlockPos(1, -64, 0), stone.networkId).encode(), corrections.single()) // The block clicked
+        assertEquals(planks.networkId, world.blockAt(BlockPos(1, -63, 0)))
+    }
+
+    @Test
+    fun `without the block in hand, nothing is placed, and the client is put right`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+
+        clientSends(placeBlock(against = BlockPos(1, -64, 0), face = 1, slot = 0))
+
+        val corrections = batches.decode(sent.single())
+        assertContentEquals(UpdateBlock(BlockPos(1, -64, 0), stone.networkId).encode(), corrections[0])
+        assertContentEquals(UpdateBlock(BlockPos(1, -63, 0), AIR_NETWORK_ID).encode(), corrections[1])
+        assertEquals(AIR_NETWORK_ID, world.blockAt(BlockPos(1, -63, 0)))
+    }
+
+    @Test
+    fun `a placement the client found doesn't work is left alone, without an answer`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        pickPlanksIntoHotbar()
+
+        // Planks going inside the player, say. The client tries again every frame while the button is held.
+        repeat(3) { clientSends(placeBlock(against = BlockPos(1, -64, 0), face = 1, slot = 0, predictedToWork = false)) }
+
+        assertTrue(sent.isEmpty())
+        assertEquals(AIR_NETWORK_ID, world.blockAt(BlockPos(1, -63, 0)))
+    }
+
+    @Test
+    fun `the held slot follows the client`() {
+        spawn()
+
+        clientSends(mobEquipment(slot = 3))
+        assertEquals(3, session.heldSlot)
+
+        clientSends(mobEquipment(slot = 12)) // Not in the hotbar
+        assertEquals(3, session.heldSlot)
+    }
+
+    @Test
     fun `a client that cancels during resource packs goes no further`() {
         logIn()
 
@@ -514,6 +649,48 @@ class SessionTest {
 
     private fun containerClose(window: Int, type: Int) =
         ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(47).writeByte(window).writeByte(type).writeBoolean(false))
+
+    private fun playerAction(action: Int, position: BlockPos) = ByteBufUtil.getBytes(
+        Unpooled.buffer().writeVarUInt(36).writeVarULong(7).writeVarInt(action).writeBlockPos(position).writeBlockPos(BlockPos(0, 0, 0)).writeVarInt(1),
+    )
+
+    /** Picks a stack of oak planks from the creative inventory into hotbar slot 0, and forgets the answer. */
+    private fun pickPlanksIntoHotbar() {
+        clientSends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(-1).writeVarUInt(2)
+                    .writeVarUInt(12).writeByte(14).writeVarUInt(1).writeByte(1) // Creative item 1, once
+                    .writeVarUInt(0).writeByte(0).writeByte(64) // Taking all 64
+                    .writeByte(60).writeBoolean(false).writeByte(50).writeIntLE(-1) // From the created output
+                    .writeByte(28).writeBoolean(false).writeByte(0).writeIntLE(0) // Into hotbar slot 0
+                    .writeVarUInt(0).writeIntLE(0),
+            ),
+        )
+        sent.clear()
+    }
+
+    /**
+     * An inventory transaction placing the oak planks in hotbar [slot]
+     * against [face] of the block at [against], clicked in the middle,
+     * which the client found works unless [predictedToWork] says otherwise.
+     */
+    private fun placeBlock(against: BlockPos, face: Int, slot: Int, predictedToWork: Boolean = true) = ByteBufUtil.getBytes(
+        Unpooled.buffer().writeVarUInt(30).writeVarInt(0).writeBoolean(false).writeVarUInt(2).writeVarUInt(0)
+            .writeVarInt(0).writeByte(1).writeBlockPos(against).writeByte(face).writeVarInt(slot).writeByte(0)
+            .heldPlanks()
+            .writeFloatLE(standing.x).writeFloatLE(standing.y).writeFloatLE(standing.z)
+            .writeFloatLE(0.5f).writeFloatLE(1f).writeFloatLE(0.5f)
+            .writeVarUInt(stone.networkId).writeBoolean(predictedToWork).writeByte(0),
+    )
+
+    private fun mobEquipment(slot: Int) = ByteBufUtil.getBytes(
+        Unpooled.buffer().writeVarUInt(31).writeVarULong(7).heldPlanks().writeByte(slot).writeByte(slot).writeByte(0),
+    )
+
+    /** The stack of oak planks, as the client describes what it holds. */
+    private fun ByteBuf.heldPlanks(): ByteBuf =
+        writeShortLE(PLANKS_ITEM).writeShortLE(64).writeVarUInt(0).writeBoolean(true).writeVarInt(1).writeVarUInt(planks.networkId)
+            .writeByteArray(ByteArray(10))
 
     private fun setLocalPlayerAsInitialised(runtimeId: Long) =
         ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(113).writeVarULong(runtimeId))

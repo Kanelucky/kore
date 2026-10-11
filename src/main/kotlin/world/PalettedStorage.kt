@@ -22,6 +22,13 @@ class PalettedStorage private constructor(
 
     operator fun get(block: Int): Int = palette[paletteIndex(block)]
 
+    /**
+     * This storage with [value] at [block]. Chunks share storages, so this
+     * one stays as it is. The palette is built afresh, dropping any value
+     * no block has any more.
+     */
+    fun with(block: Int, value: Int): PalettedStorage = of(IntArray(SUB_CHUNK_VOLUME) { if (it == block) value else this[it] })
+
     companion object {
         /** The same value in every block. */
         fun filled(value: Int) = PalettedStorage(listOf(value), null)

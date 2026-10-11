@@ -68,7 +68,11 @@ fun ByteBuf.writeString(value: String): ByteBuf = writeByteArray(value.encodeToB
 /** A point as three little-endian floats. */
 fun ByteBuf.readVec3() = Vec3(readFloatLE(), readFloatLE(), readFloatLE())
 
+fun ByteBuf.writeVec3(vec: Vec3): ByteBuf = writeFloatLE(vec.x).writeFloatLE(vec.y).writeFloatLE(vec.z)
+
 /** A block position as three zigzagged varints. */
+fun ByteBuf.readBlockPos() = BlockPos(readVarInt(), readVarInt(), readVarInt())
+
 fun ByteBuf.writeBlockPos(pos: BlockPos): ByteBuf = writeVarInt(pos.x).writeVarInt(pos.y).writeVarInt(pos.z)
 
 /** A UUID as two little-endian 64-bit halves, most significant first. */

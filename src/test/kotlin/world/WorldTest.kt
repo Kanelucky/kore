@@ -2,6 +2,7 @@ package org.koremc.world
 
 import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.AIR
+import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
 import org.koremc.registry.blockStateHash
@@ -63,7 +64,7 @@ class WorldTest {
         val bedrock = BlockState("minecraft:bedrock", NbtMap.builder().putByte("infiniburn_bit", 0).build(), VERSION)
         val dirt = BlockState("minecraft:dirt", NbtMap.EMPTY, VERSION)
         val grass = BlockState("minecraft:grass_block", NbtMap.EMPTY, VERSION)
-        val world = FlatWorld.vanilla(BlockPalette(listOf(bedrock, dirt, grass)))
+        val world = FlatWorld.vanilla(BlockPalette(listOf(air, bedrock, dirt, grass)))
 
         val chunk = world.chunkAt(ChunkPos(-7, 12))
         val column = (0 until 6).map { y -> chunk.subChunks.single()[blockIndex(4, y, 9)] }
@@ -76,8 +77,7 @@ class WorldTest {
 
     @Test
     fun `layers can reach past the first sub-chunk`() {
-        val stone = BlockState("minecraft:stone", NbtMap.EMPTY, VERSION)
-        val world = FlatWorld(List(20) { stone })
+        val world = FlatWorld(BlockPalette(listOf(air, stone)), List(20) { stone })
 
         val chunk = world.chunkAt(ChunkPos(0, 0))
 
@@ -87,6 +87,49 @@ class WorldTest {
         assertEquals(blockStateHash(AIR, emptyMap()), chunk.subChunks[1][blockIndex(0, 4, 0)])
         assertEquals(BlockPos(0, -44, 0), world.spawn)
     }
+
+    @Test
+    fun `changing a storage leaves the original as it was`() {
+        val storage = PalettedStorage.filled(9)
+
+        val changed = storage.with(blockIndex(1, 2, 3), 40)
+
+        assertEquals(listOf(9, 40), changed.palette)
+        assertEquals(40, changed[blockIndex(1, 2, 3)])
+        assertEquals(listOf(9), storage.palette)
+        assertEquals(listOf(9), changed.with(blockIndex(1, 2, 3), 9).palette) // Values no block has any more go
+    }
+
+    @Test
+    fun `a changed block changes its chunk, and no other`() {
+        val world = FlatWorld(BlockPalette(listOf(air, stone)), listOf(stone))
+        val untouched = world.chunkAt(ChunkPos(5, 5))
+
+        world[BlockPos(-1, -64, 17)] = air
+
+        assertEquals(AIR_NETWORK_ID, world.blockAt(BlockPos(-1, -64, 17)))
+        assertEquals(air, world.stateAt(BlockPos(-1, -64, 17)))
+        assertEquals(stone.networkId, world.blockAt(BlockPos(-2, -64, 17)))
+        assertEquals(stone.networkId, world.blockAt(BlockPos(-1, -64, 16))) // The next chunk south
+        assertSame(untouched, world.chunkAt(ChunkPos(5, 5)))
+        assertEquals(AIR_NETWORK_ID, world.blockAt(BlockPos(0, MAX_Y + 1, 0)))
+    }
+
+    @Test
+    fun `a block placed high adds sub-chunks up to it, and they go once only air is left`() {
+        val world = FlatWorld(BlockPalette(listOf(air, stone)), listOf(stone))
+
+        world[BlockPos(3, 100, 4)] = stone
+        assertEquals(11, world.chunkAt(ChunkPos(0, 0)).subChunks.size) // Sub-chunk 10 holds y 96 to 111
+        assertEquals(stone.networkId, world.blockAt(BlockPos(3, 100, 4)))
+
+        world[BlockPos(3, 100, 4)] = air
+        assertEquals(1, world.chunkAt(ChunkPos(0, 0)).subChunks.size)
+        assertFailsWith<IllegalArgumentException> { world[BlockPos(0, MAX_Y + 1, 0)] = stone }
+    }
+
+    private val air = BlockState(AIR, NbtMap.EMPTY, VERSION)
+    private val stone = BlockState("minecraft:stone", NbtMap.EMPTY, VERSION)
 
     private companion object {
         const val VERSION = 18168865

@@ -1,5 +1,6 @@
 package org.koremc
 
+import org.koremc.inventory.HOTBAR_SIZE
 import org.koremc.inventory.PlayerInventory
 import org.koremc.inventory.StackRequestHandler
 import org.koremc.network.DisconnectReason
@@ -17,18 +18,25 @@ import org.koremc.protocol.Disconnect
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.Interact
+import org.koremc.protocol.InventoryTransaction
 import org.koremc.protocol.ItemStackRequest
 import org.koremc.protocol.ItemStackResponse
+import org.koremc.protocol.ItemUse
+import org.koremc.protocol.ItemUseAction
 import org.koremc.protocol.InputFlag
 import org.koremc.protocol.JigsawStructureData
 import org.koremc.protocol.LevelChunk
+import org.koremc.protocol.LevelEvent
+import org.koremc.protocol.LevelSoundEvent
 import org.koremc.protocol.Login
 import org.koremc.protocol.LoginRequest
+import org.koremc.protocol.MobEquipment
 import org.koremc.protocol.NetworkChunkPublisherUpdate
 import org.koremc.protocol.NetworkSettings
 import org.koremc.protocol.PacketException
 import org.koremc.protocol.PermissionLevel
 import org.koremc.protocol.PlayStatus
+import org.koremc.protocol.PlayerAction
 import org.koremc.protocol.PlayerAuthInput
 import org.koremc.protocol.RequestChunkRadius
 import org.koremc.protocol.RequestNetworkSettings
@@ -42,13 +50,18 @@ import org.koremc.protocol.ShortItem
 import org.koremc.protocol.StartGame
 import org.koremc.protocol.UpdateAbilities
 import org.koremc.protocol.UpdateAttributes
+import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.abilitiesFor
 import org.koremc.protocol.VoxelShapes
 import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
 import org.koremc.protocol.flagsItem
 import org.koremc.protocol.parseConnectionRequest
+import org.koremc.registry.AIR
+import org.koremc.registry.AIR_NETWORK_ID
+import org.koremc.world.BlockPos
 import org.koremc.world.ChunkPos
+import org.koremc.world.Face
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
 import org.koremc.world.PLAYER_MAX_AIR
@@ -56,7 +69,13 @@ import org.koremc.world.PLAYER_SNEAKING_HEIGHT
 import org.koremc.world.PLAYER_WALK_SPEED
 import org.koremc.world.PLAYER_WIDTH
 import org.koremc.world.Vec3
+import org.koremc.world.breakBlock
+import org.koremc.world.centre
 import org.koremc.world.chunksAround
+import org.koremc.world.facing
+import org.koremc.world.place
+import org.koremc.world.side
+import org.koremc.world.unbreakable
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
 import kotlin.math.abs
@@ -92,6 +111,14 @@ private const val INVENTORY_CONTAINER = 0xFF
 
 /** The window a client closes when chat opens over a container. It gets no reply. */
 private const val CHAT_WINDOW = 0xFF
+
+/**
+ * How far players reach to build and break, from their eyes to the
+ * block's middle, in and out of creative. These are a little beyond the
+ * game's own reach, so a client at its limit isn't turned down.
+ */
+private const val SURVIVAL_REACH = 8f
+private const val CREATIVE_REACH = 14f
 
 /** The flags a player always has: they breathe, fall, collide and climb. */
 private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, ActorFlag.HAS_COLLISION, ActorFlag.CAN_CLIMB)
@@ -131,6 +158,11 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * into it. Its flags say when the player sprints and sneaks, which Kore
  * mirrors in the player's actor data.
  *
+ * Players build and break as the client predicts, which Kore checks and
+ * then shows to everyone who has the chunk. Placing comes as an inventory
+ * transaction using the held item on a block. Breaking comes as one riding
+ * in `PlayerAuthInput`, or in creative as a `PlayerAction`.
+ *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
 class Session(
@@ -143,6 +175,8 @@ class Session(
     /** The key the client proved when it connected, which its login must match. */
     private val offerKey: ECPublicKey?,
     private val authenticator: LoginAuthenticator,
+    /** Every player's session, this one included, for showing them what this player changes in the world. */
+    private val viewers: () -> Collection<Session>,
     private val send: (ByteArray) -> Unit,
 ) {
     private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, NEGOTIATING_RESOURCE_PACKS, LOADING_WORLD, SPAWNING, IN_GAME, CLOSED }
@@ -193,6 +227,13 @@ class Session(
     /** Whether the player is flying, where sneaking means descending rather than slowing down. */
     private var flying = false
 
+    /** Which way the player looks, around the vertical, as the client last reported. Blocks they place turn by it. */
+    private var yaw = 0f
+
+    /** The hotbar slot the player holds, as the client last said. */
+    var heldSlot = 0
+        private set
+
     /** Whether the player's inventory is open, which the client can't do without Kore's say-so. */
     private var inventoryOpen = false
 
@@ -207,7 +248,7 @@ class Session(
             return
         }
         // Movement arrives every tick in game, so batches of nothing else only go to trace.
-        if (state == State.IN_GAME && packets.all { it is PlayerAuthInput }) {
+        if (state == State.IN_GAME && packets.all { it is PlayerAuthInput && it.onlyMoves }) {
             packetLog.trace("<- {}: {} ({} bytes)", who, packets.joinToString(), message.size)
         } else {
             packetLog.debug("<- {}: {} ({} bytes)", who, packets.joinToString(), message.size)
@@ -226,10 +267,17 @@ class Session(
             }
             State.LOADING_WORLD -> if (packet is RequestChunkRadius) onRequestChunkRadius(packet) else unexpected(packet)
             State.SPAWNING, State.IN_GAME -> when (packet) {
-                is PlayerAuthInput -> onMove(packet)
+                is PlayerAuthInput -> {
+                    onMove(packet)
+                    packet.itemUse?.let(::onItemUse)
+                    packet.stackRequest?.let { send(ItemStackResponse(listOf(stackRequests.handle(it)))) }
+                }
                 is Interact -> if (packet.action == Interact.OPEN_INVENTORY) openInventory()
                 is ContainerClose -> onContainerClose(packet)
                 is ItemStackRequest -> send(ItemStackResponse(packet.requests.map(stackRequests::handle)))
+                is InventoryTransaction -> packet.use?.let(::onItemUse)
+                is PlayerAction -> if (packet.action == PlayerAction.CREATIVE_DESTROY_BLOCK) onBreak(packet.position, creativeOnly = true)
+                is MobEquipment -> onEquip(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
                 is SetLocalPlayerAsInitialised -> if (state == State.SPAWNING) onPlayerInitialised(packet) else unexpected(packet)
                 // Movement and the rest of gameplay arrive many times a second, and Kore has nothing for them yet.
@@ -357,6 +405,7 @@ class Session(
             return
         }
         position = reported
+        yaw = packet.yaw
         onInputs(packet)
 
         val chunk = reported.toBlockPos().chunk
@@ -451,6 +500,112 @@ class Session(
         }
     }
 
+    /** Follows the hotbar slot the player holds. The offhand reports its item this way too, and changes nothing. */
+    private fun onEquip(packet: MobEquipment) {
+        if (packet.windowId == INVENTORY_WINDOW && packet.selectedSlot in 0 until HOTBAR_SIZE) heldSlot = packet.selectedSlot
+    }
+
+    private fun onItemUse(use: ItemUse) {
+        when (use.action) {
+            ItemUseAction.PLACE -> onPlace(use)
+            ItemUseAction.DESTROY -> onBreak(use.position, creativeOnly = false)
+            // Using an item in the air, like eating, and attacking with one are for later.
+            ItemUseAction.USE, ItemUseAction.USE_AS_ATTACK -> {}
+        }
+    }
+
+    /**
+     * Places the block the player holds against the face they clicked, as
+     * the client predicted, if they can: their game mode builds, the spot
+     * is in reach, and the client's item is the block item Kore has in
+     * that hotbar slot. Everyone with the chunk sees the block appear and
+     * hears it go down. Placing doesn't use up the stack yet: only creative
+     * players can come by blocks so far.
+     *
+     * Kore's rules for where blocks go and which way they turn don't cover
+     * all of the client's. So the client also hears what's really at both
+     * spots it may have changed, the block clicked and the space beyond the
+     * face, which puts right any guess that differed.
+     *
+     * The client checks some things Kore doesn't, like whether a torch has
+     * a face to stand on, or whether a block would go inside its player.
+     * When it finds a placement doesn't work, it changes nothing, and Kore
+     * leaves it at that. While the player holds the button down, the
+     * client tries again every frame, so that's often.
+     */
+    private fun onPlace(use: ItemUse) {
+        if (!use.predictedToWork) return
+        val face = Face.of(use.face) ?: return
+        if (use.hotbarSlot in 0 until HOTBAR_SIZE) heldSlot = use.hotbarSlot
+        // The client's item must be the one Kore has in the slot.
+        val block = inventory.items[heldSlot]?.stack?.takeIf { use.hotbarSlot == heldSlot && it.item.runtimeId == use.heldItem }?.block
+        val placed = if (block != null && canBuild() && inReach(use.position.side(face))) {
+            world.place(block, use.position, face, use.clickPosition.y, facing(yaw))
+        } else {
+            emptyList()
+        }
+
+        if (placed.isEmpty()) {
+            log.debug("Refused {} placing {} against {} {}", player?.displayName, block?.name ?: "item ${use.heldItem}", use.position, face)
+        } else {
+            // A placement changes one column, so everyone with one of the blocks has them all.
+            val first = placed.first()
+            val updates = placed.map { UpdateBlock(it, world.blockAt(it)) }
+            showAround(first, *updates.toTypedArray(), LevelSoundEvent(LevelSoundEvent.PLACE, first.centre, world.blockAt(first)))
+            log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.name, first)
+        }
+        val corrections = (listOf(use.position, use.position.side(face)) - placed.toSet()).map { UpdateBlock(it, world.blockAt(it)) }
+        if (corrections.isNotEmpty()) send(*corrections.toTypedArray())
+    }
+
+    /**
+     * Breaks the block at [pos], as the client predicted, if the player
+     * can: their game mode breaks blocks, it's in reach, and outside
+     * creative, it isn't one only creative players break. A [creativeOnly]
+     * break, like creative's instant one, also needs the player to be in
+     * creative. Everyone with the chunk sees the block go, with its
+     * particles and sound: the player too, since the client leaves those to
+     * the server. So do any torches the block held up. A break Kore refuses
+     * puts the block back.
+     */
+    private fun onBreak(pos: BlockPos, creativeOnly: Boolean) {
+        val state = world.stateAt(pos)
+        // Air is what a break leaves, so it's a break the client has already reported another way.
+        if (state?.name == AIR) return
+
+        val creative = config.gameMode == GameMode.CREATIVE
+        if (state == null || !canBuild() || !inReach(pos) || (!creative && (creativeOnly || state.unbreakable))) {
+            log.debug("Refused {} breaking {} at {}", player?.displayName, state?.name, pos)
+            send(UpdateBlock(pos, world.blockAt(pos)))
+            return
+        }
+        // What falls with the block, like a torch on its side, can be in the next chunk.
+        for ((chunk, broken) in world.breakBlock(pos).entries.groupBy { it.key.chunk }) {
+            val effects = broken.flatMap { (at, block) -> listOf(UpdateBlock(at, AIR_NETWORK_ID), LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, at.centre, block.networkId)) }
+            viewers().forEach { it.show(chunk, *effects.toTypedArray()) }
+        }
+        log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
+    }
+
+    private fun canBuild() = config.gameMode == GameMode.SURVIVAL || config.gameMode == GameMode.CREATIVE
+
+    private fun inReach(pos: BlockPos): Boolean {
+        val reach = if (config.gameMode == GameMode.CREATIVE) CREATIVE_REACH else SURVIVAL_REACH
+        val centre = pos.centre
+        val dx = centre.x - position.x
+        val dy = centre.y - position.y
+        val dz = centre.z - position.z
+        return dx * dx + dy * dy + dz * dz <= reach * reach
+    }
+
+    /** Sends [packets] about the block at [pos] to every player who has its chunk, this one included. */
+    private fun showAround(pos: BlockPos, vararg packets: ServerPacket) = viewers().forEach { it.show(pos.chunk, *packets) }
+
+    /** Sends [packets] about the chunk at [chunk], if the client has it. Without it, there's nothing for them to change. */
+    fun show(chunk: ChunkPos, vararg packets: ServerPacket) {
+        if (chunk in sentChunks) send(*packets)
+    }
+
     private fun onPlayerInitialised(packet: SetLocalPlayerAsInitialised) {
         if (packet.runtimeId != entityId) {
             log.debug("Network {} initialised runtime ID {}, but its player's is {}", networkId, packet.runtimeId, entityId)
@@ -543,7 +698,7 @@ class Sessions(private val config: ServerConfig, private val game: GameData, pri
     private var nextEntityId = 1L
 
     fun connect(connection: NetherNetConnection) {
-        sessions[connection] = Session(config, game, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
+        sessions[connection] = Session(config, game, connection.networkId, nextEntityId++, connection.clientKey, authenticator, viewers = { sessions.values }) { message ->
             connection.send(message)
         }
     }

@@ -168,12 +168,6 @@ data class StartGame(
     }
 }
 
-private fun ByteBuf.writeVec3(vec: Vec3) {
-    writeFloatLE(vec.x)
-    writeFloatLE(vec.y)
-    writeFloatLE(vec.z)
-}
-
 /**
  * Block definitions as `StartGame` carries them: each block's name, then
  * its definition as network NBT. They're the same for every player and run

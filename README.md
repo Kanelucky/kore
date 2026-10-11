@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Players can join a flat world and walk around it, but they can't change anything in it or see each other yet.
+> Kore is in early development. Players can join a flat world, walk around it and build in it, but they can't see each other yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -111,7 +111,7 @@ The console shows what's happening at `INFO`. Each run also writes everything, a
 - each step of every connection;
 - every packet batch in and out, listed by packet.
 
-Once a player is in the game, batches holding only packets Kore ignores, mostly movement, are left out. Set the `org.koremc.packets` logger to `TRACE` in [`logback.xml`](src/main/resources/logback.xml) to include them.
+Once a player is in the game, batches holding nothing but movement are left out, since one arrives every tick. Movement carrying an action, like breaking a block, stays in. Set the `org.koremc.packets` logger to `TRACE` in [`logback.xml`](src/main/resources/logback.xml) to include them.
 
 Player identity tokens are redacted, and logins are logged only by size. Kore never deletes old logs, so clear out `logs/` now and then.
 
@@ -154,13 +154,28 @@ The data must be for the same client release as `version` in `ServerConfig`.
 
 Until worlds load from disk, every player joins the vanilla flat world: bedrock, two layers of dirt and grass on top, all plains. They appear at `0, -60, 0`, standing on the grass.
 
-Once the client says how far it wants to see, Kore settles on a radius no larger than `viewDistance` (8 chunks by default). It then sends every chunk within that circle whole, nearest first, so the client never has to ask for sub-chunks one at a time. Only then does the player spawn. All the chunks are identical, so the flat world builds just one and sends it everywhere.
+Once the client says how far it wants to see, Kore settles on a radius no larger than `viewDistance` (8 chunks by default). It then sends every chunk within that circle whole, nearest first, so the client never has to ask for sub-chunks one at a time. Only then does the player spawn. Until players change them, all the chunks are identical, so the flat world builds just one and sends it everywhere. It keeps a copy of each chunk a player changes, for as long as the server runs.
 
 Movement is server-authoritative in Bedrock: every tick, the client sends its input and where it predicts its player now is. A server is meant to simulate the same movement and correct the client when they disagree. Mojang's movement guide also allows a server without physics to accept the client's position as given, and for now that's what Kore does. It only rejects positions that are impossible: not a number, or millions of blocks out. Once a player strays two chunks from the centre of their view, Kore centres it on them again and sends the chunks that have come into it. Players often step back and forth over a chunk border, and if the view followed every step, each one would resend the same row of chunks. This way, the view trails a moving player by up to a chunk or so instead.
 
 The client also needs to be told about its own player once it spawns, or it moves the player wrongly: it floats instead of falling, and counts its air down as though underwater. So Kore sends the player's actor data (it breathes, falls, collides and climbs), its attributes (full health and hunger, since sprinting needs food, and walking speed), and the abilities its game mode allows.
 
 The input the client sends each tick also says when the player starts and stops sprinting or sneaking. Kore keeps track, and sends the change back as the player's actor data, with a sneaking player's shorter height. It tags the update with the input's tick, so the client applies it at the moment it predicted it, as Mojang's movement guide describes. The sprint's speed boost is left to the client, which already applies it.
+
+Building works the same way: the client predicts what happens, and Kore agrees or puts it right. Placing a block arrives as an inventory transaction that uses the held item on a block. The client says whether it found the placement works, having checked things Kore doesn't, like whether a torch has a face to stand on or a block would go inside the player. Kore only places what the client found works. It also checks that the item is the block it has in that hotbar slot, that the spot is in reach and that there's room. Then it puts the block in the world and shows it, with its sound, to everyone who has the chunk. It follows the client's rules for the common cases:
+- blocks like short grass are replaced, rather than built beside;
+- slabs go in the half of the space the player clicked, and two make a double slab;
+- stairs climb the way the player faces;
+- logs and other pillars lie along the clicked face's axis;
+- furnaces, chests and other blocks with a front turn it to the player;
+- buttons, levers and ladders need a whole face to go on, like a full block's or the back of stairs, and point out of it. A lever on a floor or ceiling lies the way the player faces;
+- a torch leans on the block it was placed against, if that face is whole. If not, it leans on a neighbour's whole face, or stands on the floor;
+- anything fixed to a block falls when the block breaks;
+- tall plants, like sunflowers, take two blocks.
+
+Cloudburst's data has no block shapes, so Kore tells which blocks are whole cubes by name: slabs, stairs, fences, plants and the like come in families named alike. A slab's face on the side it fills is whole, and so are the backs and bottoms of stairs. Kore doesn't know every block's rules, like the corners stairs form, so after each placement it tells the client what's really at the spots it may have changed. That corrects any guess that differed. Doors, beds and signs are items rather than blocks in the creative inventory, so they can't be placed yet.
+
+In creative, the client breaks a block at once and says so with a `PlayerAction`. Outside creative, it reports a finished break in its input. With server-authoritative block breaking off, Mojang leaves the timing of a break to the client, so Kore takes its word for it. Either way, everyone with the chunk sees the block go, with the particles and sound of it breaking: the client leaves those to the server, even for its own breaks. Outside creative, bedrock and other blocks only creative players break stay put. Survival mining doesn't show cracks yet, since their speed depends on each block's hardness, which Cloudburst's data doesn't have. Broken blocks drop nothing until there are item entities.
 
 Chunks name biomes by number, and Cloudburst's data has none for vanilla biomes. For now, plains is hard-coded as biome `1`.
 
@@ -190,13 +205,16 @@ src/main/kotlin/
 │   ├── Abilities.kt                 # What a player may do in their game mode
 │   ├── ItemStackRequest.kt          # Inventory requests from the client, and the answers
 │   ├── CreativeContent.kt           # The creative inventory, and items on the wire
+│   ├── Blocks.kt                    # Using items on blocks, block updates, and the effects players see
 │   └── LoginRequest.kt              # Reading who a client claims to be
 ├── world/
 │   ├── Positions.kt                 # Block, chunk and exact positions
 │   ├── Player.kt                    # A player's size, breath and speed
 │   ├── PalettedStorage.kt           # A sub-chunk's worth of values, as a palette and indices
 │   ├── Chunk.kt                     # Chunk columns, and which are in a player's view
-│   └── FlatWorld.kt                 # The same layers in every column
+│   ├── FlatWorld.kt                 # The same layers in every column, until players change them
+│   ├── Building.kt                  # Where placed blocks go and which way they turn, and breaking them
+│   └── Shapes.kt                    # Which blocks are whole cubes, and which faces can hold a torch or a button
 ├── inventory/
 │   ├── PlayerInventory.kt           # A player's slots: hotbar, inventory, offhand, armour and cursor
 │   └── StackRequests.kt             # Carrying out item stack requests, all or nothing
@@ -264,7 +282,8 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 
 ### Phase 4: Gameplay
 - [x] Creative inventory, from CloudburstMC's data
-- [ ] Block breaking and placing
+- [x] Block placing and breaking, taking the client's word for break times
+- [ ] Survival mining: cracks as blocks break, and what they drop
 - [x] Moving items around the player's inventory, and taking them from the creative inventory
 - [ ] Other inventories: chests, crafting and so on
 - [ ] Entities

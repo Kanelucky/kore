@@ -97,9 +97,10 @@ private val INPUT_FLAGS = InputFlag.entries.associateBy(InputFlag::id)
 
 /**
  * The client's input for one tick, with where it predicts its player is
- * now. It arrives every tick once the player is in the world. Kore reads it
- * as far as the movement; the item, block and vehicle actions after that
- * are for later.
+ * now. It arrives every tick once the player is in the world. Some actions
+ * ride along with it, so the server sees them in step with the movement:
+ * using an item on a block, a request to change items, and the steps of
+ * breaking a block. Kore reads as far as those; vehicles come after.
  */
 data class PlayerAuthInput(
     val pitch: Float,
@@ -113,7 +114,13 @@ data class PlayerAuthInput(
     val tick: Long,
     /** The flags set this tick that Kore acts on. Any others are left out. */
     val inputs: Set<InputFlag> = emptySet(),
-) : ClientPacket
+    val itemUse: ItemUse? = null,
+    val stackRequest: StackRequest? = null,
+    val blockActions: List<BlockAction> = emptyList(),
+) : ClientPacket {
+    /** Whether the player only moved this tick, with no action riding along. */
+    val onlyMoves get() = itemUse == null && stackRequest == null && blockActions.isEmpty()
+}
 
 /** The client has the chunks around it and has put its player in the world, naming the player's runtime ID from `StartGame`. */
 data class SetLocalPlayerAsInitialised(val runtimeId: Long) : ClientPacket
@@ -411,7 +418,12 @@ private fun decodePlayerAuthInput(buffer: ByteBuf): PlayerAuthInput {
     buffer.skipBytes(8) // Interact rotation
     val tick = buffer.readVarULong()
     val delta = buffer.readVec3()
-    return PlayerAuthInput(pitch, yaw, headYaw, position, delta, tick, inputs)
+    // Each action is there if a flag before it says so.
+    val itemUse = if (buffer.readBoolean()) buffer.readPackedItemUse() else null
+    val stackRequest = if (buffer.readBoolean()) buffer.readStackRequest() else null
+    // A request can end in an action Kore can't read past, and then the block actions can't be found.
+    val blockActions = if (stackRequest?.cutShort != true && buffer.readBoolean()) buffer.readList { readBlockAction() } else emptyList()
+    return PlayerAuthInput(pitch, yaw, headYaw, position, delta, tick, inputs, itemUse, stackRequest, blockActions)
 }
 
 fun decodeClientPacket(packet: ByteArray): ClientPacket {
@@ -426,6 +438,9 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             INTERACT -> Interact(action = buffer.readUnsignedByte().toInt(), targetRuntimeId = buffer.readVarULong())
             CONTAINER_CLOSE -> ContainerClose(buffer.readUnsignedByte().toInt(), buffer.readUnsignedByte().toInt(), buffer.readBoolean())
             ITEM_STACK_REQUEST -> decodeItemStackRequest(buffer)
+            INVENTORY_TRANSACTION -> decodeInventoryTransaction(buffer)
+            MOB_EQUIPMENT -> decodeMobEquipment(buffer)
+            PLAYER_ACTION -> decodePlayerAction(buffer)
             PLAYER_AUTH_INPUT -> decodePlayerAuthInput(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
