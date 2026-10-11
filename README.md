@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. The server answers the NetherNet discovery request, but players can't join yet.
+> Kore is in early development. The server completes NetherNet signaling, but players can't join yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -61,8 +61,10 @@ sequenceDiagram
 | Step | What happens | Kore status |
 | --- | --- | --- |
 | Discovery | `GET /v1/join` returns name, version, level and player counts as JSON | ✅ Implemented |
-| Offer / answer | `POST /v1/join/{networkId}` exchanges SDP with all ICE candidates included | 🚧 Logged, returns `501` |
+| Offer / answer | `POST /v1/join/{networkId}` exchanges SDP with all ICE candidates included. The answer is signed with the operator identity. | ✅ Implemented |
 | Peer connection | ICE, DTLS and SCTP bring up the `ReliableDataChannel` and `UnreliableDataChannel` | ⏳ Planned |
+
+Kore keeps its side of WebRTC as small as possible. It runs **ICE-lite** and takes the **passive DTLS** role, so it never initiates anything. It answers the client's connectivity checks on one UDP port and waits for the client's first DTLS message.
 
 ## 🚀 Getting Started
 
@@ -74,20 +76,28 @@ cd kore
 ./gradlew run
 ```
 
-Kore binds the signaling server to TCP port `19132`. Check that it's reachable:
+Kore uses port `19132` for both signaling (TCP) and gameplay (UDP), so open both in your firewall. Check that signaling is reachable:
 
 ```bash
 curl -i http://localhost:19132/v1/join
 ```
 
 ```json
-{"name":"Kore Server","protocol":2193,"version":"26.50","level":"world","players":0,"maxPlayers":20,"gameType":0}
+{"name":"Kore Server","protocol":2193,"version":"1.26.50","level":"world","players":0,"maxPlayers":20,"gameType":0}
 ```
 
-Every request is logged to the console. Set the `org.koremc` logger to `DEBUG` in `src/main/resources/logback.xml` (the default) to also see headers and SDP offers.
+Every request is logged to the console. Set the `org.koremc` logger to `DEBUG` in `src/main/resources/logback.xml` (the default) to also see headers and SDP offers. Player identity tokens are redacted from those logs.
+
+### 🔑 The Operator Key
+
+On first run, Kore creates `operator.key` in its working directory. Every SDP answer is signed with this key. Players connecting over plain HTTP are asked to trust it once, and then the client remembers it.
+
+- **Keep it safe.** Anyone holding it can sign answers as your server.
+- **Don't regenerate it.** A new key prompts every returning player again.
+- **Share it across servers** if you run several. Players then trust them all with one prompt.
 
 > [!NOTE]
-> Server settings live in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) until there's a config file. The defaults target 26.50 (protocol `2193`). Update `protocol` and `version` together when moving to a new client release.
+> Server settings live in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) until there's a config file. The defaults target 1.26.50 (protocol `2193`). Update `protocol` and `version` together when moving to a new client release. Behind NAT, set `advertisedAddresses` to your public IP so clients get a candidate they can reach.
 
 ## 🗂️ Project Layout
 
@@ -98,7 +108,13 @@ src/main/kotlin/
 └── network/
     ├── SignalingServer.kt           # Netty bootstrap and HTTP pipeline
     ├── NetherNetSignalingHandler.kt # Routes /v1/join requests
-    └── JoinInfo.kt                  # Discovery response body
+    ├── JoinInfo.kt                  # Discovery response body
+    └── rtc/
+        ├── Sdp.kt                   # Offer parsing and answer encoding
+        ├── LocalPeer.kt             # Builds answers from this server's WebRTC state
+        ├── Ice.kt                   # ICE credentials and host candidates
+        ├── DtlsCertificate.kt       # Self-signed DTLS certificate and fingerprint
+        └── OperatorIdentity.kt      # Operator key and a=identity assertions
 ```
 
 Packages follow the Kotlin convention of omitting the common root, so `org.koremc.network` lives in `src/main/kotlin/network/`.
@@ -108,12 +124,13 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 ### Phase 1: Transport
 - [x] Netty bootstrap with an HTTP/1.1 pipeline
 - [x] **NetherNet HTTP Signaling:** discovery (`GET /v1/join`)
-- [ ] **NetherNet HTTP Signaling:** SDP offer/answer (`POST /v1/join/{networkId}`)
+- [x] **NetherNet HTTP Signaling:** SDP offer/answer (`POST /v1/join/{networkId}`)
 - [ ] **UDP Channel Negotiation:** ICE, DTLS and SCTP
 - [ ] Message framing over reliable and unreliable data channels
 
 ### Phase 2: Protocol
 - [ ] Packet codec and registry
+- [ ] Verify client identity assertions in offers
 - [ ] Login, Xbox Live authentication and encryption
 - [ ] **Cloudburst NBT Parsing**
 - [ ] Resource pack and start game sequence
@@ -135,6 +152,7 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before openin
 
 ## 📚 References
 
+- [NetherNet HTTP Signaling: Partner Onboarding Guide](https://mojang.github.io/bedrock-protocol-docs/guides/nether-net-onboarding-guide/) from Mojang
 - [NetherNet](https://minecraft.wiki/w/NetherNet) and [Bedrock Edition protocol](https://minecraft.wiki/w/Bedrock_Edition_protocol) on the Minecraft Wiki
 - [CloudburstMC](https://github.com/CloudburstMC) for NBT and protocol libraries
 

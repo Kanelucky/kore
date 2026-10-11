@@ -16,26 +16,33 @@ import io.netty.handler.codec.http.HttpVersion
 import io.netty.handler.codec.http.QueryStringDecoder
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.koremc.network.rtc.InvalidOfferException
+import org.koremc.network.rtc.SdpAnswer
+import org.koremc.network.rtc.SdpOffer
+import org.koremc.network.rtc.parseOffer
 import org.slf4j.LoggerFactory
 import kotlin.text.Charsets.UTF_8
 
 private val log = LoggerFactory.getLogger(NetherNetSignalingHandler::class.java)
 
 private const val JOIN_PATH = "/v1/join"
+private val OFFER_PATH = Regex("$JOIN_PATH/([^/]+)")
+private val IDENTITY_LINE = Regex("(?m)^a=identity:.*$")
 
 /**
  * Routes the client's NetherNet signaling requests:
  *
  * - `GET /v1/join` returns [JoinInfo] as JSON. A 2xx here is how the client
  *   learns the server supports NetherNet at all.
- * - `POST /v1/join/{networkId}` carries the client's SDP offer. Answering it
- *   is the next milestone, so for now it is logged and rejected with 501.
+ * - `POST /v1/join/{networkId}` carries the client's SDP offer, answered by
+ *   [answerOffer]. The client makes one attempt and never retries.
  *
  * Anything else gets a 404.
  */
 @Sharable
 class NetherNetSignalingHandler(
     private val joinInfo: () -> JoinInfo,
+    private val answerOffer: (SdpOffer) -> SdpAnswer,
 ) : SimpleChannelInboundHandler<FullHttpRequest>() {
 
     override fun channelRead0(ctx: ChannelHandlerContext, request: FullHttpRequest) {
@@ -54,17 +61,36 @@ class NetherNetSignalingHandler(
         ctx.reply(request, route(request, path))
     }
 
-    private fun route(request: FullHttpRequest, path: String): FullHttpResponse = when {
-        request.method() == HttpMethod.GET && path == JOIN_PATH ->
-            jsonResponse(Json.encodeToString(joinInfo()))
+    private fun route(request: FullHttpRequest, path: String): FullHttpResponse {
+        val offerPath = OFFER_PATH.matchEntire(path)
+        return when {
+            request.method() == HttpMethod.GET && path == JOIN_PATH ->
+                response(HttpResponseStatus.OK, Json.encodeToString(joinInfo()), "application/json; charset=utf-8")
 
-        request.method() == HttpMethod.POST && path.startsWith("$JOIN_PATH/") -> {
-            val networkId = path.removePrefix("$JOIN_PATH/")
-            log.debug("SDP offer for network {}:\n{}", networkId, request.content().toString(UTF_8))
-            textResponse(HttpResponseStatus.NOT_IMPLEMENTED)
+            request.method() == HttpMethod.POST && offerPath != null ->
+                answer(networkId = offerPath.groupValues[1], sdp = request.content().toString(UTF_8))
+
+            else -> textResponse(HttpResponseStatus.NOT_FOUND)
+        }
+    }
+
+    private fun answer(networkId: String, sdp: String): FullHttpResponse {
+        // The identity line carries the player's auth token, which has no business in a log file.
+        log.debug("SDP offer from network {}:\n{}", networkId, sdp.replace(IDENTITY_LINE, "a=identity:<redacted>"))
+
+        val offer = try {
+            parseOffer(sdp)
+        } catch (e: InvalidOfferException) {
+            log.warn("Rejected offer from network {}: {}", networkId, e.message)
+            return textResponse(HttpResponseStatus.BAD_REQUEST)
         }
 
-        else -> textResponse(HttpResponseStatus.NOT_FOUND)
+        val answer = answerOffer(offer)
+        log.info(
+            "Answered network {} ({} candidates, {} identity)",
+            networkId, offer.candidates.size, if (offer.identity != null) "with" else "no",
+        )
+        return response(HttpResponseStatus.OK, answer.encode(), "application/sdp")
     }
 
     override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
@@ -81,9 +107,6 @@ private fun ChannelHandlerContext.reply(request: FullHttpRequest, response: Full
     val write = writeAndFlush(response)
     if (!keepAlive) write.addListener(ChannelFutureListener.CLOSE)
 }
-
-private fun jsonResponse(body: String) =
-    response(HttpResponseStatus.OK, body, "application/json; charset=utf-8")
 
 private fun textResponse(status: HttpResponseStatus) =
     response(status, status.reasonPhrase(), "text/plain; charset=utf-8")

@@ -69,3 +69,5 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+### Kore runtime ###
+operator.key
