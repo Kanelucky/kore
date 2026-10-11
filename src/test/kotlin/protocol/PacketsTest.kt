@@ -55,6 +55,37 @@ class PacketsTest {
     }
 
     @Test
+    fun `an empty resource pack list is four flags, a blank template and no packs`() {
+        val expected = bytes(0x06, 0x00, 0x00, 0x00, 0x00) + ByteArray(16) + bytes(0x00, 0x00)
+
+        assertContentEquals(expected, ResourcePacksInfo().encode())
+    }
+
+    @Test
+    fun `the pack stack counts experiments with a plain uint32`() {
+        assertContentEquals(bytes(0x07, 0x00, 0x00, 0x01, '*'.code, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00), ResourcePackStack().encode())
+        assertContentEquals(
+            bytes(0x07, 0x00, 0x00, 0x01, '*'.code, 0x01, 0x00, 0x00, 0x00) + bytes(0x07) + "cameras".toByteArray() + bytes(0x01, 0x01, 0x00),
+            ResourcePackStack(experiments = mapOf("cameras" to true)).encode(),
+        )
+    }
+
+    @Test
+    fun `resource pack responses carry a tag and its name`() {
+        val finished = bytes(0x08, 0x02, 19) + "downloadingfinished".toByteArray()
+        val downloading = bytes(0x08, 0x01, 11) + "downloading".toByteArray() + bytes(0x01, 0x03) + "a-b".toByteArray()
+
+        assertEquals(ResourcePackClientResponse(ResourcePackClientResponse.Response.DOWNLOADING_FINISHED), decodeClientPacket(finished))
+        assertEquals(ResourcePackClientResponse(ResourcePackClientResponse.Response.DOWNLOADING, listOf("a-b")), decodeClientPacket(downloading))
+        assertFailsWith<PacketException> { decodeClientPacket(bytes(0x08, 0x09, 0x00)) }
+    }
+
+    @Test
+    fun `client cache status is a single flag`() {
+        assertEquals(ClientCacheStatus(supported = true), decodeClientPacket(bytes(0x81, 0x01, 0x01)))
+    }
+
+    @Test
     fun `packets Kore doesn't decode yet pass through`() {
         val packet = assertIs<UnhandledPacket>(decodeClientPacket(bytes(0x05, 0x01, 0x02)))
 

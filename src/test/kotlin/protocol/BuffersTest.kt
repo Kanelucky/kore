@@ -47,6 +47,22 @@ class BuffersTest {
     }
 
     @Test
+    fun `uuids go out as two little-endian halves`() {
+        val uuid = java.util.UUID.fromString("00112233-4455-6677-8899-aabbccddeeff")
+
+        assertContentEquals(
+            byteArrayOf(0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00, -1, -18, -35, -52, -69, -86, -103, -120),
+            encode { writeUuid(uuid) },
+        )
+    }
+
+    @Test
+    fun `lists can't claim more items than bytes remain`() {
+        assertEquals(listOf("a", "b"), Unpooled.wrappedBuffer(byteArrayOf(2, 1, 'a'.code.toByte(), 1, 'b'.code.toByte())).readList { readString() })
+        assertFailsWith<PacketException> { Unpooled.wrappedBuffer(byteArrayOf(-1, -1, -1, -1, 0x07)).readList { readString() } }
+    }
+
+    @Test
     fun `lengths past the end are rejected`() {
         assertFailsWith<PacketException> { Unpooled.wrappedBuffer(byteArrayOf(10, 1, 2)).readByteArray() }
         assertFailsWith<PacketException> { Unpooled.wrappedBuffer(byteArrayOf(-1, -1, -1, -1)).readIntLEString() }

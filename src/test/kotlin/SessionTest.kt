@@ -11,6 +11,7 @@ import org.koremc.protocol.clientDataToken
 import org.koremc.protocol.connectionRequest
 import org.koremc.protocol.loginPacket
 import org.koremc.protocol.tokenAuthentication
+import org.koremc.protocol.writeString
 import org.koremc.protocol.writeVarUInt
 import java.security.interfaces.ECPublicKey
 import kotlin.test.Test
@@ -57,7 +58,7 @@ class SessionTest {
     }
 
     @Test
-    fun `an authenticated login sets the player`() {
+    fun `an authenticated login gets login success and the pack list together`() {
         negotiateSettings()
 
         // The skin makes the batch big enough to be compressed, as real logins are.
@@ -68,7 +69,35 @@ class SessionTest {
         assertEquals(XUID, player?.xuid)
         assertEquals(true, player?.verified)
         assertEquals("1.26.50", session.login?.clientInfo?.gameVersion)
+
+        val (loginSuccess, packsInfo) = batches.decode(sent.single())
+        assertContentEquals(bytes(0x02, 0x00, 0x00, 0x00, 0x00), loginSuccess)
+        assertEquals(0x06, packsInfo[0].toInt())
+    }
+
+    @Test
+    fun `resource packs end with the client ready to spawn`() {
+        logIn()
+
+        clientSends(clientCacheStatus(supported = true))
+        clientSends(packResponse(2, "downloadingfinished"))
+        assertEquals(0x07, receivedPacket()[0].toInt())
+        assertTrue(!session.isReadyToSpawn)
+
+        clientSends(packResponse(3, "resourcepackstackfinished"))
+        assertTrue(session.isReadyToSpawn)
+        assertTrue(session.cacheSupported)
+    }
+
+    @Test
+    fun `a client that cancels during resource packs goes no further`() {
+        logIn()
+
+        clientSends(packResponse(0, "cancel"))
+        clientSends(packResponse(2, "downloadingfinished"))
+
         assertTrue(sent.isEmpty())
+        assertTrue(!session.isReadyToSpawn)
     }
 
     @Test
@@ -107,6 +136,18 @@ class SessionTest {
         sent.clear()
         batches.enableCompression(256)
     }
+
+    private fun logIn() {
+        negotiateSettings()
+        clientSends(login(authority.multiplayerToken(clientKey)))
+        sent.clear()
+    }
+
+    private fun clientCacheStatus(supported: Boolean) =
+        ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(129).writeBoolean(supported))
+
+    private fun packResponse(tag: Int, name: String) =
+        ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(8).writeVarUInt(tag).writeString(name))
 
     private fun clientSends(packet: ByteArray) = session.receive(batches.encode(listOf(packet)))
 

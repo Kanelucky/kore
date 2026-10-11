@@ -3,12 +3,17 @@ package org.koremc.protocol
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
+import java.util.UUID
 
 // Packet IDs and layouts follow Mojang's protocol schemas for 1.26.50 (protocol 2193):
 // https://github.com/Mojang/bedrock-protocol-docs
 private const val LOGIN = 1
 private const val PLAY_STATUS = 2
 private const val DISCONNECT = 5
+private const val RESOURCE_PACKS_INFO = 6
+private const val RESOURCE_PACK_STACK = 7
+private const val RESOURCE_PACK_CLIENT_RESPONSE = 8
+private const val CLIENT_CACHE_STATUS = 129
 private const val NETWORK_SETTINGS = 143
 private const val REQUEST_NETWORK_SETTINGS = 193
 
@@ -23,6 +28,31 @@ data class RequestNetworkSettings(val protocol: Int) : ClientPacket
 
 /** The client's protocol version again, and its connection request: who it claims to be, plus its client data. */
 class Login(val protocol: Int, val connectionRequest: ByteArray) : ClientPacket
+
+/** Whether the client supports the blob cache, which saves resending chunk data it already has. */
+data class ClientCacheStatus(val supported: Boolean) : ClientPacket
+
+/** The client's answer during resource pack negotiation. */
+data class ResourcePackClientResponse(
+    val response: Response,
+    /** The packs the client wants, when it's [Response.DOWNLOADING]. */
+    val packs: List<String> = emptyList(),
+) : ClientPacket {
+    /** Declared in wire order. Each is sent as its ordinal, followed by its name as a string. */
+    enum class Response {
+        /** The client won't accept the packs and is leaving. */
+        CANCEL,
+
+        /** The client wants [packs] sent. */
+        DOWNLOADING,
+
+        /** The client has every pack it was offered. */
+        DOWNLOADING_FINISHED,
+
+        /** The client has applied the pack stack and is ready for the world. */
+        RESOURCE_PACK_STACK_FINISHED,
+    }
+}
 
 /** A packet Kore doesn't decode yet. */
 class UnhandledPacket(val id: Int, val payload: ByteArray) : ClientPacket {
@@ -107,17 +137,72 @@ data class Disconnect(
     }
 }
 
+/**
+ * Lists the resource packs the client needs before joining. Kore has none
+ * yet, so it sends an empty list, and the client replies that it has
+ * everything already.
+ */
+data class ResourcePacksInfo(
+    val packsRequired: Boolean = false,
+    val forceDisableVibrantVisuals: Boolean = false,
+) : ServerPacket {
+    override val id get() = RESOURCE_PACKS_INFO
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeBoolean(packsRequired)
+        out.writeBoolean(false) // Has add-on packs
+        out.writeBoolean(false) // Has client scripts
+        out.writeBoolean(forceDisableVibrantVisuals)
+        out.writeUuid(UUID(0, 0)) // No world template
+        out.writeString("") // World template version
+        out.writeVarUInt(0) // Resource packs
+    }
+}
+
+/** The order to apply packs in. Kore's is empty: just the vanilla packs the client already has. */
+data class ResourcePackStack(
+    /** The vanilla packs to build on. `*` means whatever version the client has. */
+    val baseGameVersion: String = "*",
+    val experiments: Map<String, Boolean> = emptyMap(),
+) : ServerPacket {
+    override val id get() = RESOURCE_PACK_STACK
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeBoolean(false) // Packs required
+        out.writeVarUInt(0) // Resource packs
+        out.writeString(baseGameVersion)
+        // Experiments count as a plain little-endian uint32 here, not a varint.
+        out.writeIntLE(experiments.size)
+        experiments.forEach { (name, enabled) ->
+            out.writeString(name)
+            out.writeBoolean(enabled)
+        }
+        out.writeBoolean(experiments.isNotEmpty()) // Experiments ever toggled
+        out.writeBoolean(false) // Include editor packs
+    }
+}
+
 fun decodeClientPacket(packet: ByteArray): ClientPacket {
     val buffer = Unpooled.wrappedBuffer(packet)
     return try {
         when (val id = buffer.readVarUInt() and PACKET_ID_MASK) {
             REQUEST_NETWORK_SETTINGS -> RequestNetworkSettings(protocol = buffer.readInt())
             LOGIN -> Login(protocol = buffer.readInt(), connectionRequest = buffer.readByteArray())
+            CLIENT_CACHE_STATUS -> ClientCacheStatus(supported = buffer.readBoolean())
+            RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
         }
     } catch (e: IndexOutOfBoundsException) {
         throw PacketException("packet ends early")
     }
+}
+
+private fun decodeResourcePackClientResponse(buffer: ByteBuf): ResourcePackClientResponse {
+    val tag = buffer.readVarUInt()
+    val response = ResourcePackClientResponse.Response.entries.getOrNull(tag) ?: throw PacketException("unknown resource pack response $tag")
+    buffer.readString() // The response's name, which only repeats the tag
+    val packs = if (response == ResourcePackClientResponse.Response.DOWNLOADING) buffer.readList { readString() } else emptyList()
+    return ResourcePackClientResponse(response, packs)
 }
 
 fun ServerPacket.encode(): ByteArray {

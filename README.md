@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. The NetherNet transport is complete and Kore authenticates logins, but players can't join a world yet.
+> Kore is in early development. Players can log in and get through resource packs, but there's no world to spawn into yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -184,7 +184,8 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Network settings negotiation and protocol version checks
 - [x] Reading the login's connection request and client data
 - [x] Verify login tokens, and bind them to the identity in the client's offer
-- [ ] Login success, resource packs and the start game sequence
+- [x] Login success and resource pack negotiation (no server packs yet)
+- [ ] Start game sequence
 - [ ] Packet registry for the rest of the protocol
 - [ ] **Cloudburst NBT Parsing**
 

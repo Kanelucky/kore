@@ -3,6 +3,7 @@ package org.koremc
 import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ClientPacket
 import org.koremc.protocol.Disconnect
 import org.koremc.protocol.Login
@@ -11,6 +12,9 @@ import org.koremc.protocol.NetworkSettings
 import org.koremc.protocol.PacketException
 import org.koremc.protocol.PlayStatus
 import org.koremc.protocol.RequestNetworkSettings
+import org.koremc.protocol.ResourcePackClientResponse
+import org.koremc.protocol.ResourcePackStack
+import org.koremc.protocol.ResourcePacksInfo
 import org.koremc.protocol.ServerPacket
 import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
@@ -32,7 +36,12 @@ private const val COMPRESSION_THRESHOLD = 256
  *    failed `PlayStatus`; a match gets `NetworkSettings`, after which every
  *    batch is compressed.
  * 2. `Login` carries the client's identity and client data, which must
- *    authenticate. A login that doesn't gets a `Disconnect`.
+ *    authenticate. A login that doesn't gets a `Disconnect`. One that does
+ *    gets `PlayStatus(LOGIN_SUCCESS)` straight away: NetherNet has no
+ *    encryption handshake, since DTLS already covers it.
+ * 3. Resource packs. Kore offers none, the client answers that it has them
+ *    all, Kore sends the (vanilla) pack stack, and the client confirms it
+ *    has applied it. It's then ready for `StartGame`.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
@@ -44,7 +53,7 @@ class Session(
     private val authenticator: LoginAuthenticator,
     private val send: (ByteArray) -> Unit,
 ) {
-    private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, AUTHENTICATED, REJECTED }
+    private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, NEGOTIATING_RESOURCE_PACKS, READY_TO_SPAWN, CLOSED }
 
     private val batches = BatchCodec()
     private var state = State.AWAITING_NETWORK_SETTINGS_REQUEST
@@ -56,6 +65,13 @@ class Session(
     /** The authenticated login, kept for its client data: settings, skin and so on, which only the player's key vouches for. */
     var login: LoginRequest? = null
         private set
+
+    /** Whether the client can reuse chunk data it has cached, as it said once logged in. */
+    var cacheSupported = false
+        private set
+
+    /** Whether the client has finished logging in and applying packs, and is waiting for the world. */
+    val isReadyToSpawn get() = state == State.READY_TO_SPAWN
 
     fun receive(message: ByteArray) {
         val packets = try {
@@ -71,7 +87,12 @@ class Session(
         when (state) {
             State.AWAITING_NETWORK_SETTINGS_REQUEST -> if (packet is RequestNetworkSettings) onRequestNetworkSettings(packet) else unexpected(packet)
             State.AWAITING_LOGIN -> if (packet is Login) onLogin(packet) else unexpected(packet)
-            State.AUTHENTICATED, State.REJECTED -> unexpected(packet)
+            State.NEGOTIATING_RESOURCE_PACKS -> when (packet) {
+                is ClientCacheStatus -> cacheSupported = packet.supported
+                is ResourcePackClientResponse -> onResourcePackResponse(packet)
+                else -> unexpected(packet)
+            }
+            State.READY_TO_SPAWN, State.CLOSED -> unexpected(packet)
         }
     }
 
@@ -105,20 +126,45 @@ class Session(
         }
         this.player = player
         login = request
-        state = State.AUTHENTICATED
 
         val client = request.clientInfo
         log.info(
-            "{} ({}, {}) authenticated on network {}{}: {} {}, OS {}, {}",
+            "{} ({}, {}) logged in on network {}{}: {} {}, OS {}, {}",
             player.displayName, player.xuid ?: "no XUID", player.uuid, networkId,
             if (player.verified) "" else " without verification (offline mode)",
             request.authenticationType ?: "unknown sign-in", client.gameVersion, client.deviceOs, client.languageCode,
         )
+
+        // The pack list follows login success in the same batch, as the client asks for it next anyway.
+        send(PlayStatus(PlayStatus.Status.LOGIN_SUCCESS), ResourcePacksInfo())
+        state = State.NEGOTIATING_RESOURCE_PACKS
+    }
+
+    private fun onResourcePackResponse(packet: ResourcePackClientResponse) {
+        when (packet.response) {
+            ResourcePackClientResponse.Response.DOWNLOADING_FINISHED -> send(ResourcePackStack())
+
+            // Kore offered nothing, so there's nothing to download. Carry on as though the client had everything.
+            ResourcePackClientResponse.Response.DOWNLOADING -> {
+                log.debug("Network {} asked for packs Kore never offered: {}", networkId, packet.packs)
+                send(ResourcePackStack())
+            }
+
+            ResourcePackClientResponse.Response.RESOURCE_PACK_STACK_FINISHED -> {
+                state = State.READY_TO_SPAWN
+                log.info("{} is ready to spawn", player?.displayName)
+            }
+
+            ResourcePackClientResponse.Response.CANCEL -> {
+                log.info("{} cancelled joining during resource packs", player?.displayName)
+                state = State.CLOSED
+            }
+        }
     }
 
     private fun reject() {
         send(Disconnect(Disconnect.Reason.NOT_AUTHENTICATED))
-        state = State.REJECTED
+        state = State.CLOSED
     }
 
     /** Turns away clients on another protocol, telling them whose version is behind. */
@@ -128,7 +174,7 @@ class Session(
         log.info("Network {} speaks protocol {}, but Kore speaks {}", networkId, clientProtocol, protocol)
         val status = if (clientProtocol < protocol) PlayStatus.Status.LOGIN_FAILED_CLIENT_OLD else PlayStatus.Status.LOGIN_FAILED_SERVER_OLD
         send(PlayStatus(status))
-        state = State.REJECTED
+        state = State.CLOSED
         return false
     }
 
@@ -136,7 +182,8 @@ class Session(
         log.debug("Ignored {} from network {} while {}", packet, networkId, state)
     }
 
-    private fun send(packet: ServerPacket) = send(batches.encode(listOf(packet.encode())))
+    /** Sends [packets] together in one batch. */
+    private fun send(vararg packets: ServerPacket) = send(batches.encode(packets.map { it.encode() }))
 }
 
 /** Every connected player's session, driven by the transport's connection callbacks on the UDP event loop. */

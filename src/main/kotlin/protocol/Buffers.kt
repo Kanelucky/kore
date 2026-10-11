@@ -1,6 +1,7 @@
 package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
+import java.util.UUID
 
 /** Thrown when a client sends bytes that don't decode as what they claim to be. */
 class PacketException(message: String) : Exception(message)
@@ -37,6 +38,16 @@ fun ByteBuf.writeByteArray(bytes: ByteArray): ByteBuf = writeVarUInt(bytes.size)
 fun ByteBuf.readString(): String = readByteArray().decodeToString()
 
 fun ByteBuf.writeString(value: String): ByteBuf = writeByteArray(value.encodeToByteArray())
+
+/** A UUID as two little-endian 64-bit halves, most significant first. */
+fun ByteBuf.writeUuid(uuid: UUID): ByteBuf = writeLongLE(uuid.mostSignificantBits).writeLongLE(uuid.leastSignificantBits)
+
+/** A varuint32 count followed by that many items, refusing counts the remaining bytes couldn't possibly hold. */
+fun <T> ByteBuf.readList(readItem: ByteBuf.() -> T): List<T> {
+    val count = readVarUInt()
+    if (count < 0 || count > readableBytes()) throw PacketException("list of $count items can't fit in ${readableBytes()} bytes")
+    return List(count) { readItem() }
+}
 
 /** A UTF-8 string behind a little-endian int32 length, as the login connection request uses. */
 fun ByteBuf.readIntLEString(): String = ByteArray(readLength(readIntLE())).also { readBytes(it) }.decodeToString()
