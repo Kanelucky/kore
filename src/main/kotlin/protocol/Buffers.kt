@@ -4,6 +4,7 @@ import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufOutputStream
 import org.cloudburstmc.nbt.NbtMap
 import org.cloudburstmc.nbt.NbtUtils
+import org.koremc.world.BlockPos
 import java.util.UUID
 
 /** Thrown when a client sends bytes that don't decode as what they claim to be. */
@@ -29,6 +30,16 @@ fun ByteBuf.writeVarUInt(value: Int): ByteBuf {
     return writeByte(remaining)
 }
 
+fun ByteBuf.readVarULong(): Long {
+    var value = 0L
+    for (shift in 0 until 70 step 7) {
+        val byte = readByte().toInt()
+        value = value or ((byte and 0x7F).toLong() shl shift)
+        if (byte and 0x80 == 0) return value
+    }
+    throw PacketException("varuint64 runs past ten bytes")
+}
+
 fun ByteBuf.writeVarULong(value: Long): ByteBuf {
     var remaining = value
     while (remaining and 0x7FL.inv() != 0L) {
@@ -52,6 +63,9 @@ fun ByteBuf.writeByteArray(bytes: ByteArray): ByteBuf = writeVarUInt(bytes.size)
 fun ByteBuf.readString(): String = readByteArray().decodeToString()
 
 fun ByteBuf.writeString(value: String): ByteBuf = writeByteArray(value.encodeToByteArray())
+
+/** A block position as three zigzagged varints. */
+fun ByteBuf.writeBlockPos(pos: BlockPos): ByteBuf = writeVarInt(pos.x).writeVarInt(pos.y).writeVarInt(pos.z)
 
 /** A UUID as two little-endian 64-bit halves, most significant first. */
 fun ByteBuf.writeUuid(uuid: UUID): ByteBuf = writeLongLE(uuid.mostSignificantBits).writeLongLE(uuid.leastSignificantBits)

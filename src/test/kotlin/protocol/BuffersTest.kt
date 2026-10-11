@@ -41,6 +41,14 @@ class BuffersTest {
     }
 
     @Test
+    fun `64-bit varuints round trip`() {
+        for (value in listOf(0L, 1L, 300L, Long.MAX_VALUE, Long.MIN_VALUE, -1L)) {
+            assertEquals(value, Unpooled.wrappedBuffer(encode { writeVarULong(value) }).readVarULong())
+        }
+        assertFailsWith<PacketException> { Unpooled.wrappedBuffer(ByteArray(11) { -1 }).readVarULong() }
+    }
+
+    @Test
     fun `overlong varuints are rejected`() {
         assertFailsWith<PacketException> { Unpooled.wrappedBuffer(byteArrayOf(-1, -1, -1, -1, -1, 0)).readVarUInt() }
     }

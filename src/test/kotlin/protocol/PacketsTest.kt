@@ -138,6 +138,31 @@ class PacketsTest {
     }
 
     @Test
+    fun `the client names its player's runtime ID once it has spawned`() {
+        assertEquals(SetLocalPlayerAsInitialised(runtimeId = 300), decodeClientPacket(bytes(0x71, 0xAC, 0x02)))
+    }
+
+    @Test
+    fun `jigsaw structure data is a compound of four empty lists`() {
+        val list = { name: String -> bytes(0x09, name.length) + name.toByteArray() + bytes(0x0A, 0x00) } // Compounds, none of them
+
+        val expected = bytes(0xB9, 0x02, 0x0A, 0x00) +
+            list("jigsaws") + list("processors") + list("structure_sets") + list("template_pools") + bytes(0x00)
+
+        assertContentEquals(expected, JigsawStructureData.encode())
+    }
+
+    @Test
+    fun `empty voxel shapes are two empty lists and a zero count`() {
+        assertContentEquals(bytes(0xD1, 0x02, 0x00, 0x00, 0x00, 0x00), VoxelShapes.encode())
+    }
+
+    @Test
+    fun `an empty creative inventory is two empty lists`() {
+        assertContentEquals(bytes(0x91, 0x01, 0x00, 0x00), CreativeContent.encode())
+    }
+
+    @Test
     fun `chunk radius packets zigzag the radius`() {
         assertEquals(RequestChunkRadius(radius = 16, maxRadius = 16), decodeClientPacket(bytes(0x45, 0x20, 0x10)))
         assertContentEquals(bytes(0x46, 0x10), ChunkRadiusUpdated(8).encode())

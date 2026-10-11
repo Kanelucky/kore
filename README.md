@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Players can log in and receive the game's start, but there are no chunks to spawn into yet.
+> Kore is in early development. Players can join and spawn into a flat world, but Kore doesn't follow them as they move, or let them do anything there, yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -139,6 +139,14 @@ Clients expect the server to agree with them about the game itself: which items 
 
 The data must be for the same client release as `version` in `ServerConfig`.
 
+### 🌍 The World
+
+Until worlds load from disk, every player joins the vanilla flat world: bedrock, two layers of dirt and grass on top, all plains. They appear at `0, -60, 0`, standing on the grass.
+
+Once the client says how far it wants to see, Kore settles on a radius no larger than `viewDistance` (8 chunks by default). It then sends every chunk within that circle whole, nearest first, so the client never has to ask for sub-chunks one at a time. Only then does the player spawn. All the chunks are identical, so the flat world builds just one and sends it everywhere.
+
+Chunks name biomes by number, and Cloudburst's data has none for vanilla biomes. For now, plains is hard-coded as biome `1`.
+
 > [!NOTE]
 > Server settings live in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) until there's a config file. The defaults target 1.26.50 (protocol `2193`). Update `protocol` and `version` together, along with the [vanilla data](#-vanilla-data), when moving to a new client release. Behind NAT, set `advertisedAddresses` to your public IP so clients get a candidate they can reach.
 
@@ -158,7 +166,13 @@ src/main/kotlin/
 │   ├── Batch.kt                     # Batching packets, with zlib compression
 │   ├── Packets.kt                   # Packet types and their encodings
 │   ├── StartGame.kt                 # The packet that sets up the world on the client
+│   ├── LevelChunk.kt                # Chunk columns and paletted storage on the wire
 │   └── LoginRequest.kt              # Reading who a client claims to be
+├── world/
+│   ├── Positions.kt                 # Block, chunk and exact positions
+│   ├── PalettedStorage.kt           # A sub-chunk's worth of values, as a palette and indices
+│   ├── Chunk.kt                     # Chunk columns, and which are in a player's view
+│   └── FlatWorld.kt                 # The same layers in every column
 ├── registry/
 │   ├── VanillaData.kt               # Loads the game's items, block states and biomes on start
 │   ├── Items.kt                     # Items, as the client's item registry lists them
@@ -210,7 +224,7 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] **Cloudburst NBT Parsing**
 - [x] Vanilla item registry and block state hashes, from CloudburstMC's data
 - [x] Biome definitions
-- [ ] Chunks and spawning
+- [x] Chunks and spawning, in a flat world
 - [ ] Packet registry for the rest of the protocol
 
 ### Phase 3: World

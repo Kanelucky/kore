@@ -4,6 +4,9 @@ import org.cloudburstmc.nbt.NbtMap
 import org.cloudburstmc.nbt.NbtUtils
 import java.io.ByteArrayOutputStream
 
+/** The block that fills any space nothing else does. It has no properties. */
+const val AIR = "minecraft:air"
+
 /** The block that stands in for any the client doesn't know. Its network ID is fixed rather than hashed. */
 const val UNKNOWN_BLOCK = "minecraft:unknown"
 private const val UNKNOWN_BLOCK_NETWORK_ID = -2
@@ -66,4 +69,8 @@ class BlockPalette(val states: List<BlockState>) {
 
     /** The state the client means by [networkId], or null if Kore doesn't know it. */
     operator fun get(networkId: Int): BlockState? = byNetworkId[networkId]
+
+    /** The state of [name] with [properties], which must be one the client knows. Mind the properties' types, as [blockStateHash] explains. */
+    fun stateOf(name: String, properties: Map<String, Any> = emptyMap()): BlockState =
+        get(blockStateHash(name, properties))?.takeIf { it.name == name } ?: throw IllegalArgumentException("No block state $name $properties")
 }

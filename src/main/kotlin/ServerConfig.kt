@@ -1,7 +1,6 @@
 package org.koremc
 
 import org.koremc.network.JoinInfo
-import org.koremc.protocol.BlockPos
 import org.koremc.protocol.Difficulty
 import org.koremc.protocol.GameMode
 import java.nio.file.Path
@@ -32,8 +31,6 @@ data class ServerConfig(
     val gameMode: GameMode = GameMode.SURVIVAL,
     val difficulty: Difficulty = Difficulty.NORMAL,
     val seed: Long = 0,
-    /** Where new players appear: the block their feet stand in. */
-    val spawn: BlockPos = BlockPos(0, 64, 0),
     /** The most chunks around each player Kore will send, whatever the client asks for. */
     val viewDistance: Int = 8,
     // Must match the client's protocol number and version string.

@@ -3,6 +3,8 @@ package org.koremc.protocol
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
+import org.cloudburstmc.nbt.NbtMap
+import org.cloudburstmc.nbt.NbtType
 import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.ItemDefinition
 import java.util.UUID
@@ -17,11 +19,15 @@ private const val RESOURCE_PACK_STACK = 7
 private const val RESOURCE_PACK_CLIENT_RESPONSE = 8
 private const val REQUEST_CHUNK_RADIUS = 69
 private const val CHUNK_RADIUS_UPDATED = 70
+private const val SET_LOCAL_PLAYER_AS_INITIALISED = 113
 private const val BIOME_DEFINITION_LIST = 122
 private const val CLIENT_CACHE_STATUS = 129
+private const val CREATIVE_CONTENT = 145
 private const val ITEM_REGISTRY = 162
 private const val NETWORK_SETTINGS = 143
 private const val REQUEST_NETWORK_SETTINGS = 193
+private const val JIGSAW_STRUCTURE_DATA = 313
+private const val VOXEL_SHAPES = 337
 
 /** The low ten bits of a packet header hold its ID. The rest name split-screen sub-clients, which Kore doesn't support. */
 private const val PACKET_ID_MASK = 0x3FF
@@ -62,6 +68,9 @@ data class ResourcePackClientResponse(
 
 /** How many chunks around the player the client wants to see, and the most it can handle. */
 data class RequestChunkRadius(val radius: Int, val maxRadius: Int) : ClientPacket
+
+/** The client has the chunks around it and has put its player in the world, naming the player's runtime ID from `StartGame`. */
+data class SetLocalPlayerAsInitialised(val runtimeId: Long) : ClientPacket
 
 /** A packet Kore doesn't decode yet. */
 class UnhandledPacket(val id: Int, val payload: ByteArray) : ClientPacket {
@@ -262,6 +271,52 @@ class BiomeDefinitionList(val biomes: List<BiomeDefinition>) : ServerPacket {
     }
 }
 
+/**
+ * The game's jigsaw structure rules, which a client generating its own
+ * terrain would use. Kore's clients don't, so every list is empty, but the
+ * client still disconnects ("Missing structure data from server") unless
+ * this arrives before `StartGame`.
+ */
+data object JigsawStructureData : ServerPacket {
+    override val id get() = JIGSAW_STRUCTURE_DATA
+
+    private val empty = NbtMap.builder().apply {
+        for (key in listOf("jigsaws", "processors", "structure_sets", "template_pools")) putList(key, NbtType.COMPOUND, emptyList())
+    }.build()
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeNbt(empty)
+    }
+}
+
+/**
+ * Collision shapes for custom blocks. Kore has none, but Mojang's docs say
+ * to always send this before `StartGame` too.
+ */
+data object VoxelShapes : ServerPacket {
+    override val id get() = VOXEL_SHAPES
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarUInt(0) // Shapes
+        out.writeVarUInt(0) // Shape names
+        out.writeShortLE(0) // Custom shapes among them
+    }
+}
+
+/**
+ * The creative inventory's groups and items. Kore has none to offer yet,
+ * but the vanilla server sends this to every joining player, so Kore sends
+ * it empty.
+ */
+data object CreativeContent : ServerPacket {
+    override val id get() = CREATIVE_CONTENT
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarUInt(0) // Groups
+        out.writeVarUInt(0) // Items
+    }
+}
+
 /** The view distance the server settled on, in chunks. */
 data class ChunkRadiusUpdated(val radius: Int) : ServerPacket {
     override val id get() = CHUNK_RADIUS_UPDATED
@@ -279,6 +334,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             LOGIN -> Login(protocol = buffer.readInt(), connectionRequest = buffer.readByteArray())
             CLIENT_CACHE_STATUS -> ClientCacheStatus(supported = buffer.readBoolean())
             REQUEST_CHUNK_RADIUS -> RequestChunkRadius(radius = buffer.readVarInt(), maxRadius = buffer.readUnsignedByte().toInt())
+            SET_LOCAL_PLAYER_AS_INITIALISED -> SetLocalPlayerAsInitialised(runtimeId = buffer.readVarULong())
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
         }

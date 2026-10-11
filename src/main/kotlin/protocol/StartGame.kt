@@ -2,6 +2,8 @@ package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
 import org.cloudburstmc.nbt.NbtMap
+import org.koremc.world.BlockPos
+import org.koremc.world.Vec3
 import java.util.UUID
 
 private const val START_GAME = 11
@@ -25,10 +27,6 @@ enum class PermissionLevel { VISITOR, MEMBER, OPERATOR, CUSTOM }
 
 /** How the world was generated, which shapes the client's sky and void. Declared in wire order. */
 enum class Generator { LEGACY, OVERWORLD, FLAT, NETHER, THE_END, VOID }
-
-data class Vec3(val x: Float, val y: Float, val z: Float)
-
-data class BlockPos(val x: Int, val y: Int, val z: Int)
 
 /**
  * Sets up the world on the client: who the player is, where they stand,
@@ -169,10 +167,4 @@ private fun ByteBuf.writeVec3(vec: Vec3) {
     writeFloatLE(vec.x)
     writeFloatLE(vec.y)
     writeFloatLE(vec.z)
-}
-
-private fun ByteBuf.writeBlockPos(pos: BlockPos) {
-    writeVarInt(pos.x)
-    writeVarInt(pos.y)
-    writeVarInt(pos.z)
 }

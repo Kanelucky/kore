@@ -16,6 +16,7 @@ import org.koremc.network.rtc.localAddresses
 import org.koremc.network.rtc.maxSendableMessageSize
 import org.koremc.network.rtc.verifiedClientKey
 import org.koremc.registry.VanillaData
+import org.koremc.world.FlatWorld
 import org.slf4j.LoggerFactory
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -50,7 +51,8 @@ fun main() {
     if (config.onlineMode) auth.start() else log.warn("Offline mode: players aren't authenticated, so anyone can join as anyone")
 
     val peers = Peers()
-    val sessions = Sessions(config, vanilla, LoginAuthenticator(auth.verifier, config.onlineMode))
+    val world = FlatWorld.vanilla(vanilla.blocks)
+    val sessions = Sessions(config, vanilla, world, LoginAuthenticator(auth.verifier, config.onlineMode))
 
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),

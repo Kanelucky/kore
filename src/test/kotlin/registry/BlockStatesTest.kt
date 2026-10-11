@@ -65,6 +65,16 @@ class BlockStatesTest {
     }
 
     @Test
+    fun `states are looked up by name and properties, and must exist`() {
+        val lit = BlockState("minecraft:blue_candle", states("candles" to 3, "lit" to 1.toByte()), version = 18168865)
+        val palette = BlockPalette(listOf(lit))
+
+        assertEquals(lit, palette.stateOf("minecraft:blue_candle", mapOf<String, Any>("lit" to 1.toByte(), "candles" to 3)))
+        assertFailsWith<IllegalArgumentException> { palette.stateOf("minecraft:blue_candle", mapOf<String, Any>("candles" to 3, "lit" to 0.toByte())) }
+        assertFailsWith<IllegalArgumentException> { palette.stateOf("minecraft:blue_candle") }
+    }
+
+    @Test
     fun `a palette can't hold two states with one network ID`() {
         val air = BlockState("minecraft:air", NbtMap.EMPTY, version = 18168865)
 

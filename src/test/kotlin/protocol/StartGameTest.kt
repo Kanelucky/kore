@@ -1,5 +1,7 @@
 package org.koremc.protocol
 
+import org.koremc.world.BlockPos
+import org.koremc.world.Vec3
 import java.util.HexFormat
 import kotlin.test.Test
 import kotlin.test.assertEquals
