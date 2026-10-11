@@ -183,9 +183,6 @@ private const val CREATIVE_REACH = 14f
 /** How far cracks have to spread for a block to break, in the units `LevelEvent` counts their pace in. */
 private const val CRACKED = 65535
 
-/** The longest chat message Kore passes on, in characters. */
-private const val MAX_CHAT_LENGTH = 512
-
 /** The messages, in each client's own language, that a player joined or left: yellow, with their name filled in. */
 private const val JOINED = "\u00a7e%multiplayer.player.joined"
 private const val LEFT = "\u00a7e%multiplayer.player.left"
@@ -1100,15 +1097,15 @@ class Session(
      * A message the player typed in chat, which everyone in the game sees:
      * the player too, since the client shows its own messages only once the
      * server sends them back. It goes out under the name and XUID the
-     * player logged in with, whatever the client put. A message that's
-     * blank, or longer than [MAX_CHAT_LENGTH] characters, goes nowhere.
+     * player logged in with, whatever the client put. A blank message goes
+     * nowhere, as there's nothing in it to show.
      */
     private fun onChat(packet: Text) {
         val identity = player ?: return
         if (packet.type != Text.CHAT) return
         val message = packet.message.trim()
-        if (message.isEmpty() || message.length > MAX_CHAT_LENGTH) {
-            log.debug("Refused a chat message of {} characters from {}", packet.message.length, identity.displayName)
+        if (message.isEmpty()) {
+            log.debug("Refused a blank chat message from {}", identity.displayName)
             return
         }
         log.info("<{}> {}", identity.displayName, message)

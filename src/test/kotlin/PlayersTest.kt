@@ -200,7 +200,6 @@ class PlayersTest {
         assertContentEquals(expected, alex.received().single())
 
         alex.sends(Text(Text.CHAT, "   ").encode())
-        alex.sends(Text(Text.CHAT, "x".repeat(513)).encode())
         assertTrue(steve.received().isEmpty())
     }
 

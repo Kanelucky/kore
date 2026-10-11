@@ -191,7 +191,7 @@ Items lie in the world as entities. The game ticks 20 times a second, on the sam
 
 Players see each other. Everyone in the game is on each player's list, which the pause screen shows, with the skin their client described when they logged in. Each tick, each player sees the others in the chunks they have appear, move, sneak and sprint, change what they hold and go, and sees their arms swing as they mine and build. A persona skin, made in the game's character creator, also comes with the pieces it's made of; Kore leaves those out, as Dragonfly does, since the skin's image already shows them.
 
-Chat goes to everyone in the game, under the name the player logged in with, whatever their client says. The sender gets it back too, since the client only shows its own messages once the server sends them. Messages that are blank or longer than 512 characters go nowhere, and the console logs the rest. Everyone hears when a player joins or leaves, in their own language.
+Chat goes to everyone in the game, under the name the player logged in with, whatever their client says. The sender gets it back too, since the client only shows its own messages once the server sends them. Blank messages go nowhere, and the console logs the rest. Everyone hears when a player joins or leaves, in their own language.
 
 Chunks name biomes by number, and Cloudburst's data has none for vanilla biomes. For now, plains is hard-coded as biome `1`.
 
