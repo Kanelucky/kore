@@ -148,7 +148,7 @@ class PacketsTest {
             .writeFloatLE(16.5f).writeFloatLE(-58.375f).writeFloatLE(-3.25f) // Position
             .writeFloatLE(0f).writeFloatLE(1f) // Move vector
             .writeFloatLE(-89f) // Head yaw
-            .writeVarUInt(2).writeVarInt(20).writeVarInt(10) // Input flags: sprinting, moving forward
+            .writeVarUInt(3).writeVarInt(8).writeVarInt(25).writeVarInt(10) // Input flags: sneaking, starting to sprint, moving forward
             .writeVarUInt(1).writeVarUInt(0).writeVarInt(1) // Mouse, normal play, crosshair
             .writeFloatLE(12.5f).writeFloatLE(-90f) // Interact rotation
             .writeVarULong(1234) // Tick
@@ -157,7 +157,11 @@ class PacketsTest {
             .writeZero(8 + 12 + 8) // Analogue move vector, camera orientation, raw move vector
 
         assertEquals(
-            PlayerAuthInput(pitch = 12.5f, yaw = -90f, headYaw = -89f, Vec3(16.5f, -58.375f, -3.25f), Vec3(0.25f, 0f, -0.125f), tick = 1234),
+            PlayerAuthInput(
+                pitch = 12.5f, yaw = -90f, headYaw = -89f, Vec3(16.5f, -58.375f, -3.25f), Vec3(0.25f, 0f, -0.125f), tick = 1234,
+                // Moving forward is a flag Kore doesn't act on, so it's left out.
+                inputs = setOf(InputFlag.SNEAKING, InputFlag.START_SPRINTING),
+            ),
             decodeClientPacket(ByteBufUtil.getBytes(packet)),
         )
     }

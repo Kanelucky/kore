@@ -8,6 +8,7 @@ import org.cloudburstmc.nbt.NbtType
 import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.ItemDefinition
 import org.koremc.world.Vec3
+import java.util.EnumSet
 import java.util.UUID
 
 // Packet IDs and layouts follow Mojang's protocol schemas for 1.26.50 (protocol 2193):
@@ -75,6 +76,23 @@ data class ResourcePackClientResponse(
 data class RequestChunkRadius(val radius: Int, val maxRadius: Int) : ClientPacket
 
 /**
+ * The input flags Kore acts on, by their number in `PlayerAuthInput`.
+ * Mojang's schema lists the flags without `NorthJump` (2), so its names
+ * sit one below these numbers, which minecraft-data and gophertunnel agree
+ * on.
+ */
+enum class InputFlag(val id: Int) {
+    /** Set on every tick the player is sneaking. */
+    SNEAKING(8),
+    START_SPRINTING(25),
+    STOP_SPRINTING(26),
+    START_FLYING(42),
+    STOP_FLYING(43),
+}
+
+private val INPUT_FLAGS = InputFlag.entries.associateBy(InputFlag::id)
+
+/**
  * The client's input for one tick, with where it predicts its player is
  * now. It arrives every tick once the player is in the world. Kore reads it
  * as far as the movement; the item, block and vehicle actions after that
@@ -90,6 +108,8 @@ data class PlayerAuthInput(
     val delta: Vec3,
     /** The client's tick, which corrections name to say which moment they apply to. */
     val tick: Long,
+    /** The flags set this tick that Kore acts on. Any others are left out. */
+    val inputs: Set<InputFlag> = emptySet(),
 ) : ClientPacket
 
 /** The client has the chunks around it and has put its player in the world, naming the player's runtime ID from `StartGame`. */
@@ -355,14 +375,14 @@ private fun decodePlayerAuthInput(buffer: ByteBuf): PlayerAuthInput {
     val position = buffer.readVec3()
     buffer.skipBytes(8) // Move vector
     val headYaw = buffer.readFloatLE()
-    buffer.readList { readVarInt() } // Input flags, each one set
+    val inputs = buffer.readList { readVarInt() }.mapNotNullTo(EnumSet.noneOf(InputFlag::class.java)) { INPUT_FLAGS[it] }
     buffer.readVarUInt() // Input mode: mouse, touch, gamepad and so on
     buffer.readVarUInt() // Play mode
     buffer.readVarInt() // Interaction model
     buffer.skipBytes(8) // Interact rotation
     val tick = buffer.readVarULong()
     val delta = buffer.readVec3()
-    return PlayerAuthInput(pitch, yaw, headYaw, position, delta, tick)
+    return PlayerAuthInput(pitch, yaw, headYaw, position, delta, tick, inputs)
 }
 
 fun decodeClientPacket(packet: ByteArray): ClientPacket {

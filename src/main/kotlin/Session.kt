@@ -13,6 +13,7 @@ import org.koremc.protocol.ClientPacket
 import org.koremc.protocol.CreativeContent
 import org.koremc.protocol.Disconnect
 import org.koremc.protocol.FloatItem
+import org.koremc.protocol.InputFlag
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.JigsawStructureData
 import org.koremc.protocol.LevelChunk
@@ -49,6 +50,7 @@ import org.koremc.world.FlatWorld
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
 import org.koremc.world.PLAYER_MAX_AIR
+import org.koremc.world.PLAYER_SNEAKING_HEIGHT
 import org.koremc.world.PLAYER_WALK_SPEED
 import org.koremc.world.PLAYER_WIDTH
 import org.koremc.world.Vec3
@@ -82,6 +84,9 @@ private const val MAX_COORDINATE = 30_000_000f
  */
 private const val RECENTRE_DISTANCE = 2
 
+/** The flags a player always has: they breathe, fall, collide and climb. */
+private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, ActorFlag.HAS_COLLISION, ActorFlag.CAN_CLIMB)
+
 /**
  * One player's protocol session. It owns the batch codec, so it decides
  * when compression switches on, and walks the login sequence one packet
@@ -114,7 +119,8 @@ private const val RECENTRE_DISTANCE = 2
  * player is, every tick. Kore takes its word for it, as Mojang's movement
  * guide allows a server without physics to, and moves the player's view
  * with them once they stray from its centre, sending the chunks that come
- * into it.
+ * into it. Its flags say when the player sprints and sneaks, which Kore
+ * mirrors in the player's actor data.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
@@ -164,6 +170,17 @@ class Session(
     /** Where the player's eyes are, as the client last reported. */
     var position = Vec3(world.spawn.x + 0.5f, world.spawn.y + PLAYER_EYE_HEIGHT, world.spawn.z + 0.5f)
         private set
+
+    /** Whether the player is sprinting, as their input last said. */
+    var sprinting = false
+        private set
+
+    /** Whether the player is sneaking, as their input last said. */
+    var sneaking = false
+        private set
+
+    /** Whether the player is flying, where sneaking means descending rather than slowing down. */
+    private var flying = false
 
     /** The chunk the player's view is centred on. */
     private var viewCentre = world.spawn.chunk
@@ -321,6 +338,7 @@ class Session(
             return
         }
         position = reported
+        onInputs(packet)
 
         val chunk = reported.toBlockPos().chunk
         val radius = chunkRadius ?: return
@@ -332,6 +350,45 @@ class Session(
         val sent = updateView(radius)
         log.debug("{}'s view moved to chunk {}, {}, so {} chunks came into it", player?.displayName, chunk.x, chunk.z, sent)
     }
+
+    /**
+     * Follows the player's sprinting, from the client's flags for starting
+     * and stopping it, and their sneaking, from the flag set while they
+     * sneak. Starting to sneak ends a sprint, unless the player is flying.
+     * A change goes back to the client as the player's actor data, tagged
+     * with the input's tick so the client applies it at the moment it
+     * predicted it.
+     *
+     * The sprint's speed boost is left to the client, which already applies
+     * it: with Kore sending a walking speed of 0.1, a logged test measured
+     * sprint-jumping at the vanilla 7.1 blocks a second.
+     */
+    private fun onInputs(packet: PlayerAuthInput) {
+        val inputs = packet.inputs
+        val wasSprinting = sprinting
+        val wasSneaking = sneaking
+
+        if (InputFlag.START_FLYING in inputs) flying = true
+        if (InputFlag.STOP_FLYING in inputs) flying = false
+        if (InputFlag.START_SPRINTING in inputs) {
+            sprinting = true
+            sneaking = false
+        }
+        if (InputFlag.STOP_SPRINTING in inputs) sprinting = false
+        if (InputFlag.SNEAKING in inputs != sneaking) {
+            sneaking = !sneaking
+            if (sneaking && !flying) sprinting = false
+        }
+
+        if (sprinting == wasSprinting && sneaking == wasSneaking) return
+        send(SetActorData(entityId, listOf(flagsItem(playerFlags()), FloatItem(ActorDataId.HEIGHT, playerHeight())), packet.tick))
+        log.debug("{} is now {}sprinting and {}sneaking", player?.displayName, if (sprinting) "" else "not ", if (sneaking) "" else "not ")
+    }
+
+    private fun playerFlags() = PLAYER_FLAGS +
+        listOfNotNull(ActorFlag.SPRINTING.takeIf { sprinting }, ActorFlag.SNEAKING.takeIf { sneaking })
+
+    private fun playerHeight() = if (sneaking) PLAYER_SNEAKING_HEIGHT else PLAYER_HEIGHT
 
     /**
      * Centres the client's view on [viewCentre], after any packets in
@@ -372,12 +429,12 @@ class Session(
         SetActorData(
             entityId,
             listOf(
-                flagsItem(setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, ActorFlag.HAS_COLLISION, ActorFlag.CAN_CLIMB)),
+                flagsItem(playerFlags()),
                 ShortItem(ActorDataId.AIR_SUPPLY, PLAYER_MAX_AIR),
                 ShortItem(ActorDataId.AIR_SUPPLY_MAX, PLAYER_MAX_AIR),
                 FloatItem(ActorDataId.SCALE, 1f),
                 FloatItem(ActorDataId.WIDTH, PLAYER_WIDTH),
-                FloatItem(ActorDataId.HEIGHT, PLAYER_HEIGHT),
+                FloatItem(ActorDataId.HEIGHT, playerHeight()),
             ),
         ),
         UpdateAttributes(

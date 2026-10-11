@@ -7,6 +7,9 @@ const val PLAYER_EYE_HEIGHT = 1.62f
 const val PLAYER_WIDTH = 0.6f
 const val PLAYER_HEIGHT = 1.8f
 
+/** A sneaking player's height, low enough to fit under a gap a block and a half high. */
+const val PLAYER_SNEAKING_HEIGHT = 1.49f
+
 /** How long a player can hold their breath, in ticks: 15 seconds. */
 const val PLAYER_MAX_AIR: Short = 300
 

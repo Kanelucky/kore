@@ -11,7 +11,12 @@ import org.koremc.auth.TestAuthority
 import org.koremc.auth.XUID
 import org.koremc.auth.ecKeyPair
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.ActorDataId
+import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.BiomeDefinitionList
+import org.koremc.protocol.FloatItem
+import org.koremc.protocol.SetActorData
+import org.koremc.protocol.flagsItem
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.clientDataToken
 import org.koremc.protocol.connectionRequest
@@ -40,6 +45,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private const val PROTOCOL = 2193
+
+// Input flags, by their numbers in PlayerAuthInput.
+private const val SNEAKING = 8
+private const val START_SPRINTING = 25
+private const val STOP_SPRINTING = 26
+private const val START_FLYING = 42
 
 class SessionTest {
     private val authority = TestAuthority()
@@ -265,6 +276,55 @@ class SessionTest {
     }
 
     @Test
+    fun `sneaking shows in the player's flags and height, at the input's tick`() {
+        spawn()
+
+        clientSends(playerAuthInput(standing, inputs = listOf(SNEAKING), tick = 101))
+        assertContentEquals(playerData(ActorFlag.SNEAKING, height = 1.49f, tick = 101), receivedPacket())
+        assertTrue(session.sneaking)
+
+        sent.clear()
+        clientSends(playerAuthInput(standing, inputs = listOf(SNEAKING), tick = 102)) // Still holding it
+        assertTrue(sent.isEmpty())
+
+        clientSends(playerAuthInput(standing, tick = 103))
+        assertContentEquals(playerData(height = 1.8f, tick = 103), receivedPacket())
+        assertFalse(session.sneaking)
+    }
+
+    @Test
+    fun `sprinting starts and stops with the client's flags`() {
+        spawn()
+
+        clientSends(playerAuthInput(standing, inputs = listOf(START_SPRINTING), tick = 101))
+        assertContentEquals(playerData(ActorFlag.SPRINTING, height = 1.8f, tick = 101), receivedPacket())
+
+        sent.clear()
+        clientSends(playerAuthInput(standing, tick = 102)) // Still sprinting: there's no flag held for it
+        assertTrue(sent.isEmpty())
+        assertTrue(session.sprinting)
+
+        clientSends(playerAuthInput(standing, inputs = listOf(STOP_SPRINTING), tick = 103))
+        assertContentEquals(playerData(height = 1.8f, tick = 103), receivedPacket())
+        assertFalse(session.sprinting)
+    }
+
+    @Test
+    fun `sneaking ends a sprint, except in flight`() {
+        spawn()
+
+        clientSends(playerAuthInput(standing, inputs = listOf(START_SPRINTING)))
+        clientSends(playerAuthInput(standing, inputs = listOf(SNEAKING)))
+        assertFalse(session.sprinting)
+        assertTrue(session.sneaking)
+
+        clientSends(playerAuthInput(standing, inputs = listOf(START_FLYING, START_SPRINTING)))
+        clientSends(playerAuthInput(standing, inputs = listOf(SNEAKING))) // Descending
+        assertTrue(session.sprinting)
+        assertTrue(session.sneaking)
+    }
+
+    @Test
     fun `a client that cancels during resource packs goes no further`() {
         logIn()
 
@@ -349,14 +409,23 @@ class SessionTest {
         sent.clear()
     }
 
-    /** A PlayerAuthInput with the player at [position], and nothing else going on. */
-    private fun playerAuthInput(position: Vec3) = ByteBufUtil.getBytes(
+    /** A PlayerAuthInput with the player at [position], the input flags numbered in [inputs] set, and nothing else going on. */
+    private fun playerAuthInput(position: Vec3, inputs: List<Int> = emptyList(), tick: Long = 100) = ByteBufUtil.getBytes(
         Unpooled.buffer()
             .writeVarUInt(144)
             .writeZero(8).writeFloatLE(position.x).writeFloatLE(position.y).writeFloatLE(position.z)
-            .writeZero(12).writeVarUInt(0).writeVarUInt(1).writeVarUInt(0).writeVarInt(1).writeZero(8)
-            .writeVarULong(100).writeZero(12).writeZero(5).writeZero(28),
+            .writeZero(12).writeVarUInt(inputs.size).apply { inputs.forEach { writeVarInt(it) } }
+            .writeVarUInt(1).writeVarUInt(0).writeVarInt(1).writeZero(8)
+            .writeVarULong(tick).writeZero(12).writeZero(5).writeZero(28),
     )
+
+    /** The player's actor data as Kore sends it when they start or stop sprinting or sneaking. */
+    private fun playerData(vararg flags: ActorFlag, height: Float, tick: Long): ByteArray {
+        val always = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, ActorFlag.HAS_COLLISION, ActorFlag.CAN_CLIMB)
+        return SetActorData(7, listOf(flagsItem(always + flags), FloatItem(ActorDataId.HEIGHT, height)), tick).encode()
+    }
+
+    private val standing = Vec3(0.5f, -61.38f, 0.5f)
 
     private fun setLocalPlayerAsInitialised(runtimeId: Long) =
         ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(113).writeVarULong(runtimeId))
