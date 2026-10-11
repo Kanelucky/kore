@@ -54,8 +54,20 @@ data class InventoryTransaction(val type: Int, val use: ItemUse?) : ClientPacket
  */
 data class PlayerAction(val runtimeId: Long, val action: Int, val position: BlockPos, val face: Int) : ClientPacket {
     companion object {
+        /** A survival player starting to break a block. */
+        const val START_DESTROY_BLOCK = 0
+
+        /** A survival player giving up on breaking a block. */
+        const val ABORT_DESTROY_BLOCK = 1
+
+        /** A survival player done breaking a block, whether it broke or not. */
+        const val STOP_DESTROY_BLOCK = 2
+
         /** A creative player breaking a block, which the client has already done. */
         const val CREATIVE_DESTROY_BLOCK = 13
+
+        /** A tick of a survival player breaking a block, for which the client expects bits to fly off it. */
+        const val CRACK_BLOCK = 18
     }
 }
 
@@ -95,6 +107,22 @@ data class LevelEvent(val event: Int, val position: Vec3, val data: Int) : Serve
     companion object {
         /** The burst of particles and the sound of a block breaking. The data is the block's network ID. */
         const val PARTICLES_DESTROY_BLOCK = 2001
+
+        /**
+         * Cracks spreading over a block as it's broken. The data is how much
+         * of the way they get each tick, out of 65535, and the client carries
+         * on spreading them until they stop.
+         */
+        const val START_BLOCK_CRACKING = 3600
+        const val STOP_BLOCK_CRACKING = 3601
+
+        /**
+         * Bits flying off the face of a block being broken, plus the face's
+         * number, from down to east. The data is the block's network ID. An
+         * older event packs the face into the ID's top byte, which a hashed
+         * network ID has no room for.
+         */
+        const val PARTICLES_CRACK_BLOCK_DOWN = 3603
     }
 }
 

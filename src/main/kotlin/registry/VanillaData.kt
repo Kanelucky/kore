@@ -16,9 +16,9 @@ private val json = Json { ignoreUnknownKeys = true }
 /**
  * The game's own definitions, which clients expect the server to agree with:
  * every item, block state and biome, and the creative inventory. They're
- * dumped from the game by
- * CloudburstMC, kept apart from Kore's code in https://github.com/KoreMC/data,
- * and read once, on start.
+ * dumped from the game by CloudburstMC, with how blocks take to mining from
+ * PrismarineJS's minecraft-data, kept apart from Kore's code in
+ * https://github.com/KoreMC/data, and read once, on start.
  */
 data class VanillaData(
     val items: List<ItemDefinition>,
@@ -27,11 +27,13 @@ data class VanillaData(
     val creative: CreativeInventory,
     /** The blocks defined in data, which go to every client in `StartGame`. */
     val blockDefinitions: List<BlockDefinition>,
+    /** How each block takes to mining, by block name. */
+    val mining: Map<String, Mining>,
 ) {
     companion object {
         /**
          * Reads the data from [directory], which holds the files from KoreMC/data
-         * under CloudburstMC's names. A missing file throws [java.nio.file.NoSuchFileException].
+         * under their sources' names. A missing file throws [java.nio.file.NoSuchFileException].
          */
         fun load(directory: Path): VanillaData {
             val items = readItems(
@@ -39,12 +41,15 @@ data class VanillaData(
                 components = readNbt(directory.resolve("item_components.nbt")),
             )
             val blocks = readBlockPalette(readNbt(directory.resolve("block_palette.nbt")))
+            val blockDefinitions = readBlockDefinitions(readNbt(directory.resolve("data_driven_blocks.nbt")))
+            val mining = readMining(directory.resolve("blocks.json").readText()) + readDataDrivenMining(blockDefinitions)
             return VanillaData(
                 items = items,
                 blocks = blocks,
                 biomes = readBiomes(directory.resolve("stripped_biome_definitions.json").readText()),
                 creative = readCreativeInventory(directory.resolve("creative_items.json").readText(), items, blocks),
-                blockDefinitions = readBlockDefinitions(readNbt(directory.resolve("data_driven_blocks.nbt"))),
+                blockDefinitions = blockDefinitions,
+                mining = withNewerBlocks(mining, blocks),
             )
         }
     }

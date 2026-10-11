@@ -8,6 +8,7 @@ import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.Attribute
+import org.koremc.protocol.BlockAction
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
@@ -71,13 +72,14 @@ import org.koremc.world.PLAYER_WIDTH
 import org.koremc.world.Vec3
 import org.koremc.world.blockPlacedBy
 import org.koremc.world.breakBlock
+import org.koremc.world.breakTicks
+import org.koremc.world.corner
 import org.koremc.world.centre
 import org.koremc.world.chunksAround
 import org.koremc.world.facing
 import org.koremc.world.place
 import org.koremc.world.releaseButton
 import org.koremc.world.side
-import org.koremc.world.unbreakable
 import org.koremc.world.updateAround
 import org.koremc.world.usable
 import org.koremc.world.use
@@ -130,6 +132,9 @@ private const val CHAT_WINDOW = 0xFF
 private const val SURVIVAL_REACH = 8f
 private const val CREATIVE_REACH = 14f
 
+/** How far cracks have to spread for a block to break, in the units `LevelEvent` counts their pace in. */
+private const val CRACKED = 65535
+
 /** The flags a player always has: they breathe, fall, collide and climb. */
 private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, ActorFlag.HAS_COLLISION, ActorFlag.CAN_CLIMB)
 
@@ -174,6 +179,11 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * in `PlayerAuthInput`, or in creative as a `PlayerAction`. Clicking a
  * lever, button, door, trapdoor or fence gate uses it instead of placing
  * against it, unless the player sneaks with something in hand.
+ *
+ * A survival player's input also carries the steps of breaking a block:
+ * starting, a crack every tick, and stopping. Kore shows everyone with the
+ * chunk the cracks spreading at the pace the block breaks at, and checks a
+ * reported break didn't come too soon after the player started on it.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
@@ -248,6 +258,11 @@ class Session(
     var heldSlot = 0
         private set
 
+    /** The block a survival player is breaking, from the client tick they started, and how many ticks it takes. */
+    private var breaking: Breaking? = null
+
+    private class Breaking(val pos: BlockPos, val startTick: Long, val ticks: Int?)
+
     /** Whether the player's inventory is open, which the client can't do without Kore's say-so. */
     private var inventoryOpen = false
 
@@ -283,8 +298,11 @@ class Session(
             State.SPAWNING, State.IN_GAME -> when (packet) {
                 is PlayerAuthInput -> {
                     onMove(packet)
-                    packet.itemUse?.let(::onItemUse)
+                    // The item use first: a block breaking this tick is checked against when the player
+                    // started on it, before the step that ends the breaking clears that.
+                    packet.itemUse?.let { onItemUse(it, packet.tick) }
                     packet.stackRequest?.let { send(ItemStackResponse(listOf(stackRequests.handle(it)))) }
+                    onBlockActions(packet.blockActions, packet.tick)
                 }
                 is Interact -> if (packet.action == Interact.OPEN_INVENTORY) openInventory()
                 is ContainerClose -> onContainerClose(packet)
@@ -519,10 +537,11 @@ class Session(
         if (packet.windowId == INVENTORY_WINDOW && packet.selectedSlot in 0 until HOTBAR_SIZE) heldSlot = packet.selectedSlot
     }
 
-    private fun onItemUse(use: ItemUse) {
+    /** The player using their item, at the client's [tick] when it came in their input. */
+    private fun onItemUse(use: ItemUse, tick: Long? = null) {
         when (use.action) {
             ItemUseAction.PLACE -> onClick(use)
-            ItemUseAction.DESTROY -> onBreak(use.position, creativeOnly = false)
+            ItemUseAction.DESTROY -> onBreak(use.position, creativeOnly = false, tick)
             // Using an item in the air, like eating, and attacking with one are for later.
             ItemUseAction.USE, ItemUseAction.USE_AS_ATTACK -> {}
         }
@@ -614,22 +633,29 @@ class Session(
 
     /**
      * Breaks the block at [pos], as the client predicted, if the player
-     * can: their game mode breaks blocks, it's in reach, and outside
-     * creative, it isn't one only creative players break. A [creativeOnly]
-     * break, like creative's instant one, also needs the player to be in
-     * creative. Everyone with the chunk sees the block go, with its
-     * particles and sound: the player too, since the client leaves those to
-     * the server. So do any torches the block held up, and blocks around it
-     * that joined it, like fences, change. A break Kore refuses puts the
-     * block back.
+     * can: their game mode breaks blocks and it's in reach. A [creativeOnly]
+     * break, like creative's instant one, needs the player to be in
+     * creative. Outside creative, the block mustn't be one only creative
+     * players break, and a break reported at the client's [tick] mustn't
+     * come too soon after the player started on it.
+     *
+     * Everyone with the chunk sees the block go, with its particles and
+     * sound: the player too, since the client leaves those to the server.
+     * So do any torches the block held up, and blocks around it that joined
+     * it, like fences, change. A break Kore refuses puts the block back.
      */
-    private fun onBreak(pos: BlockPos, creativeOnly: Boolean) {
+    private fun onBreak(pos: BlockPos, creativeOnly: Boolean, tick: Long? = null) {
         val state = world.stateAt(pos)
         // Air is what a break leaves, so it's a break the client has already reported another way.
         if (state?.name == AIR) return
 
         val creative = config.gameMode == GameMode.CREATIVE
-        if (state == null || !canBuild() || !inReach(pos) || (!creative && (creativeOnly || state.unbreakable))) {
+        val ticks = state?.let { ticksToBreak(it.name) }
+        val unbreakable = state != null && game.mining[state.name]?.unbreakable == true
+        // Checked before the cracks stop, which forgets when the player started.
+        val early = !creative && tooSoon(pos, ticks, tick)
+        if (!creative) stopBreaking()
+        if (state == null || !canBuild() || !inReach(pos) || (!creative && (creativeOnly || unbreakable || early))) {
             log.debug("Refused {} breaking {} at {}", player?.displayName, state?.name, pos)
             send(UpdateBlock(pos, world.blockAt(pos)))
             return
@@ -639,6 +665,62 @@ class Session(
         showAround(effects + world.updateAround(broken.keys).map(::updateOf))
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
     }
+
+    /**
+     * Whether a break the client reported at its [tick] came sooner after
+     * the player started on the block at [pos] than the [ticks] it takes.
+     * The client counts its own ticks, so the gap is exact, but a quarter's
+     * slack covers anything Kore's reckoning leaves out. A block that
+     * breaks at once, or a break that came without a tick, isn't checked.
+     */
+    private fun tooSoon(pos: BlockPos, ticks: Int?, tick: Long?): Boolean {
+        if (ticks == null || ticks <= 1 || tick == null) return false
+        val started = breaking?.takeIf { it.pos == pos }
+        val took = started?.let { tick - it.startTick }
+        log.debug("{} broke a block at {} {} ticks after starting, of the {} it takes", player?.displayName, pos, took ?: "unknown", ticks)
+        return took == null || took < ticks * 3 / 4
+    }
+
+    /**
+     * Follows a survival player breaking blocks, from the steps their input
+     * carries at the client's [tick]. Everyone with the chunk sees cracks
+     * spread over a block the player starts on, at the pace it breaks at,
+     * and bits fly off it each tick. In creative, blocks break at once, so
+     * there's nothing to see.
+     */
+    private fun onBlockActions(actions: List<BlockAction>, tick: Long) {
+        if (config.gameMode != GameMode.SURVIVAL) return
+        for (action in actions) {
+            when (action.action) {
+                PlayerAction.START_DESTROY_BLOCK -> startBreaking(action.position, tick)
+                PlayerAction.CRACK_BLOCK -> crack(action.position, action.face)
+                PlayerAction.ABORT_DESTROY_BLOCK, PlayerAction.STOP_DESTROY_BLOCK -> stopBreaking()
+            }
+        }
+    }
+
+    private fun startBreaking(pos: BlockPos, tick: Long) {
+        stopBreaking()
+        val state = world.stateAt(pos)?.takeIf { it.name != AIR } ?: return
+        val ticks = ticksToBreak(state.name)
+        breaking = Breaking(pos, tick, ticks)
+        if (ticks != null && ticks > 0) showAround(pos, LevelEvent(LevelEvent.START_BLOCK_CRACKING, pos.corner, CRACKED / ticks))
+    }
+
+    private fun crack(pos: BlockPos, face: Int) {
+        if (face !in Face.entries.indices || world.stateAt(pos)?.name in listOf(null, AIR)) return
+        showAround(pos, LevelEvent(LevelEvent.PARTICLES_CRACK_BLOCK_DOWN + face, pos.corner, world.blockAt(pos)))
+    }
+
+    /** Stops the cracks spreading over the block the player was breaking, if any. */
+    private fun stopBreaking() {
+        val stopped = breaking ?: return
+        breaking = null
+        showAround(stopped.pos, LevelEvent(LevelEvent.STOP_BLOCK_CRACKING, stopped.pos.corner, 0))
+    }
+
+    /** How many ticks the player takes to break the block called [name], with what they hold, if Kore knows. */
+    private fun ticksToBreak(name: String): Int? = game.mining[name]?.let { breakTicks(it, inventory.items[heldSlot]?.stack?.item?.name) }
 
     private fun canBuild() = config.gameMode == GameMode.SURVIVAL || config.gameMode == GameMode.CREATIVE
 

@@ -6,13 +6,15 @@ import org.koremc.protocol.CreativeContent
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.ServerPacket
 import org.koremc.registry.CreativeInventory
+import org.koremc.registry.Mining
 import org.koremc.registry.VanillaData
 import org.koremc.world.FlatWorld
 
 /**
  * What every session shares: the world players join, the game's
- * definitions they're sent as they join, encoded once, and the creative
- * inventory their requests are checked against.
+ * definitions they're sent as they join, encoded once, the creative
+ * inventory their requests are checked against, and how blocks take to
+ * mining.
  */
 class GameData(
     val world: FlatWorld,
@@ -21,6 +23,8 @@ class GameData(
     /** The blocks defined in data, which go in `StartGame`. */
     val blockDefinitions: BlockDefinitions,
     val creative: CreativeInventory,
+    /** How each block takes to mining, by block name, which sets how long survival players take to break it. */
+    val mining: Map<String, Mining>,
 ) {
     companion object {
         fun of(vanilla: VanillaData, world: FlatWorld) = GameData(
@@ -28,6 +32,7 @@ class GameData(
             definitions = listOf(ItemRegistry(vanilla.items), BiomeDefinitionList(vanilla.biomes), CreativeContent(vanilla.creative)),
             blockDefinitions = BlockDefinitions(vanilla.blockDefinitions),
             creative = vanilla.creative,
+            mining = vanilla.mining,
         )
     }
 }

@@ -1,6 +1,7 @@
 package org.koremc.registry
 
 import org.cloudburstmc.nbt.NbtMap
+import org.cloudburstmc.nbt.NbtType
 import org.cloudburstmc.nbt.NbtUtils
 import java.io.ByteArrayOutputStream
 import java.util.Base64
@@ -120,6 +121,46 @@ class VanillaDataTest {
     }
 
     @Test
+    fun `mining comes from minecraft-data, its harvest tools counted into a tier`() {
+        val mining = readMining(
+            """[
+                {"name": "stone", "hardness": 1.5, "material": "mineable/pickaxe", "harvestTools": {"1": true, "2": true, "3": true, "4": true, "5": true, "6": true, "7": true}},
+                {"name": "diamond_ore", "hardness": 3, "material": "incorrect_for_wooden_tool", "harvestTools": {"5": true, "6": true, "7": true}},
+                {"name": "oak_leaves", "hardness": 0.2, "material": "leaves;mineable/hoe"},
+                {"name": "white_wool", "hardness": 0.8, "material": "wool"},
+                {"name": "jigsaw", "hardness": -1, "material": "default", "harvestTools": {}}
+            ]""",
+        )
+
+        assertEquals(Mining(1.5, ToolKind.PICKAXE, harvestTier = 0), mining["minecraft:stone"])
+        assertEquals(Mining(3.0, ToolKind.PICKAXE, harvestTier = 2), mining["minecraft:diamond_ore"])
+        assertEquals(Mining(0.2, ToolKind.HOE), mining["minecraft:oak_leaves"])
+        assertEquals(Mining(0.8, ToolKind.SHEARS), mining["minecraft:white_wool"])
+        assertTrue(mining.getValue("minecraft:jigsaw").unbreakable)
+        assertFailsWith<IllegalStateException> { readMining("""[{"name": "odd", "hardness": 1, "harvestTools": {"1": true}}]""") }
+    }
+
+    @Test
+    fun `blocks defined in data say how they take to mining, and newer blocks borrow from their family`() {
+        val stairs = BlockDefinition(
+            "minecraft:white_concrete_stairs",
+            NbtMap.builder()
+                .putList("blockTags", NbtType.STRING, listOf("minecraft:is_pickaxe_item_destructible"))
+                .putCompound("components", NbtMap.builder().putCompound("minecraft:destructible_by_mining", NbtMap.builder().putFloat("value", 1.8f).build()).build())
+                .putCompound("vanilla_block_data", NbtMap.builder().putBoolean("requires_correct_tool_for_drops", true).build())
+                .build(),
+        )
+        assertEquals(mapOf(stairs.name to Mining(1.8f.toDouble(), ToolKind.PICKAXE, harvestTier = 0)), readDataDrivenMining(listOf(stairs)))
+
+        val spruce = Mining(2.0, ToolKind.AXE)
+        val palette = BlockPalette(listOf("minecraft:spruce_planks", "minecraft:poplar_planks", "minecraft:red_poplar_leaves", "minecraft:oak_leaves", "minecraft:mystery").map { BlockState(it, NbtMap.EMPTY, 1) })
+        val filled = withNewerBlocks(mapOf("minecraft:spruce_planks" to spruce, "minecraft:oak_leaves" to Mining(0.2)), palette)
+        assertEquals(spruce, filled["minecraft:poplar_planks"])
+        assertEquals(Mining(0.2), filled["minecraft:red_poplar_leaves"])
+        assertEquals(null, filled["minecraft:mystery"])
+    }
+
+    @Test
     fun `the game's data loads`() {
         assumeGameData()
         val vanilla = VanillaData.load(gameData)
@@ -141,6 +182,17 @@ class VanillaDataTest {
         val defined = vanilla.blockDefinitions.map { it.name }
         assertTrue("minecraft:white_wool_stairs" in defined && "minecraft:red_concrete_slab" in defined && "minecraft:shelf_mushroom" in defined)
         assertTrue(vanilla.blockDefinitions.all { it.name in vanilla.blocks.states.map(BlockState::name) })
+
+        // Every block takes to mining somehow, those newer than minecraft-data's table and those defined in data included.
+        val unknown = vanilla.blocks.states.map { it.name }.distinct().filter { it !in vanilla.mining }
+        assertEquals(emptyList(), unknown)
+        assertEquals(Mining(1.5, ToolKind.PICKAXE, harvestTier = 0), vanilla.mining["minecraft:stone"])
+        assertEquals(1, vanilla.mining["minecraft:iron_ore"]?.harvestTier)
+        assertEquals(2, vanilla.mining["minecraft:diamond_ore"]?.harvestTier)
+        assertEquals(3, vanilla.mining["minecraft:obsidian"]?.harvestTier)
+        assertEquals(vanilla.mining["minecraft:spruce_log"], vanilla.mining["minecraft:poplar_log"])
+        assertEquals(ToolKind.SHEARS, vanilla.mining["minecraft:white_wool_stairs"]?.tool)
+        assertTrue(vanilla.mining.getValue("minecraft:bedrock").unbreakable)
 
         // Recent additions, which a creative inventory from older data would be missing.
         val creative = vanilla.creative.items.map { it.stack.item.name }.toSet()

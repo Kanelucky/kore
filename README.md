@@ -138,7 +138,7 @@ Kore finds the authorization service through Minecraft's service discovery and k
 
 ### 📦 Vanilla Data
 
-Clients expect the server to agree with them about the game itself: which items and biomes exist, what the creative inventory holds, and what each block state is called on the network. [CloudburstMC/Data](https://github.com/CloudburstMC/Data) dumps that data from the game, and Kore keeps its copy in a repository of its own, [KoreMC/data](https://github.com/KoreMC/data), apart from the code. Kore reads it once on start from `data/` in its working directory (`dataDirectory` in `ServerConfig`). If a file is missing, Kore names it and stops.
+Clients expect the server to agree with them about the game itself: which items and biomes exist, what the creative inventory holds, and what each block state is called on the network. [CloudburstMC/Data](https://github.com/CloudburstMC/Data) dumps that data from the game, PrismarineJS's [minecraft-data](https://github.com/PrismarineJS/minecraft-data) adds how hard each block is to mine, and Kore keeps its copy in a repository of its own, [KoreMC/data](https://github.com/KoreMC/data), apart from the code. Kore reads it once on start from `data/` in its working directory (`dataDirectory` in `ServerConfig`). If a file is missing, Kore names it and stops.
 
 - **Items** go to every player in the `ItemRegistry`, with the runtime ID each one travels by. The list is the same for everyone, so Kore encodes it once on start rather than at every login.
 - **Biomes** follow in the `BiomeDefinitionList`: each one's climate, colours and tags. Kore leaves out the world generation data, which only a client generating its own terrain would use, so the packet stays under 8 KB.
@@ -147,8 +147,9 @@ Clients expect the server to agree with them about the game itself: which items 
 For the same reason, Kore keeps each player's inventory itself. Every move the player makes is an item stack request: the client predicts the result, and Kore either agrees, listing each changed slot and the ID of the stack now there, or rejects it, which makes the client undo it. Each request names the stacks it expects to find, and one that doesn't match what Kore has is rejected whole. The client doesn't wait for one answer before the next request, so a request can name a stack that an earlier one made by that request's number. Kore remembers recent requests to follow those. Picking from the creative inventory puts a full stack in a hidden output slot for the client to take from. Dropping items waits for item entities, and crafting for recipes.
 - **Blocks defined in data**, rather than in the game's code, go in `StartGame`. Since 26.50 that includes the wool and concrete stairs and slabs and the shelf mushroom. Without their definitions, the client knows these blocks exist but not how they look, and shows them as placeholders.
 - **Block states** are named on the network by a hash, not by their place in a palette: the 32-bit FNV-1a hash of the state's name and properties, written as little-endian NBT. Mojang's protocol docs don't spell the rule out, so the tests check it against the network ID the game gave each of the 22,091 states in its palette.
+- **Mining** takes each block's hardness, the tool that digs it quicker and whether it needs one to drop anything, from minecraft-data's `blocks.json`. Cloudburst's data only has these for the blocks defined in data, which use their own. minecraft-data's table is for 1.26.30, so the newer poplar wood borrows spruce's, and its leaves oak's. It names the tools that harvest a block by Java Edition item IDs, which Kore has no use for, but how many there are tells the tier: every tier, stone and up, iron and up, or diamond and up.
 
-The data must be for the same client release as `version` in `ServerConfig`.
+The data must be for the same client release as `version` in `ServerConfig`, though minecraft-data trails a release or two behind.
 
 ### 🌍 The World
 
@@ -180,7 +181,9 @@ Cloudburst's data has no block shapes, so Kore tells which blocks are whole cube
 
 Clicking a lever, button, door, trapdoor or fence gate uses it instead, unless the player sneaks with something in hand. A lever flips, a button presses in and pops back out a second or so later, and doors, trapdoors and fence gates open and shut: a door's two halves together, and a gate away from the player. Everyone with the chunk sees the change and hears it. Each sound names the block making it, so the client plays that block's own: a lever's click, or a bamboo button's. Iron doors and trapdoors only open with redstone, and Kore has no redstone yet, so nothing levers and buttons switch on is powered.
 
-In creative, the client breaks a block at once and says so with a `PlayerAction`. Outside creative, it reports a finished break in its input. With server-authoritative block breaking off, Mojang leaves the timing of a break to the client, so Kore takes its word for it. Either way, everyone with the chunk sees the block go, with the particles and sound of it breaking: the client leaves those to the server, even for its own breaks. Outside creative, bedrock and other blocks only creative players break stay put. Survival mining doesn't show cracks yet, since their speed depends on each block's hardness, which Cloudburst's data doesn't have. Broken blocks drop nothing until there are item entities.
+In creative, the client breaks a block at once and says so with a `PlayerAction`. Outside creative, it reports a finished break in its input. With server-authoritative block breaking off, Mojang leaves the timing of a break to the client, so Kore takes its word for it. Either way, everyone with the chunk sees the block go, with the particles and sound of it breaking: the client leaves those to the server, even for its own breaks. Outside creative, bedrock and other blocks only creative players break stay put.
+
+In survival, the input also carries the steps of breaking: starting on a block, a crack every tick, and stopping. Kore works out how long the block takes the game's way: from its hardness, whether the player holds the right kind of tool and its tier, and whether that tool harvests the block. Then it shows everyone with the chunk the cracks spreading at that pace, and bits flying off the block each tick. A reported break that comes sooner after the player started than the block allows, with a quarter's slack, is refused and put back. The client counts the ticks itself, so the gap is exact whatever the network does. Kore doesn't count what slows a player down, like digging off the ground or under water, so it only ever expects too little time, never too much. Broken blocks drop nothing until there are item entities.
 
 Chunks name biomes by number, and Cloudburst's data has none for vanilla biomes. For now, plains is hard-coded as biome `1`.
 
@@ -290,7 +293,8 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 ### Phase 4: Gameplay
 - [x] Creative inventory, from CloudburstMC's data
 - [x] Block placing and breaking, taking the client's word for break times
-- [ ] Survival mining: cracks as blocks break, and what they drop
+- [x] Survival mining: cracks as blocks break, and how long each takes, from minecraft-data
+- [ ] Drops, which need item entities
 - [x] Using levers, buttons, doors, trapdoors and fence gates
 - [ ] Redstone
 - [x] Moving items around the player's inventory, and taking them from the creative inventory

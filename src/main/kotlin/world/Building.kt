@@ -48,6 +48,9 @@ fun BlockPos.side(face: Face) = BlockPos(x + face.dx, y + face.dy, z + face.dz)
 /** The middle of this block, where sounds and particles from it start. */
 val BlockPos.centre get() = Vec3(x + 0.5f, y + 0.5f, z + 0.5f)
 
+/** The corner of this block with the lowest coordinates, where the client puts the cracks of a block being broken. */
+val BlockPos.corner get() = Vec3(x.toFloat(), y.toFloat(), z.toFloat())
+
 /** Which of the four sides a player looking along [yaw] faces. A yaw of 0 looks south, and 90 west. */
 fun facing(yaw: Float): Face = when (Math.floorMod(Math.round(yaw / 90f), 4)) {
     0 -> Face.SOUTH
@@ -65,13 +68,6 @@ private val REPLACEABLE = setOf(
     "minecraft:glow_lichen", "minecraft:vine", "minecraft:snow_layer", "minecraft:structure_void",
 )
 
-/** Blocks that only creative players break. */
-private val UNBREAKABLE = setOf(
-    "minecraft:bedrock", "minecraft:barrier", "minecraft:end_portal_frame", "minecraft:end_portal", "minecraft:end_gateway",
-    "minecraft:command_block", "minecraft:chain_command_block", "minecraft:repeating_command_block",
-    "minecraft:structure_block", "minecraft:jigsaw",
-)
-
 internal const val UPPER_BLOCK = "upper_block_bit"
 private const val VERTICAL_HALF = "minecraft:vertical_half"
 private const val TORCH_FACING = "torch_facing_direction"
@@ -80,9 +76,6 @@ private const val DOOR_HINGE = "door_hinge_bit"
 
 /** Where a torch that can't lean on the block it was placed against looks for one that can hold it, in the game's order. */
 private val TORCH_SUPPORTS = listOf(Face.SOUTH, Face.WEST, Face.NORTH, Face.EAST, Face.DOWN)
-
-/** Whether only creative players can break this block. */
-val BlockState.unbreakable get() = name in UNBREAKABLE
 
 /** Whether a placed block takes this one's place, rather than going beside it. */
 val BlockState.replaceable get() = name in REPLACEABLE

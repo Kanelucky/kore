@@ -51,6 +51,8 @@ import org.koremc.registry.CreativeItem
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemVersion
+import org.koremc.registry.Mining
+import org.koremc.registry.ToolKind
 import org.koremc.world.BlockPos
 import org.koremc.world.ChunkPos
 import org.koremc.world.Face
@@ -82,6 +84,12 @@ private const val FENCE_ITEM = 85
 
 /** The PlayerAction for breaking a block in creative. */
 private const val CREATIVE_DESTROY_BLOCK = 13
+
+// The steps of breaking a block in survival, numbered as PlayerActions are.
+private const val START_DESTROY = 0
+private const val ABORT_DESTROY = 1
+private const val STOP_DESTROY = 2
+private const val CRACK = 18
 
 class SessionTest {
     private val authority = TestAuthority()
@@ -138,7 +146,9 @@ class SessionTest {
     /** Tasks the session has asked to run later, by how many ticks from then. Tests run them. */
     private val scheduled = mutableListOf<Pair<Int, () -> Unit>>()
     private val blockDefinitions = BlockDefinitions(listOf(BlockDefinition("minecraft:white_wool_stairs", NbtMap.builder().putInt("molangVersion", 13).build())))
-    private val game = GameData(world, listOf(itemRegistry, biomes), blockDefinitions, creative)
+    /** Stone takes 150 ticks to break by hand, as it needs a pickaxe. */
+    private val mining = mapOf(stone.name to Mining(1.5, ToolKind.PICKAXE, harvestTier = 0))
+    private val game = GameData(world, listOf(itemRegistry, biomes), blockDefinitions, creative, mining)
     private val session: Session by lazy {
         // The only player, so the only one to see what they change.
         Session(
@@ -648,6 +658,38 @@ class SessionTest {
     }
 
     @Test
+    fun `in survival, cracks spread over a block at the pace it breaks, and bits fly off it`() {
+        spawn()
+        val ground = BlockPos(1, -64, 0)
+
+        clientSends(breakingInput(tick = 200, START_DESTROY to ground))
+        // Stone by hand takes 150 ticks, so the cracks get 65535 / 150 of the way each tick.
+        assertContentEquals(LevelEvent(LevelEvent.START_BLOCK_CRACKING, Vec3(1f, -64f, 0f), 436).encode(), receivedPacket())
+
+        clientSends(breakingInput(tick = 201, CRACK to ground))
+        assertContentEquals(LevelEvent(LevelEvent.PARTICLES_CRACK_BLOCK_DOWN + 1, Vec3(1f, -64f, 0f), stone.networkId).encode(), receivedPacket())
+
+        clientSends(breakingInput(tick = 202, ABORT_DESTROY to ground))
+        assertContentEquals(LevelEvent(LevelEvent.STOP_BLOCK_CRACKING, Vec3(1f, -64f, 0f), 0).encode(), receivedPacket())
+    }
+
+    @Test
+    fun `a survival break that comes too soon is put back, and one that took long enough isn't`() {
+        spawn()
+        val ground = BlockPos(1, -64, 0)
+
+        // Ten ticks in, of the 150 stone takes by hand.
+        clientSends(breakingInput(tick = 200, START_DESTROY to ground))
+        clientSends(breakingInput(tick = 210, STOP_DESTROY to ground, destroying = ground))
+        assertEquals(stone.networkId, world.blockAt(ground))
+        assertContentEquals(UpdateBlock(ground, stone.networkId).encode(), receivedPacket())
+
+        clientSends(breakingInput(tick = 300, START_DESTROY to ground))
+        clientSends(breakingInput(tick = 450, STOP_DESTROY to ground, destroying = ground))
+        assertEquals(AIR_NETWORK_ID, world.blockAt(ground))
+    }
+
+    @Test
     fun `the held slot follows the client`() {
         spawn()
 
@@ -766,6 +808,38 @@ class SessionTest {
 
     private fun containerClose(window: Int, type: Int) =
         ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(47).writeByte(window).writeByte(type).writeBoolean(false))
+
+    /**
+     * A PlayerAuthInput for the player standing still at the client's
+     * [tick], carrying the steps of breaking a block in [actions], each
+     * against its upper face, and [destroying] a block, if it's set.
+     */
+    private fun breakingInput(tick: Long, vararg actions: Pair<Int, BlockPos>, destroying: BlockPos? = null) = ByteBufUtil.getBytes(
+        Unpooled.buffer()
+            .writeVarUInt(144)
+            .writeZero(8).writeFloatLE(standing.x).writeFloatLE(standing.y).writeFloatLE(standing.z)
+            .writeZero(12).writeVarUInt(0)
+            .writeVarUInt(1).writeVarUInt(0).writeVarInt(1).writeZero(8)
+            .writeVarULong(tick).writeZero(12)
+            .writeBoolean(destroying != null)
+            .apply {
+                if (destroying != null) {
+                    writeVarInt(0).writeBoolean(false).writeVarUInt(0) // No legacy request or slot changes
+                    writeVarInt(2).writeByte(1).writeBlockPos(destroying).writeByte(1).writeVarInt(0).writeByte(0) // Destroy, with an empty hand
+                    heldItem(0)
+                    writeZero(24).writeVarUInt(stone.networkId).writeByte(1).writeByte(0)
+                }
+            }
+            .writeBoolean(false) // No item stack request
+            .writeBoolean(actions.isNotEmpty())
+            .apply {
+                if (actions.isNotEmpty()) {
+                    writeVarUInt(actions.size)
+                    actions.forEach { (action, pos) -> writeVarInt(action).writeBlockPos(pos).writeVarInt(1) }
+                }
+            }
+            .writeZero(2).writeZero(28), // No vehicle, then the move vectors and camera
+    )
 
     private fun playerAction(action: Int, position: BlockPos) = ByteBufUtil.getBytes(
         Unpooled.buffer().writeVarUInt(36).writeVarULong(7).writeVarInt(action).writeBlockPos(position).writeBlockPos(BlockPos(0, 0, 0)).writeVarInt(1),
