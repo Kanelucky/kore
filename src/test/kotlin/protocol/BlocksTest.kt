@@ -28,7 +28,7 @@ class BlocksTest {
     }
 
     @Test
-    fun `a legacy request is read past, and the slot changes the client predicts are read`() {
+    fun `a legacy request's ID and the slot changes the client predicts are read`() {
         val packet = packet(30) {
             writeVarInt(-2).writeBoolean(true).writeVarUInt(1).writeByte(28).writeByteArray(bytes(4)) // Resend hotbar slot 4
             writeVarUInt(2)
@@ -42,6 +42,7 @@ class BlocksTest {
         val transaction = decodeClientPacket(packet) as InventoryTransaction
         assertEquals(listOf(InventoryAction(0, windowId = 0, slot = 4, ClientItem(5, 1, stackId = 3), ClientItem(0, 0, stackId = null))), transaction.actions)
         assertEquals(5, transaction.use?.face)
+        assertEquals(-2, transaction.legacyRequestId)
     }
 
     @Test

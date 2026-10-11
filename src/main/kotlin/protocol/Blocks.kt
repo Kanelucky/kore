@@ -47,7 +47,16 @@ data class ItemUse(
  * slot outside the inventory screen, by pressing Q, which is a [NORMAL]
  * one. Its [actions] are the slot changes the client predicts.
  */
-data class InventoryTransaction(val type: Int, val actions: List<InventoryAction>, val use: ItemUse?) : ClientPacket {
+data class InventoryTransaction(
+    val type: Int,
+    val actions: List<InventoryAction>,
+    val use: ItemUse?,
+    /**
+     * The ID the client gives the stacks in the slots [actions] change, until
+     * it hears what they hold now: below zero and even, or 0 for none.
+     */
+    val legacyRequestId: Int = 0,
+) : ClientPacket {
     companion object {
         /** Items moving between slots, without anything else happening. */
         const val NORMAL = 0
@@ -199,10 +208,10 @@ data class LevelSoundEvent(val sound: String, val position: Vec3, val data: Int)
 }
 
 internal fun decodeInventoryTransaction(buffer: ByteBuf): InventoryTransaction {
-    buffer.skipLegacyRequest()
+    val legacyRequestId = buffer.readLegacyRequest()
     val type = buffer.readVarUInt()
     val actions = buffer.readActions()
-    return InventoryTransaction(type, actions, if (type == InventoryTransaction.USE_ITEM) buffer.readItemUse() else null)
+    return InventoryTransaction(type, actions, if (type == InventoryTransaction.USE_ITEM) buffer.readItemUse() else null, legacyRequestId)
 }
 
 internal fun decodePlayerAction(buffer: ByteBuf): PlayerAction {
@@ -222,17 +231,21 @@ internal fun decodeMobEquipment(buffer: ByteBuf): MobEquipment {
 
 /** An item use as `PlayerAuthInput` carries it: a transaction without the type, which can only be this one. */
 internal fun ByteBuf.readPackedItemUse(): ItemUse {
-    skipLegacyRequest()
+    readLegacyRequest()
     readActions() // The slot changes the client predicts, which an item use has no need of
     return readItemUse()
 }
 
 internal fun ByteBuf.readBlockAction() = BlockAction(readVarInt(), readBlockPos(), readVarInt())
 
-/** Skips a legacy request ID, and the slots a valid one asks to have resent. Item stack requests do that job now. */
-private fun ByteBuf.skipLegacyRequest() {
-    readVarInt()
+/**
+ * Reads a legacy request ID, and returns it, skipping the slots it asks to
+ * have resent: Kore resends the slots the transaction changes instead.
+ */
+private fun ByteBuf.readLegacyRequest(): Int {
+    val id = readVarInt()
     if (readBoolean()) readList { readUnsignedByte(); readByteArray() } // A container, then its slots
+    return id
 }
 
 /** Reads the slot changes the client predicts a transaction makes. */

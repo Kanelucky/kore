@@ -146,7 +146,7 @@ class BuildingTest {
     }
 
     @Test
-    fun `torches, buttons and levers fall with the block holding them up, and no others`() {
+    fun `torches, buttons and levers fall a tick after the block holding them up, and no others`() {
         world.place(torch, PILLAR, Face.EAST, clickY = 0.5f, Placer(Face.SOUTH))
         world.place(torch, PILLAR, Face.UP, clickY = 0f, Placer(Face.SOUTH))
         world.place(button, PILLAR, Face.SOUTH, clickY = 0.5f, Placer(Face.NORTH))
@@ -154,7 +154,8 @@ class BuildingTest {
         val beside = PILLAR.side(Face.NORTH)
         world.place(torch, beside.side(Face.DOWN), Face.UP, clickY = 0f, Placer(Face.SOUTH)) // Standing on the ground beside the pillar
 
-        val broken = world.breakBlock(PILLAR).broken.mapValues { it.value.state }
+        assertEquals(mapOf(PILLAR to stone), world.breakBlock(PILLAR).broken.mapValues { it.value.state })
+        val broken = world.tickBlocks().broken.mapValues { it.value.state }
 
         val fixed = mapOf(
             PILLAR.side(Face.EAST) to torch("west"),
@@ -162,7 +163,7 @@ class BuildingTest {
             PILLAR.side(Face.SOUTH) to button(Face.SOUTH),
             PILLAR.side(Face.WEST) to lever("west"),
         )
-        assertEquals(mapOf(PILLAR to stone) + fixed, broken)
+        assertEquals(fixed, broken)
         assertEquals(torch("top"), world.stateAt(beside))
     }
 

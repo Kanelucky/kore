@@ -6,9 +6,13 @@ import org.koremc.registry.maxStackSize
 import org.koremc.registry.sameKindAs
 import kotlin.math.abs
 import kotlin.math.floor
+import kotlin.random.Random
 
 /** How long an item lies in the world before it's gone, in ticks: five minutes. */
 private const val ITEM_LIFETIME = 6000
+
+/** How long an item that drops from a block waits before anyone can pick it up, in ticks. */
+internal const val DROPPED_PICKUP_DELAY = 10
 
 /** How far below the world an item falls before it's gone. */
 private const val VOID_DEPTH = 64
@@ -149,6 +153,19 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
 }
 
 /**
+ * Drops [stacks] from the block at [pos], as a block breaking does: each
+ * somewhere near the block's middle, popping up and out a little.
+ */
+fun FlatWorld.dropFromBlock(pos: BlockPos, stacks: List<ItemStack>) {
+    for (stack in stacks) {
+        fun jitter() = Random.nextDouble(-0.25, 0.25).toFloat()
+        val at = Vec3(pos.x + 0.5f + jitter(), (pos.y + 0.5 - HEIGHT / 2).toFloat() + jitter(), pos.z + 0.5f + jitter())
+        val velocity = Vec3(Random.nextDouble(-0.1, 0.1).toFloat(), 0.2f, Random.nextDouble(-0.1, 0.1).toFloat())
+        spawnItem(stack, at, velocity, DROPPED_PICKUP_DELAY)
+    }
+}
+
+/**
  * Moves every item along a tick: they fall, slide and land on blocks, and
  * merge with items of their kind close by. One that's lain for five
  * minutes, or fallen out of the world, is gone.
@@ -208,10 +225,12 @@ private fun blocksAcross(box: Box, axis: Int) = floor(box.min[axis]).toInt()..fl
 /**
  * The heights within a block that items land on and bump into, or null for
  * a block they fall through. Whole cubes fill the block, slabs fill their
- * half, and stairs at least the half they stand on.
+ * half, and stairs at least the half they stand on. A big dripleaf's leaf
+ * holds items up until it tips right over.
  */
 private fun BlockState.solidHeights(): ClosedFloatingPointRange<Double>? = when {
     isFullCube -> 0.0..1.0
+    name == BIG_DRIPLEAF -> leafHeights()
     properties["minecraft:vertical_half"] == "top" -> 0.5..1.0
     properties["minecraft:vertical_half"] == "bottom" -> 0.0..0.5
     "weirdo_direction" in properties -> if (properties["upside_down_bit"] == 1.toByte()) 0.5..1.0 else 0.0..0.5

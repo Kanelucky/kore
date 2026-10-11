@@ -34,20 +34,30 @@ internal fun blockEntityFor(state: BlockState, pos: BlockPos, placer: Placer, it
 /**
  * Pairs the chest just placed at [pos] with one beside it, if there's a
  * chest of the same kind to its left or right, facing the same way, that
- * isn't paired already. Both remember where the other is. Returns where
- * the other is, as the data it keeps changed, or nothing.
+ * isn't paired already. Copper chests pair with copper chests however
+ * weathered or waxed, and the one just placed becomes the same as the
+ * other. Both remember where the other is. Returns where the other is, as
+ * the data it keeps changed, or nothing.
  */
 internal fun FlatWorld.pairChest(pos: BlockPos): List<BlockPos> {
     val chest = stateAt(pos) ?: return emptyList()
     val facing = Face.entries.find { it.id == chest.properties[CARDINAL] } ?: return emptyList()
     val partner = listOf(facing.counterClockwise, facing.clockwise).map(pos::side).firstOrNull { side ->
         val other = stateAt(side)
-        other?.name == chest.name && other.properties[CARDINAL] == chest.properties[CARDINAL] && blockEntityAt(side)?.containsKey(PAIR_X) != true
+        other != null && pairsWith(chest.name, other.name) && other.properties[CARDINAL] == chest.properties[CARDINAL] &&
+            blockEntityAt(side)?.containsKey(PAIR_X) != true
     } ?: return emptyList()
+    val other = stateAt(partner) ?: return emptyList()
+    if (other.name != chest.name) blocks.find(other.name, chest.properties)?.let { set(pos, it) }
     setBlockEntity(pos, pairedChest(partner))
     setBlockEntity(partner, pairedChest(pos))
     return listOf(partner)
 }
+
+/** Whether chests called [one] and [other] can pair: the same kind, or any two copper chests. */
+private fun pairsWith(one: String, other: String) = one == other || (one.endsWith(COPPER_CHEST) && other.endsWith(COPPER_CHEST))
+
+private const val COPPER_CHEST = "copper_chest"
 
 /** A chest's block entity, paired with the chest at [other]. */
 private fun pairedChest(other: BlockPos) = NbtMap.builder().putString("id", "Chest").putInt(PAIR_X, other.x).putInt(PAIR_Z, other.z).build()

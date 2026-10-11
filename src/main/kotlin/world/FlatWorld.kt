@@ -5,6 +5,7 @@ import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
+import java.util.TreeMap
 
 /**
  * Chunks name biomes by number, and Cloudburst's data has no numbers for
@@ -36,6 +37,15 @@ class FlatWorld(
 
     /** The chunks players have changed, which no longer match [generated]. */
     private val changed = HashMap<ChunkPos, Chunk>()
+
+    /** How many times the world's blocks have ticked, which updates are scheduled by. */
+    internal var blockTicks = 0L
+
+    /** Blocks to look at again, by the tick to, and what for. */
+    internal val scheduled = TreeMap<Long, LinkedHashSet<Pair<BlockPos, BlockUpdate>>>()
+
+    /** Whether any block is waiting to be looked at again. */
+    val hasScheduledUpdates get() = scheduled.isNotEmpty()
 
     /** The block entities in each chunk that has any, by where they are. */
     private val blockEntities = HashMap<ChunkPos, HashMap<BlockPos, NbtMap>>()

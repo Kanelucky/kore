@@ -45,6 +45,15 @@ class StackRequestHandler(
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, Map<Location, Int>>) = size > REMEMBERED_REQUESTS
     }
 
+    /**
+     * Remembers that, until it hears what they hold now, the client names
+     * the stacks in [slots] of the player's items by [requestId]: the ID of a
+     * transaction from before item stack requests, which changed them.
+     */
+    fun rememberLegacy(requestId: Int, slots: Collection<Int>) {
+        recent[requestId] = slots.mapNotNull { slot -> inventory.items[slot]?.let { Location(inventory.items, slot) to it.id } }.toMap()
+    }
+
     fun handle(request: StackRequest): StackResponse {
         val transaction = Transaction(request.id)
         return try {

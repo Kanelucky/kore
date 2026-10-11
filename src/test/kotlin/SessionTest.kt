@@ -535,7 +535,7 @@ class SessionTest {
     }
 
     @Test
-    fun `a torch falls with the block holding it up, though it's in the next chunk`() {
+    fun `a torch falls a tick after the block holding it up, though it's in the next chunk`() {
         config = config.copy(gameMode = GameMode.CREATIVE)
         spawn()
         // Chunk 0, 0 starts at x 0, so the torch is in chunk -1, 0.
@@ -543,6 +543,8 @@ class SessionTest {
         world[BlockPos(-1, -63, 1)] = torch
 
         clientSends(playerAction(CREATIVE_DESTROY_BLOCK, BlockPos(0, -63, 1)))
+        assertEquals(torch, world.stateAt(BlockPos(-1, -63, 1)))
+        listOf(session).tickBlocks(game, dropItems = false)
 
         val (block, fallen) = sent.map { batches.decode(it) }
         assertContentEquals(UpdateBlock(BlockPos(0, -63, 1), AIR_NETWORK_ID).encode(), block[0])
@@ -809,6 +811,28 @@ class SessionTest {
     }
 
     @Test
+    fun `a transaction with a legacy request ID gets the slots it changed back, which go by that ID meanwhile`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        pickPlanksIntoHotbar()
+
+        clientSends(placeBlock(against = BlockPos(1, -64, 0), face = 1, slot = 0, legacyRequestId = -6058))
+        val slot = InventorySlot(0, creative.items[0].stack.copy(count = 64), stackId = 1).encode()
+        assertTrue(sent.flatMap { batches.decode(it) }.any { it.contentEquals(slot) })
+
+        // Request -9 destroys one of the stack the client still names -6058.
+        sent.clear()
+        clientSends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(-9).writeVarUInt(1)
+                    .writeVarUInt(4).writeByte(4).writeByte(1).writeByte(28).writeBoolean(false).writeByte(0).writeIntLE(-6058)
+                    .writeVarUInt(0).writeIntLE(0),
+            ),
+        )
+        assertEquals(0, receivedPacket()[3].toInt()) // The response's result: accepted
+    }
+
+    @Test
     fun `placing in survival uses up the stack, and the client is put right if a placement fails`() {
         spawn()
         world.spawnItem(ItemStack(creative.items[0].stack.item, count = 2, block = planks), Vec3(1f, -63f, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
@@ -1008,8 +1032,12 @@ class SessionTest {
      * unless it says otherwise, or nothing for 0. The client found the
      * click works unless [predictedToWork] says otherwise.
      */
-    private fun placeBlock(against: BlockPos, face: Int, slot: Int, held: Int = PLANKS_ITEM, predictedToWork: Boolean = true) = ByteBufUtil.getBytes(
-        Unpooled.buffer().writeVarUInt(30).writeVarInt(0).writeBoolean(false).writeVarUInt(2).writeVarUInt(0)
+    private fun placeBlock(against: BlockPos, face: Int, slot: Int, held: Int = PLANKS_ITEM, predictedToWork: Boolean = true, legacyRequestId: Int = 0) = ByteBufUtil.getBytes(
+        Unpooled.buffer().writeVarUInt(30).writeVarInt(legacyRequestId).writeBoolean(false).writeVarUInt(2)
+            .apply {
+                // A legacy request names the slot it changes, here unchanged, as a creative player's is.
+                if (legacyRequestId == 0) writeVarUInt(0) else writeVarUInt(1).writeVarUInt(0).writeBoolean(true).writeByte(0).writeBoolean(false).writeVarUInt(slot).heldItem(held).heldItem(held)
+            }
             .writeVarInt(0).writeByte(1).writeBlockPos(against).writeByte(face).writeVarInt(slot).writeByte(0)
             .heldItem(held)
             .writeFloatLE(standing.x).writeFloatLE(standing.y).writeFloatLE(standing.z)

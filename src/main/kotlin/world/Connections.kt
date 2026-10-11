@@ -40,12 +40,14 @@ private val BlockState.gateFacing get() = Face.entries.find { it.id == propertie
  * set in a wall. Stairs turn a corner against stairs set across them.
  * Tripwire joins the tripwire and hooks beside it, and tripwire hooks
  * strung to one another, with the tripwire between, are attached.
- * Pointed dripstone thickens from its tip back, and scaffolding knows how
- * far it is from what holds it up. Any other block is as it is.
+ * Pointed dripstone thickens from its tip back, a big dripleaf is a leaf
+ * at the top of its plant and stem below, and scaffolding knows how far it
+ * is from what holds it up. Any other block is as it is.
  */
 fun FlatWorld.joined(pos: BlockPos, state: BlockState): BlockState {
     val changes = when {
         state.name == SCAFFOLDING -> return scaffoldingShaped(pos, state)
+        state.name == BIG_DRIPLEAF -> return dripleafShaped(pos, state)
         state.name == TRIPWIRE -> AROUND.associate { side -> connection(side) to bit(tripwireJoins(side, stateAt(pos.side(side)))) } +
             (ATTACHED to bit(tripwireStrung(pos)))
         state.name == TRIPWIRE_HOOK -> mapOf(ATTACHED to bit(hookStrung(pos, state)))

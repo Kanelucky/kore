@@ -84,7 +84,8 @@ import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
 import org.koremc.world.BlockPos
-import org.koremc.world.BrokenBlock
+import org.koremc.world.Changes
+import org.koremc.world.FlatWorld
 import org.koremc.world.ChunkPos
 import org.koremc.world.Face
 import org.koremc.world.ItemEntity
@@ -100,15 +101,19 @@ import org.koremc.world.blockPlacedBy
 import org.koremc.world.breakBlock
 import org.koremc.world.breakTicks
 import org.koremc.world.corner
+import org.koremc.world.dropFromBlock
 import org.koremc.world.centre
 import org.koremc.world.chunksAround
 import org.koremc.world.facing
 import org.koremc.world.harvests
+import org.koremc.world.opensOnClick
 import org.koremc.world.otherHalf
 import org.koremc.world.place
 import org.koremc.world.releaseButton
 import org.koremc.world.settle
 import org.koremc.world.side
+import org.koremc.world.stepOn
+import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
 import org.koremc.world.usable
 import org.koremc.world.use
@@ -120,7 +125,6 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.random.Random
 
 private val log = LoggerFactory.getLogger(Session::class.java)
 
@@ -132,9 +136,6 @@ private const val COMPRESSION_THRESHOLD = 256
 
 /** How long the game's tick is. */
 private const val TICK_MILLIS = 50L
-
-/** How long an item that drops from a block waits before anyone can pick it up, in ticks. */
-private const val DROPPED_PICKUP_DELAY = 10
 
 /** How long an item a player throws waits, long enough for it to clear them: two seconds. */
 private const val THROWN_PICKUP_DELAY = 40
@@ -658,6 +659,24 @@ class Session(
             InventoryTransaction.USE_ITEM -> packet.use?.let(::onItemUse)
             InventoryTransaction.NORMAL -> onDropFromSlot(packet.actions)
         }
+        if (packet.legacyRequestId != 0) acknowledge(packet)
+    }
+
+    /**
+     * Tells the client what the slots of the player's items [transaction]
+     * changed hold now, with their stacks' IDs. Until it hears, the client
+     * names those stacks by the transaction's legacy request ID, which Kore
+     * remembers for the item stack requests that do, like moving the items
+     * placing a candle on a candle left behind.
+     */
+    private fun acknowledge(transaction: InventoryTransaction) {
+        val slots = transaction.actions
+            .filter { it.source == InventoryAction.CONTAINER && it.windowId == INVENTORY_WINDOW && it.slot in 0 until inventory.items.size }
+            .map { it.slot }
+            .distinct()
+        if (slots.isEmpty()) return
+        stackRequests.rememberLegacy(transaction.legacyRequestId, slots)
+        send(*slots.map(::slotOf).toTypedArray())
     }
 
     /**
@@ -703,7 +722,8 @@ class Session(
     /**
      * A click on a block, with whatever the player holds, which the client
      * reports once it has predicted what happens. Clicking a block that
-     * does something, like a lever, uses it. Otherwise, or when the player
+     * does something, like a lever, uses it, and clicking one that opens a
+     * screen, like a chest, places nothing. Otherwise, or when the player
      * sneaks with something in hand, the click places what they hold.
      *
      * The client checks some things Kore doesn't, like whether a torch has
@@ -714,8 +734,14 @@ class Session(
      */
     private fun onClick(use: ItemUse) {
         if (!use.predictedToWork) return
-        val usable = world.stateAt(use.position)?.usable == true
-        if (usable && !(sneaking && use.heldItem != 0)) useBlock(use.position) else onPlace(use)
+        val clicked = world.stateAt(use.position)
+        when {
+            sneaking && use.heldItem != 0 -> onPlace(use)
+            clicked?.usable == true -> useBlock(use.position)
+            // A chest, anvil or the like opens for the client, which Kore can't show yet. Either way, nothing's placed.
+            clicked?.opensOnClick == true -> log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
+            else -> onPlace(use)
+        }
     }
 
     /**
@@ -778,11 +804,8 @@ class Session(
             val first = placed.first()
             val sound = first to LevelSoundEvent(LevelSoundEvent.PLACE, first.centre, world.blockAt(first))
             val changes = world.settle(placed)
-            showAround(placed.flatMap(::updateWithData) + sound + changes.broken.flatMap(::breakEffects) + changes.reshaped.flatMap(::updateWithData))
-            if (!creative) {
-                inventory.remove(heldSlot)
-                changes.broken.forEach { (at, broken) -> dropFrom(at, broken.state, broken.blockEntity) }
-            }
+            showAround(placed.flatMap(world::withData) + sound + world.packetsFor(changes))
+            if (!creative) inventory.remove(heldSlot)
             log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.name, first)
         }
         val corrections = (listOf(use.position, use.position.side(face)) - placed.toSet()).map { UpdateBlock(it, world.blockAt(it)) }
@@ -792,6 +815,9 @@ class Session(
     }
 
     private val creative get() = config.gameMode == GameMode.CREATIVE
+
+    /** Where the player's feet are, if they're in the game and standing on something. */
+    internal val standingAt: Vec3? get() = if (isInGame && onGround) Vec3(position.x, position.y - PLAYER_EYE_HEIGHT, position.z) else null
 
     /**
      * Breaks the block at [pos], as the client predicted, if the player
@@ -823,7 +849,7 @@ class Session(
             return
         }
         val changes = world.breakBlock(pos)
-        showAround(changes.broken.flatMap(::breakEffects) + changes.reshaped.flatMap(::updateWithData))
+        showAround(world.packetsFor(changes))
         if (!creative) {
             changes.broken.forEach { (at, broken) ->
                 // What the player broke drops only if what they hold harvests it. What fell with it always drops.
@@ -834,29 +860,8 @@ class Session(
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
     }
 
-    /** What everyone with the chunk sees of the block at [pos] breaking: it going, with the particles and sound of [broken]. */
-    private fun breakEffects(pos: BlockPos, broken: BrokenBlock): List<Pair<BlockPos, ServerPacket>> =
-        listOf(pos to UpdateBlock(pos, AIR_NETWORK_ID), pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
-
-    private fun breakEffects(entry: Map.Entry<BlockPos, BrokenBlock>) = breakEffects(entry.key, entry.value)
-
-    /** The block at [pos] as it is now, for the clients that have it, followed by the data it keeps, if any. */
-    private fun updateWithData(pos: BlockPos): List<Pair<BlockPos, ServerPacket>> =
-        listOfNotNull(updateOf(pos), world.blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) })
-
-    /**
-     * Drops what [block], broken at [pos], drops, given the data it kept,
-     * [blockEntity]: each stack somewhere near the block's middle, popping
-     * up and out a little, as the game drops them.
-     */
-    private fun dropFrom(pos: BlockPos, block: BlockState, blockEntity: NbtMap?) {
-        for (stack in game.drops.of(block, blockEntity)) {
-            fun jitter() = Random.nextFloat() * 0.5f - 0.25f
-            val at = Vec3(pos.x + 0.5f + jitter(), pos.y + 0.5f - ITEM_HEIGHT / 2 + jitter(), pos.z + 0.5f + jitter())
-            val velocity = Vec3(Random.nextFloat() * 0.2f - 0.1f, 0.2f, Random.nextFloat() * 0.2f - 0.1f)
-            world.spawnItem(stack, at, velocity, DROPPED_PICKUP_DELAY)
-        }
-    }
+    /** Drops what [block], broken at [pos], drops, given the data it kept, [blockEntity]. */
+    private fun dropFrom(pos: BlockPos, block: BlockState, blockEntity: NbtMap?) = world.dropFromBlock(pos, game.drops.of(block, blockEntity))
 
     /**
      * Throws [stack] the way the player looks, from just below their eyes,
@@ -1109,12 +1114,7 @@ class Session(
      * chunk, in order. The blocks a change reaches, like a torch on a
      * neighbour's side, can be in the next chunk.
      */
-    private fun showAround(packets: List<Pair<BlockPos, ServerPacket>>) {
-        for ((chunk, inChunk) in packets.groupBy { (pos, _) -> pos.chunk }) {
-            val batch = inChunk.map { (_, packet) -> packet }.toTypedArray()
-            viewers().forEach { it.show(chunk, *batch) }
-        }
-    }
+    private fun showAround(packets: List<Pair<BlockPos, ServerPacket>>) = viewers().showAround(packets)
 
     /** The block at [pos] as it is now, for the clients that have it. */
     private fun updateOf(pos: BlockPos): Pair<BlockPos, ServerPacket> = pos to UpdateBlock(pos, world.blockAt(pos))
@@ -1246,6 +1246,49 @@ class Session(
     private val who get() = player?.displayName ?: "network $networkId"
 }
 
+/**
+ * Sends each packet, about the block it's paired with, to every one of
+ * these players who has that block's chunk: one batch for each chunk, in
+ * order.
+ */
+private fun Collection<Session>.showAround(packets: List<Pair<BlockPos, ServerPacket>>) {
+    for ((chunk, inChunk) in packets.groupBy { (pos, _) -> pos.chunk }) {
+        val batch = inChunk.map { (_, packet) -> packet }.toTypedArray()
+        forEach { it.show(chunk, *batch) }
+    }
+}
+
+/**
+ * Ticks the blocks in [game]'s world, for these players to see if they
+ * have the chunks: blocks that lost what held them up a tick ago break,
+ * scaffolding moves along, coral out of water dies, and big dripleaves tip
+ * under the players and items standing on them. What breaks drops what it
+ * drops, if [dropItems]. Run once a tick.
+ */
+internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) {
+    val world = game.world
+    val stood = world.stepOn(mapNotNull { it.standingAt } + world.items.filter { it.onGround }.map { it.position })
+    val ticked = world.tickBlocks()
+    val changes = Changes(ticked.broken, (stood + ticked.reshaped).distinct(), ticked.sounds)
+    if (changes.isEmpty) return
+    showAround(world.packetsFor(changes))
+    if (dropItems) changes.broken.forEach { (pos, broken) -> game.world.dropFromBlock(pos, game.drops.of(broken.state, broken.blockEntity)) }
+}
+
+/**
+ * What players see of [changes]: blocks going, with the particles and
+ * sound of their breaking, blocks changing shape, with any data they keep,
+ * and the sounds blocks made.
+ */
+private fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPacket>> =
+    changes.broken.flatMap { (pos, broken) ->
+        listOf(pos to UpdateBlock(pos, AIR_NETWORK_ID), pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
+    } + changes.reshaped.flatMap(::withData) + changes.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) }
+
+/** The block at [pos] as it is now, followed by the data it keeps, if any. */
+private fun FlatWorld.withData(pos: BlockPos): List<Pair<BlockPos, ServerPacket>> =
+    listOfNotNull(pos to UpdateBlock(pos, blockAt(pos)), blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) })
+
 /** Packet names, with a run of the same packet counted rather than repeated: `LevelChunk x16`. */
 private fun names(packets: Array<out ServerPacket>): String {
     val runs = mutableListOf<Pair<String, Int>>()
@@ -1277,6 +1320,7 @@ class Sessions(
     }
 
     private fun tick() {
+        sessions.values.tickBlocks(game, dropItems = config.gameMode != GameMode.CREATIVE)
         game.world.tickItems()
         sessions.values.forEach { it.collectItems() }
         sessions.values.forEach { it.syncItems() }

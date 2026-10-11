@@ -196,6 +196,15 @@ class StackRequestHandlerTest {
     private fun pickToCursor(requestId: Int, count: Int) =
         assertTrue(handler.handle(StackRequest(requestId, listOf(StackAction.CraftCreative(1, 1), StackAction.Transfer(count, createdOutput(requestId), cursor(0))))).accepted)
 
+    @Test
+    fun `a stack a legacy transaction changed goes by that transaction's ID, until the client hears its own`() {
+        inventory.items[2] = SlotStack(ItemStack(stick, count = 5), 7)
+        handler.rememberLegacy(-6058, listOf(2))
+
+        assertTrue(handler.handle(StackRequest(-9, listOf(StackAction.Transfer(1, hotbar(2, -6058), hotbar(3, 0))))).accepted)
+        assertFalse(handler.handle(StackRequest(-11, listOf(StackAction.Transfer(1, hotbar(2, -6060), hotbar(4, 0))))).accepted)
+    }
+
     private fun createdOutput(stackId: Int) = SlotRef(ContainerName.CREATED_OUTPUT, CREATED_OUTPUT_SLOT, stackId)
 
     private fun cursor(stackId: Int) = SlotRef(ContainerName.CURSOR, 0, stackId)

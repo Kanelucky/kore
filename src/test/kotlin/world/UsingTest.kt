@@ -91,12 +91,11 @@ class UsingTest {
     }
 
     @Test
-    fun `a door falls with the block it stands on, both halves`() {
+    fun `a door falls a tick after the block it stands on, both halves`() {
         world.place(palette.defaultOf("minecraft:wooden_door")!!, spot.side(Face.DOWN), Face.UP, clickY = 0f, Placer(Face.NORTH))
 
-        val broken = world.breakBlock(spot.side(Face.DOWN))
-
-        assertEquals(setOf(spot.side(Face.DOWN), spot, spot.side(Face.UP)), broken.broken.keys)
+        assertEquals(setOf(spot.side(Face.DOWN)), world.breakBlock(spot.side(Face.DOWN)).broken.keys)
+        assertEquals(setOf(spot, spot.side(Face.UP)), world.tickBlocks().broken.keys)
         assertEquals(air, world.stateAt(spot.side(Face.UP)))
     }
 

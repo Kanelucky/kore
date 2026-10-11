@@ -141,8 +141,8 @@ internal const val VINE_FACES = "vine_direction_bits"
 /** Where a torch that can't lean on the block it was placed against looks for one that can hold it, in the game's order. */
 private val TORCH_SUPPORTS = listOf(Face.SOUTH, Face.WEST, Face.NORTH, Face.EAST, Face.DOWN)
 
-/** Whether a placed block takes this one's place, rather than going beside it. */
-val BlockState.replaceable get() = name in REPLACEABLE
+/** Whether a placed block takes this one's place, rather than going beside it. Snow does only while it's one layer deep. */
+val BlockState.replaceable get() = name in REPLACEABLE && !(name == SNOW_LAYER && properties["height"] != 0)
 
 /**
  * Places [block] as [placer] does, against [face] of the block at
@@ -178,7 +178,10 @@ val BlockState.replaceable get() = name in REPLACEABLE
  */
 fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Float, placer: Placer, item: ItemStack? = null): List<BlockPos> {
     val clickedState = stateAt(clicked) ?: return emptyList()
-    if (block.name == SCAFFOLDING && clickedState.name == SCAFFOLDING) return placeScaffolding(block, clicked, face, placer)
+    // Scaffolding clicked, or the ground under it clicked from inside it, grows the scaffolding.
+    if (block.name == SCAFFOLDING && (clickedState.name == SCAFFOLDING || stateAt(clicked.side(face))?.name == SCAFFOLDING)) {
+        return placeScaffolding(block, clicked, face, placer)
+    }
 
     // Onto the clicked block itself, or into the space beyond, when either holds the same block with room for more.
     val openFace = if (clickedState.properties[VERTICAL_HALF] == "top") Face.DOWN else Face.UP
@@ -211,6 +214,7 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
         state.isLantern -> lanternAt(target, placedOn, state) ?: return emptyList()
         state.name == "minecraft:bell" -> bellAt(target, placedOn, state)
         state.name.endsWith("_hanging_sign") -> hangingSignAt(target, placedOn, state, placer) ?: return emptyList()
+        state.name == BIG_DRIPLEAF -> dripleafPlaced(target, state)
         else -> state
     }
     val holder = state.heldFrom
@@ -248,11 +252,11 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
 }
 
 /**
- * Breaks the block at [pos], leaving air, along with whatever goes with
- * it: the other half of a door, bed or tall plant, and anything that can
- * no longer stand where it is, like a torch on its side or a flower on its
- * top, and so on from those. Blocks around it that join their neighbours
- * take their new shape. Returns what broke, and what changed shape.
+ * Breaks the block at [pos], leaving air, along with the other half of a
+ * door, bed or tall plant. Blocks around it that join their neighbours
+ * take their new shape, and anything that can no longer stand where it
+ * is, like a torch on its side or a flower on its top, breaks next tick,
+ * as [settle] explains. Returns what broke, and what changed shape.
  */
 fun FlatWorld.breakBlock(pos: BlockPos): Changes {
     val state = stateAt(pos)?.takeIf { it.name != AIR } ?: return Changes(emptyMap(), emptyList())

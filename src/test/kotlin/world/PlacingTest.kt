@@ -130,8 +130,8 @@ class PlacingTest {
             place(name, at, Face.UP)
         }
         for (x in 0..3) {
-            val changes = world.breakBlock(BlockPos(x, soil.y, 0))
-            assertEquals(2, changes.broken.size)
+            world.breakBlock(BlockPos(x, soil.y, 0))
+            assertEquals(1, world.tickBlocks().broken.size)
             assertEquals(AIR, world.stateAt(BlockPos(x, soil.y + 1, 0))?.name)
         }
 
@@ -139,7 +139,8 @@ class PlacingTest {
         world[sand] = blocks.defaultOf("minecraft:sand")!!
         place("minecraft:cactus", sand, Face.UP)
         place("minecraft:stone", sand.side(Face.EAST), Face.UP) // Beside the cactus
-        assertEquals("minecraft:cactus", world.settle(listOf(sand.side(Face.EAST).side(Face.UP))).broken.values.single().state.name)
+        world.settle(listOf(sand.side(Face.EAST).side(Face.UP)))
+        assertEquals("minecraft:cactus", world.tickBlocks().broken.values.single().state.name)
     }
 
     @Test
@@ -184,9 +185,49 @@ class PlacingTest {
         assertEquals(6, world.stateAt(BlockPos(6, top.y, 0))?.properties?.get("stability"))
         assertTrue(placeSaying("minecraft:scaffolding", top, Face.EAST).isEmpty())
 
-        // Without the column, nothing holds the rest.
-        val changes = world.breakBlock(above)
-        assertEquals(9, changes.broken.size)
+        // Without the column, nothing holds the rest. The scaffolding above it falls a tick later, and the arm, its distance
+        // counting up a tick at a time, once it can no longer reach anything that stands.
+        world.breakBlock(above)
+        assertEquals(1, world.tickBlocks().broken.size)
+        assertEquals(7, world.tickUntilStill().size)
+
+        // Clicking the ground from inside a column builds it up.
+        place("minecraft:scaffolding", ground, Face.UP)
+        place("minecraft:scaffolding", ground, Face.UP)
+        assertEquals("minecraft:scaffolding", world.stateAt(above.side(Face.UP))?.name)
+    }
+
+    @Test
+    fun `a stack of carpets falls one a tick when the block under it goes`() {
+        val block = BlockPos(0, ground.y + 1, 0)
+        world[block] = blocks.defaultOf("minecraft:stone")!!
+        repeat(3) { place("minecraft:white_carpet", BlockPos(0, block.y + it, 0), Face.UP) }
+
+        world.breakBlock(block)
+        val fallen = (1..4).map { world.tickBlocks().broken.keys.map { it.y - block.y } }
+        assertEquals(listOf(listOf(1), listOf(2), listOf(3), emptyList()), fallen)
+    }
+
+    @Test
+    fun `full snow takes more on top, and is no longer replaced by other blocks`() {
+        repeat(8) { place("minecraft:snow_layer", if (it == 0) ground else above, Face.UP) }
+        assertEquals(7, world.stateAt(above)?.properties?.get("height"))
+        place("minecraft:snow_layer", above, Face.UP)
+        assertEquals("minecraft:snow_layer", world.stateAt(above.side(Face.UP))?.name)
+        place("minecraft:stone", above, Face.UP)
+        assertEquals(7, world.stateAt(above)?.properties?.get("height"))
+    }
+
+    @Test
+    fun `copper chests pair however weathered, taking the first one's look, and chests and the like open rather than build`() {
+        place("minecraft:weathered_copper_chest", ground, Face.UP, Placer(Face.NORTH))
+        place("minecraft:copper_chest", ground.side(Face.EAST), Face.UP, Placer(Face.NORTH))
+        assertEquals("minecraft:weathered_copper_chest", world.stateAt(above.side(Face.EAST))?.name)
+        assertEquals(0, world.blockEntityAt(above.side(Face.EAST))?.getInt("pairx"))
+
+        assertTrue(blocks.defaultOf("minecraft:anvil")!!.opensOnClick)
+        assertTrue(blocks.defaultOf("minecraft:copper_chest")!!.opensOnClick)
+        assertTrue(!blocks.defaultOf("minecraft:stone")!!.opensOnClick)
     }
 
     @Test
@@ -262,6 +303,78 @@ class PlacingTest {
         world.use(repeater.side(Face.UP), Face.NORTH)
         assertEquals(1, world.stateAt(repeater.side(Face.UP))?.properties?.get("repeater_delay"))
         assertEquals("south", world.stateAt(repeater.side(Face.UP))?.properties?.get(CARDINAL))
+    }
+
+    @Test
+    fun `coral out of water dies ten ticks after a block beside it changes, and never by itself`() {
+        place("minecraft:tube_coral_block", ground, Face.UP)
+        repeat(40) { world.tickBlocks() }
+        assertEquals("minecraft:tube_coral_block", world.stateAt(above)?.name)
+
+        world.settle(place("minecraft:stone", ground.side(Face.EAST), Face.UP)) // Beside the coral
+        repeat(9) { world.tickBlocks() }
+        assertEquals("minecraft:tube_coral_block", world.stateAt(above)?.name)
+        val died = world.tickBlocks()
+        assertEquals("minecraft:dead_tube_coral_block", world.stateAt(above)?.name)
+        assertEquals(listOf(BlockSound(above, "place", world.blockAt(above))), died.sounds)
+
+        // Placed in water, a fan lives, until the water beside it goes and something's placed by it.
+        val fan = BlockPos(4, ground.y + 1, 0)
+        world[fan.side(Face.EAST)] = blocks.defaultOf("minecraft:water")!!
+        place("minecraft:fire_coral_fan", BlockPos(4, ground.y, 0), Face.UP)
+        repeat(20) { world.tickBlocks() }
+        assertEquals("minecraft:fire_coral_fan", world.stateAt(fan)?.name)
+        world[fan.side(Face.EAST)] = blocks.defaultOf(AIR)!!
+        world.settle(place("minecraft:stone", BlockPos(3, ground.y, 0), Face.UP)) // Beside the fan
+        repeat(10) { world.tickBlocks() }
+        assertEquals("minecraft:dead_fire_coral_fan", world.stateAt(fan)?.name)
+    }
+
+    @Test
+    fun `a big dripleaf on another grows the plant, its stem below and leaf on top`() {
+        place("minecraft:big_dripleaf", ground, Face.UP, Placer(Face.NORTH))
+        world.settle(place("minecraft:big_dripleaf", above, Face.UP, Placer(Face.EAST)))
+
+        val stem = world.stateAt(above)!!
+        val leaf = world.stateAt(above.side(Face.UP))!!
+        assertEquals(0.toByte(), stem.properties["big_dripleaf_head"])
+        assertEquals(1.toByte(), leaf.properties["big_dripleaf_head"])
+        assertEquals(stem.properties[CARDINAL], leaf.properties[CARDINAL]) // Facing the way the plant does
+
+        // Breaking the leaf makes the stem the leaf again.
+        world.breakBlock(above.side(Face.UP))
+        assertEquals(1.toByte(), world.stateAt(above)?.properties?.get("big_dripleaf_head"))
+    }
+
+    @Test
+    fun `a big dripleaf stood on wobbles, tips a second later, tips right over, then rights itself`() {
+        place("minecraft:big_dripleaf", ground, Face.UP)
+        fun tilt() = world.stateAt(above)?.properties?.get("big_dripleaf_tilt")
+
+        assertEquals(emptyList(), world.stepOn(listOf(Vec3(0.5f, above.y + 0.5f, 0.5f)))) // Beside its stem, under the leaf
+        assertEquals(listOf(above), world.stepOn(listOf(Vec3(0.5f, above.y + 15f / 16, 0.5f))))
+        assertEquals("unstable", tilt())
+
+        repeat(19) { world.tickBlocks() }
+        assertEquals("unstable", tilt())
+        assertEquals("tilt_down.big_dripleaf", world.tickBlocks().sounds.single().sound)
+        assertEquals("partial_tilt", tilt())
+        repeat(9) { world.tickBlocks() }
+        assertEquals("partial_tilt", tilt())
+        world.tickBlocks()
+        assertEquals("full_tilt", tilt())
+        repeat(100) { world.tickBlocks() }
+        assertEquals("none", tilt())
+    }
+
+    /** Ticks the world's blocks until nothing's left to look at, and says everything that broke. */
+    private fun FlatWorld.tickUntilStill(): Map<BlockPos, BrokenBlock> {
+        val broken = linkedMapOf<BlockPos, BrokenBlock>()
+        repeat(100) {
+            if (!hasScheduledUpdates) return broken
+            broken += tickBlocks().broken
+        }
+        return broken
     }
 
     /** A block of stone on the ground, to place against, a few blocks north. */

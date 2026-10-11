@@ -45,13 +45,14 @@ internal fun FlatWorld.scaffoldingShaped(pos: BlockPos, scaffolding: BlockState)
 }
 
 /**
- * Places [scaffolding] by clicking [face] of the scaffolding at [clicked]:
- * clicking its top builds its column up, into the first space above it,
- * and clicking a side reaches out that way, into the first space beyond
- * the scaffolding there, at most [SCAFFOLDING_MAX_DISTANCE] blocks out.
- * Clicking its underside places beneath it, as with any block. The new
- * scaffolding must be in reach of what holds it up. Returns where it
- * went, or nothing.
+ * Places [scaffolding] by clicking [face] of the block at [clicked], when
+ * that's scaffolding, or the scaffolding beyond it is, as when a player
+ * standing in scaffolding clicks the ground under it. Clicking a top
+ * builds the column up, into the first space above it, and clicking a side
+ * reaches out that way, into the first space beyond the scaffolding there,
+ * at most [SCAFFOLDING_MAX_DISTANCE] blocks out. Clicking an underside
+ * places beneath it, as with any block. The new scaffolding must be in
+ * reach of what holds it up. Returns where it went, or nothing.
  */
 internal fun FlatWorld.placeScaffolding(scaffolding: BlockState, clicked: BlockPos, face: Face, placer: Placer): List<BlockPos> {
     var target = clicked.side(face)

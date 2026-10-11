@@ -7,8 +7,30 @@ import org.koremc.registry.BlockState
 /** A block that broke, with the data it kept, like a bed's colour, which what it drops can need. */
 data class BrokenBlock(val state: BlockState, val blockEntity: NbtMap? = null)
 
-/** What a change to the world did around it: the blocks that broke, and where blocks changed shape. */
-class Changes(val broken: Map<BlockPos, BrokenBlock>, val reshaped: List<BlockPos>)
+/** A sound a block makes as it changes, by the game's name for it, with its data: the network ID of the block making it, or -1. */
+data class BlockSound(val pos: BlockPos, val sound: String, val data: Int)
+
+/** What a change to the world did around it: the blocks that broke, where blocks changed shape, and the sounds they made. */
+class Changes(val broken: Map<BlockPos, BrokenBlock>, val reshaped: List<BlockPos>, val sounds: List<BlockSound> = emptyList()) {
+    val isEmpty get() = broken.isEmpty() && reshaped.isEmpty() && sounds.isEmpty()
+}
+
+/** Why a block is to be looked at again, some ticks after something changed. */
+enum class BlockUpdate {
+    /** Whether it can still stay where it is, and for scaffolding, how far it now is from what holds it up. */
+    SUPPORT,
+
+    /** Whether coral out of water dies. */
+    CORAL,
+
+    /** The next step of a big dripleaf tipping over under what stands on it, or righting itself. */
+    TILT,
+}
+
+/** Looks at the block at [pos] again for [update], [ticks] from now. */
+internal fun FlatWorld.schedule(pos: BlockPos, ticks: Int, update: BlockUpdate) {
+    scheduled.getOrPut(blockTicks + ticks) { LinkedHashSet() } += pos to update
+}
 
 /** How many blocks [settle] looks at, at most, so that nothing can keep it going for ever. */
 private const val MAX_SETTLE_STEPS = 20_000
@@ -26,7 +48,7 @@ private val ON_FLOOR_ENDINGS = listOf(
     "_petals", "_standing_sign", "standing_banner", "_repeater", "_comparator", "_crop", "_fungus",
 )
 private val ON_FLOOR = setOf(
-    "short_grass", "short_dry_grass", "tall_dry_grass", "fern", "deadbush", "bush", "firefly_bush", "dandelion", "poppy",
+    "big_dripleaf", "short_grass", "short_dry_grass", "tall_dry_grass", "fern", "deadbush", "bush", "firefly_bush", "dandelion", "poppy",
     "blue_orchid", "allium", "azure_bluet", "oxeye_daisy", "cornflower", "lily_of_the_valley", "wither_rose", "torchflower",
     "open_eyeblossom", "closed_eyeblossom", "golden_dandelion", "cactus", "cactus_flower", "reeds", "bamboo", "bamboo_sapling",
     "azalea", "flowering_azalea", "nether_sprouts", "crimson_roots", "warped_roots", "nether_wart", "wheat", "carrots",
@@ -132,16 +154,16 @@ internal fun FlatWorld.breakAt(pos: BlockPos, state: BlockState, broken: Mutable
 
 /**
  * Brings the world around [changed] in line with it, and around each
- * block that changes in turn: blocks that can no longer stay where they
- * are break, like a flower whose ground went, and blocks shaped by their
- * neighbours take their new shape, like fences, walls, stairs, tripwire,
- * dripstone and scaffolding. Vines and glow lichen let go of faces with
- * nothing behind them, and break when they're left with none. A chest
- * whose pair broke stands alone. Returns what broke, and where blocks
- * changed shape or the data they keep changed.
+ * block that changes in turn. Blocks shaped by their neighbours take
+ * their new shape at once, like fences, walls, stairs, tripwire and
+ * dripstone, and vines and glow lichen let go of faces with nothing
+ * behind them. Blocks that can no longer stay where they are, like a
+ * flower whose ground went, break a tick later, when [tickBlocks] looks
+ * at them again, as scaffolding works out its distance again then: so a
+ * stack of them falls one block a tick, as in the game. Returns where
+ * blocks changed shape. Nothing breaks here.
  */
 fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
-    val broken = linkedMapOf<BlockPos, BrokenBlock>()
     val reshaped = LinkedHashSet<BlockPos>()
     val toCheck = ArrayDeque<BlockPos>()
     fun around(pos: BlockPos) {
@@ -155,10 +177,10 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
         val at = toCheck.removeFirst()
         val state = stateAt(at)?.takeIf { it.name != AIR } ?: continue
         val faces = remainingFaces(at, state)
-        if (!survives(at, state) || faces?.isEmpty() == true) {
-            breakAt(at, state, broken)?.let(reshaped::add)
-            state.otherHalf(at)?.let { other -> stateAt(other)?.takeIf { it.name == state.name }?.let { breakAt(other, it, broken); around(other) } }
-            around(at)
+        if (state.isLivingCoral) scheduleCoralCheck(at)
+        // Breaking, and scaffolding's distance, wait a tick.
+        if (!survives(at, state) || faces?.isEmpty() == true || (state.name == SCAFFOLDING && scaffoldingShaped(at, state) != state)) {
+            schedule(at, 1, BlockUpdate.SUPPORT)
             continue
         }
         var shaped = joined(at, state)
@@ -168,8 +190,53 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
         reshaped += at
         around(at)
     }
+    return Changes(emptyMap(), reshaped.toList())
+}
+
+/**
+ * Ticks the world's blocks: looks again at those whose time has come.
+ * Blocks [settle] left that still can't stay break, with the other half of
+ * a door, bed or tall plant, and scaffolding takes its new distance. Coral
+ * out of water dies, and big dripleaves tip over or right themselves. The
+ * world settles around what changed, which can leave more for later ticks.
+ * Run once a tick. Returns what broke, where blocks changed shape, and the
+ * sounds they made.
+ */
+fun FlatWorld.tickBlocks(): Changes {
+    blockTicks++
+    val due = scheduled.remove(blockTicks) ?: return Changes(emptyMap(), emptyList())
+    val broken = linkedMapOf<BlockPos, BrokenBlock>()
+    val reshaped = LinkedHashSet<BlockPos>()
+    val sounds = mutableListOf<BlockSound>()
+    val changed = mutableListOf<BlockPos>()
+    for ((at, update) in due) {
+        val state = stateAt(at)?.takeIf { it.name != AIR } ?: continue
+        when (update) {
+            BlockUpdate.SUPPORT -> if (!survives(at, state) || remainingFaces(at, state)?.isEmpty() == true) {
+                breakAt(at, state, broken)?.let(reshaped::add)
+                changed += at
+                state.otherHalf(at)?.let { other -> stateAt(other)?.takeIf { it.name == state.name }?.let { breakAt(other, it, broken); changed += other } }
+            } else if (state.name == SCAFFOLDING) {
+                val shaped = scaffoldingShaped(at, state)
+                if (shaped == state) continue
+                set(at, shaped)
+                reshaped += at
+                changed += at
+            }
+            BlockUpdate.CORAL -> coralDies(at, state)?.let { sound ->
+                sounds += sound
+                reshaped += at
+                changed += at
+            }
+            BlockUpdate.TILT -> tiltOn(at, state)?.let { sound ->
+                sounds += sound
+                reshaped += at
+            }
+        }
+    }
+    reshaped += settle(changed).reshaped
     reshaped.removeAll(broken.keys)
-    return Changes(broken, reshaped.toList())
+    return Changes(broken, reshaped.toList(), sounds)
 }
 
 /**

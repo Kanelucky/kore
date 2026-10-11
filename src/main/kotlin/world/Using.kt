@@ -44,6 +44,26 @@ val BlockState.usable: Boolean
         (name !in OPENED_BY_REDSTONE && (name.endsWith("_door") || name.endsWith("trapdoor") || name.endsWith("fence_gate")))
 
 /**
+ * Blocks that open a screen, or do something else of their own, when a
+ * player clicks them: containers, workstations and the like, beds, bells,
+ * cake, note blocks, item frames, decorated pots, shelves and signs. Kore
+ * doesn't do all of these yet, but a click on one never places the held
+ * block beside it, unless the player sneaks.
+ */
+private val OPENS_ENDINGS = listOf(
+    "chest", "shulker_box", "furnace", "smoker", "anvil", "_shelf", "standing_sign", "wall_sign", "_hanging_sign", "command_block",
+    "candle_cake",
+)
+private val OPENS = setOf(
+    "barrel", "crafting_table", "cartography_table", "smithing_table", "loom", "stonecutter_block", "grindstone",
+    "enchanting_table", "brewing_stand", "beacon", "hopper", "dispenser", "dropper", "crafter", "bed", "straw_bed", "bell",
+    "cake", "noteblock", "frame", "glow_frame", "decorated_pot", "dragon_egg", "structure_block", "jigsaw",
+).mapTo(HashSet()) { "minecraft:$it" }
+
+/** Whether clicking this block does something of its own, which places nothing, whether or not Kore does it yet. */
+val BlockState.opensOnClick: Boolean get() = name in OPENS || OPENS_ENDINGS.any(name::endsWith)
+
+/**
  * Uses the block at [pos] as a player facing [facing] does by clicking it:
  * a lever flips, a button presses in, and doors, trapdoors and fence gates
  * open or shut, a door's two halves together and a gate away from the
