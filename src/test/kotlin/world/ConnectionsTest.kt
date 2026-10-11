@@ -11,9 +11,10 @@ class ConnectionsTest {
     private val air = state(AIR)
     private val stone = state("minecraft:stone")
     private val standingTorch = state("minecraft:torch", "torch_facing_direction" to "top")
+    private val leaves = listOf("minecraft:oak_leaves", "minecraft:azalea_leaves_flowered").map { state(it, "persistent_bit" to 1.toByte(), "update_bit" to 0.toByte()) }
 
     private val palette = BlockPalette(
-        listOf(air, stone, standingTorch) +
+        listOf(air, stone, standingTorch) + leaves +
             bits(4).flatMap { (n, e, s, w) ->
                 listOf("minecraft:oak_fence", "minecraft:nether_brick_fence", "minecraft:glass_pane").map { joining(it, n, e, s, w) }
             } +
@@ -43,6 +44,18 @@ class ConnectionsTest {
         place(wall("none", "none", "none", "none", 1), spot.side(Face.WEST))
         world.updateAround(listOf(spot.side(Face.NORTH), spot.side(Face.SOUTH), spot.side(Face.WEST)))
         assertEquals(fence(n = 1, e = 1), world.stateAt(spot))
+    }
+
+    @Test
+    fun `nothing joins leaves, whole blocks though they are`() {
+        world[spot.side(Face.EAST)] = leaves[0]
+        world[spot.side(Face.WEST)] = leaves[1]
+
+        place(fence(), spot)
+        place(wall("none", "none", "none", "none", 1), spot.side(Face.NORTH).side(Face.EAST))
+
+        assertEquals(fence(), world.stateAt(spot))
+        assertEquals(wall("none", "none", "none", "none", 1), world.stateAt(spot.side(Face.NORTH).side(Face.EAST)))
     }
 
     @Test

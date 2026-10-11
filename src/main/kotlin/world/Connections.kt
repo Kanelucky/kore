@@ -16,6 +16,13 @@ private val BlockState.isPane get() = name.endsWith("glass_pane") || name.endsWi
 private val BlockState.isWall get() = WALL_POST in properties
 private val BlockState.isGate get() = name.endsWith("fence_gate")
 
+/**
+ * Whether fences, panes and walls keep apart from this block, whole though
+ * it is: leaves, barriers, pumpkins, melons and shulker boxes. Bedrock
+ * follows Java Edition here.
+ */
+private val BlockState.keptApart get() = "leaves" in name || name.endsWith("shulker_box") || name in KEPT_APART
+
 /** Which way a fence gate faces, and so the axis it swings across. Its span runs the other way. */
 private val BlockState.gateFacing get() = Face.entries.find { it.id == properties[CARDINAL] }
 
@@ -65,12 +72,12 @@ fun FlatWorld.updateAround(changed: Collection<BlockPos>): List<BlockPos> {
 
 /**
  * Whether [block], a fence, pane or wall, joins [neighbour] on its [side].
- * Each joins a whole face, and fences and walls join a fence gate set
- * across them. Wooden fences join one another, as nether brick fences do.
- * Panes, bars and walls join one another.
+ * Each joins a whole face, unless it's [keptApart], and fences and walls
+ * join a fence gate set across them. Wooden fences join one another, as
+ * nether brick fences do. Panes, bars and walls join one another.
  */
 private fun joins(block: BlockState, side: Face, neighbour: BlockState?): Boolean = when {
-    neighbour == null -> false
+    neighbour == null || neighbour.keptApart -> false
     neighbour.hasFullFace(side.opposite) -> true
     neighbour.isGate -> !block.isPane && neighbour.gateFacing?.axis != side.axis
     block.isFence -> neighbour.isFence && (neighbour.name == NETHER_BRICK_FENCE) == (block.name == NETHER_BRICK_FENCE)
@@ -78,6 +85,9 @@ private fun joins(block: BlockState, side: Face, neighbour: BlockState?): Boolea
 }
 
 private const val NETHER_BRICK_FENCE = "minecraft:nether_brick_fence"
+
+/** Whole blocks that nothing joins, besides leaves and shulker boxes, which come in many kinds. */
+private val KEPT_APART = setOf("minecraft:barrier", "minecraft:pumpkin", "minecraft:carved_pumpkin", "minecraft:lit_pumpkin", "minecraft:melon_block")
 
 /**
  * A wall's sides and post. A side it joins on is tall when the block
