@@ -34,6 +34,13 @@ class BuffersTest {
     }
 
     @Test
+    fun `64-bit varints use the same scheme`() {
+        assertContentEquals(byteArrayOf(0x54), encode { writeVarLong(42) })
+        assertContentEquals(byteArrayOf(0x01), encode { writeVarLong(-1) })
+        assertContentEquals(byteArrayOf(-1, -1, -1, -1, -1, -1, -1, -1, -1, 0x01), encode { writeVarULong(-1) })
+    }
+
+    @Test
     fun `overlong varuints are rejected`() {
         assertFailsWith<PacketException> { Unpooled.wrappedBuffer(byteArrayOf(-1, -1, -1, -1, -1, 0)).readVarUInt() }
     }

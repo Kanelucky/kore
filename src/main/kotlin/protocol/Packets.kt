@@ -13,7 +13,10 @@ private const val DISCONNECT = 5
 private const val RESOURCE_PACKS_INFO = 6
 private const val RESOURCE_PACK_STACK = 7
 private const val RESOURCE_PACK_CLIENT_RESPONSE = 8
+private const val REQUEST_CHUNK_RADIUS = 69
+private const val CHUNK_RADIUS_UPDATED = 70
 private const val CLIENT_CACHE_STATUS = 129
+private const val ITEM_REGISTRY = 162
 private const val NETWORK_SETTINGS = 143
 private const val REQUEST_NETWORK_SETTINGS = 193
 
@@ -53,6 +56,9 @@ data class ResourcePackClientResponse(
         RESOURCE_PACK_STACK_FINISHED,
     }
 }
+
+/** How many chunks around the player the client wants to see, and the most it can handle. */
+data class RequestChunkRadius(val radius: Int, val maxRadius: Int) : ClientPacket
 
 /** A packet Kore doesn't decode yet. */
 class UnhandledPacket(val id: Int, val payload: ByteArray) : ClientPacket {
@@ -182,6 +188,28 @@ data class ResourcePackStack(
     }
 }
 
+/**
+ * The items in the world, with the runtime IDs the protocol refers to them
+ * by. The client waits for this after `StartGame`. Kore has no item data
+ * yet, so the list is empty.
+ */
+data object ItemRegistry : ServerPacket {
+    override val id get() = ITEM_REGISTRY
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarUInt(0)
+    }
+}
+
+/** The view distance the server settled on, in chunks. */
+data class ChunkRadiusUpdated(val radius: Int) : ServerPacket {
+    override val id get() = CHUNK_RADIUS_UPDATED
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarInt(radius)
+    }
+}
+
 fun decodeClientPacket(packet: ByteArray): ClientPacket {
     val buffer = Unpooled.wrappedBuffer(packet)
     return try {
@@ -189,6 +217,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             REQUEST_NETWORK_SETTINGS -> RequestNetworkSettings(protocol = buffer.readInt())
             LOGIN -> Login(protocol = buffer.readInt(), connectionRequest = buffer.readByteArray())
             CLIENT_CACHE_STATUS -> ClientCacheStatus(supported = buffer.readBoolean())
+            REQUEST_CHUNK_RADIUS -> RequestChunkRadius(radius = buffer.readVarInt(), maxRadius = buffer.readUnsignedByte().toInt())
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
         }

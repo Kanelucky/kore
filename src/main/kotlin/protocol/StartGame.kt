@@ -1,0 +1,184 @@
+package org.koremc.protocol
+
+import io.netty.buffer.ByteBuf
+import java.util.UUID
+
+private const val START_GAME = 11
+
+/** Game modes, with their wire values. */
+enum class GameMode(val id: Int) {
+    SURVIVAL(0),
+    CREATIVE(1),
+    ADVENTURE(2),
+
+    /** Follow the world's game mode. */
+    DEFAULT(5),
+    SPECTATOR(6),
+}
+
+/** Declared in wire order: each is sent as its ordinal. */
+enum class Difficulty { PEACEFUL, EASY, NORMAL, HARD }
+
+/** Declared in wire order: each is sent as its ordinal. */
+enum class PermissionLevel { VISITOR, MEMBER, OPERATOR, CUSTOM }
+
+/** How the world was generated, which shapes the client's sky and void. Declared in wire order. */
+enum class Generator { LEGACY, OVERWORLD, FLAT, NETHER, THE_END, VOID }
+
+data class Vec3(val x: Float, val y: Float, val z: Float)
+
+data class BlockPos(val x: Int, val y: Int, val z: Int)
+
+/**
+ * Sets up the world on the client: who the player is, where they stand,
+ * and how the world behaves. It's the protocol's biggest packet, and the
+ * client gives up on the connection if a single field is off, so every
+ * field is written in order, including the many Kore leaves at a default.
+ *
+ * The layout follows Mojang's schema for 1.26.50, checked against
+ * gophertunnel and minecraft-data. Where those disagree with the schema, it
+ * omits optional fields entirely and marks a few one-byte fields as varints,
+ * and the implementations, which real clients accept, win.
+ */
+data class StartGame(
+    /** The player's entity ID, unique for the whole server. */
+    val entityId: Long,
+    /** The player's entity ID for this session. Kore uses the same number as [entityId]. */
+    val runtimeId: Long,
+    val playerGameMode: GameMode,
+    /** Where the player's eyes are, which is 1.62 blocks above their feet. */
+    val position: Vec3,
+    val pitch: Float = 0f,
+    val yaw: Float = 0f,
+    val seed: Long,
+    val dimension: Int = 0,
+    val generator: Generator = Generator.FLAT,
+    val worldGameMode: GameMode,
+    val difficulty: Difficulty,
+    val worldSpawn: BlockPos,
+    val playerPermissions: PermissionLevel = PermissionLevel.MEMBER,
+    /** How many chunks around each player the world simulates. */
+    val serverChunkTickRange: Int = 4,
+    val worldName: String,
+    /** The game version the server speaks, like "1.26.50". */
+    val serverVersion: String,
+    val time: Long = 0,
+    /** Ties the session's telemetry together. Any unique string will do. */
+    val multiplayerCorrelationId: String = UUID.randomUUID().toString(),
+) : ServerPacket {
+    override val id get() = START_GAME
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarLong(entityId)
+        out.writeVarULong(runtimeId)
+        out.writeVarInt(playerGameMode.id)
+        out.writeVec3(position)
+        out.writeFloatLE(pitch)
+        out.writeFloatLE(yaw)
+        writeLevelSettings(out)
+        out.writeString("") // Level ID
+        out.writeString(worldName)
+        out.writeString("") // Template content identity
+        out.writeBoolean(false) // Is trial
+
+        // Movement settings. Movement is always server authoritative now, and the client keeps a
+        // history of its inputs so a correction from the server can rewind and replay them. Forty
+        // ticks is two seconds of history, a choice that should cover most latency.
+        out.writeVarInt(40)
+        out.writeBoolean(false) // Server-authoritative block breaking
+
+        out.writeLongLE(time)
+        out.writeVarInt(0) // Enchantment seed
+        out.writeVarUInt(0) // Custom block properties
+        out.writeString(multiplayerCorrelationId)
+        out.writeBoolean(true) // Server-authoritative inventory
+        out.writeString(serverVersion)
+        out.writeEmptyNbtCompound() // Player property data
+        out.writeLongLE(0) // Block registry checksum. Zero skips the client's check.
+        out.writeUuid(UUID(0, 0)) // World template
+        out.writeBoolean(false) // Client-side generation
+        // Kore names blocks by the hash of their state rather than their place in a palette,
+        // so it never has to match the client's palette order.
+        out.writeBoolean(true)
+        out.writeBoolean(false) // Server-authoritative sound
+        out.writeBoolean(false) // Server join info (an optional, left out)
+        repeat(4) { out.writeString("") } // Telemetry: server, scenario, world and owner IDs
+    }
+
+    private fun writeLevelSettings(out: ByteBuf) {
+        out.writeLongLE(seed)
+        out.writeShortLE(0) // Spawn biome type: default
+        out.writeString("") // User-defined spawn biome
+        out.writeVarInt(dimension)
+        out.writeVarInt(generator.ordinal)
+        out.writeVarInt(worldGameMode.id)
+        out.writeBoolean(false) // Hardcore
+        out.writeVarInt(difficulty.ordinal)
+        out.writeBlockPos(worldSpawn)
+        out.writeBoolean(true) // Achievements disabled
+        out.writeVarInt(0) // Editor world type: not an editor world
+        out.writeBoolean(false) // Created in editor
+        out.writeBoolean(false) // Exported from editor
+        out.writeVarInt(0) // Day cycle stop time
+        out.writeVarUInt(0) // Education edition offer
+        out.writeBoolean(false) // Education features
+        out.writeString("") // Education product ID
+        out.writeFloatLE(0f) // Rain level
+        out.writeFloatLE(0f) // Lightning level
+        out.writeBoolean(false) // Confirmed platform locked content
+        out.writeBoolean(true) // Multiplayer game
+        out.writeBoolean(false) // LAN broadcast
+        // Broadcast settings, zigzagged as Mojang's schema and gophertunnel have them. minecraft-data reads
+        // them unsigned; either way they take a byte, so nothing after them shifts.
+        out.writeVarInt(PUBLIC) // Xbox Live broadcast
+        out.writeVarInt(PUBLIC) // Platform broadcast
+        out.writeBoolean(true) // Commands enabled
+        out.writeBoolean(false) // Texture packs required
+        out.writeVarUInt(0) // Game rules: none, so the client uses its defaults
+        out.writeIntLE(0) // Experiments, counted as a plain uint32
+        out.writeBoolean(false) // Experiments ever toggled
+        out.writeBoolean(false) // Bonus chest
+        out.writeBoolean(false) // Start with map
+        out.writeByte(playerPermissions.ordinal) // A single byte, though the schema says varint
+        out.writeIntLE(serverChunkTickRange)
+        // Locked behaviour pack, locked resource pack, from locked template, Microsoft account
+        // gamertags only, from world template, template option locked, only v1 villagers,
+        // persona disabled, custom skins disabled and emote chat muted.
+        repeat(10) { out.writeBoolean(false) }
+        out.writeString("*") // Base game version: whatever the client has
+        out.writeIntLE(0) // Limited world width
+        out.writeIntLE(0) // Limited world depth
+        out.writeBoolean(true) // New nether
+        out.writeString("") // Education shared resource button name
+        out.writeString("") // Education shared resource link
+        out.writeBoolean(false) // Experimental gameplay override (an optional, left out)
+        out.writeByte(0) // Chat restriction: none
+        out.writeBoolean(false) // Disable player interactions
+        out.writeVarInt(0) // Editor connection policy: match the world
+        out.writeBoolean(false) // Anonymous block drops in editor worlds
+    }
+
+    private companion object {
+        /** The broadcast setting for anyone being able to join. */
+        const val PUBLIC = 4
+    }
+}
+
+private fun ByteBuf.writeVec3(vec: Vec3) {
+    writeFloatLE(vec.x)
+    writeFloatLE(vec.y)
+    writeFloatLE(vec.z)
+}
+
+private fun ByteBuf.writeBlockPos(pos: BlockPos) {
+    writeVarInt(pos.x)
+    writeVarInt(pos.y)
+    writeVarInt(pos.z)
+}
+
+/** An empty NBT compound in the network encoding: the compound tag, an empty name, then the end tag. */
+private fun ByteBuf.writeEmptyNbtCompound() {
+    writeByte(0x0A)
+    writeVarUInt(0)
+    writeByte(0x00)
+}

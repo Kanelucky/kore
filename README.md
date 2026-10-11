@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Players can log in and get through resource packs, but there's no world to spawn into yet.
+> Kore is in early development. Players can log in and receive the game's start, but there are no chunks to spawn into yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -142,6 +142,7 @@ src/main/kotlin/
 │   ├── Buffers.kt                   # Varints, strings and other wire primitives
 │   ├── Batch.kt                     # Batching packets, with zlib compression
 │   ├── Packets.kt                   # Packet types and their encodings
+│   ├── StartGame.kt                 # The packet that sets up the world on the client
 │   └── LoginRequest.kt              # Reading who a client claims to be
 └── network/
     ├── SignalingServer.kt           # TCP bootstrap and HTTP pipeline
@@ -185,7 +186,9 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Reading the login's connection request and client data
 - [x] Verify login tokens, and bind them to the identity in the client's offer
 - [x] Login success and resource pack negotiation (no server packs yet)
-- [ ] Start game sequence
+- [x] `StartGame` and chunk radius negotiation
+- [ ] Vanilla item, block and biome registries
+- [ ] Chunks and spawning
 - [ ] Packet registry for the rest of the protocol
 - [ ] **Cloudburst NBT Parsing**
 

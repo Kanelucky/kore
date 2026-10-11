@@ -40,7 +40,7 @@ fun main() {
     if (config.onlineMode) auth.start() else log.warn("Offline mode: players aren't authenticated, so anyone can join as anyone")
 
     val peers = Peers()
-    val sessions = Sessions(config.protocol, LoginAuthenticator(auth.verifier, config.onlineMode))
+    val sessions = Sessions(config, LoginAuthenticator(auth.verifier, config.onlineMode))
 
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),

@@ -4,18 +4,23 @@ import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.ClientCacheStatus
+import org.koremc.protocol.ChunkRadiusUpdated
 import org.koremc.protocol.ClientPacket
 import org.koremc.protocol.Disconnect
+import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.Login
 import org.koremc.protocol.LoginRequest
 import org.koremc.protocol.NetworkSettings
 import org.koremc.protocol.PacketException
 import org.koremc.protocol.PlayStatus
+import org.koremc.protocol.RequestChunkRadius
 import org.koremc.protocol.RequestNetworkSettings
 import org.koremc.protocol.ResourcePackClientResponse
 import org.koremc.protocol.ResourcePackStack
 import org.koremc.protocol.ResourcePacksInfo
 import org.koremc.protocol.ServerPacket
+import org.koremc.protocol.StartGame
+import org.koremc.protocol.Vec3
 import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
 import org.koremc.protocol.parseConnectionRequest
@@ -26,6 +31,12 @@ private val log = LoggerFactory.getLogger(Session::class.java)
 
 /** Batches this size or larger are compressed. Small ones cost more to compress than they save. */
 private const val COMPRESSION_THRESHOLD = 256
+
+/** How far above their feet a player's eyes are, which is where Bedrock places them. */
+private const val EYE_HEIGHT = 1.62f
+
+/** The smallest view distance Kore settles on, whatever the client asks for. */
+private const val MIN_CHUNK_RADIUS = 2
 
 /**
  * One player's protocol session. It owns the batch codec, so it decides
@@ -41,19 +52,24 @@ private const val COMPRESSION_THRESHOLD = 256
  *    encryption handshake, since DTLS already covers it.
  * 3. Resource packs. Kore offers none, the client answers that it has them
  *    all, Kore sends the (vanilla) pack stack, and the client confirms it
- *    has applied it. It's then ready for `StartGame`.
+ *    has applied it.
+ * 4. `StartGame` sets up the world, followed by the `ItemRegistry` the
+ *    client waits for next. The client then asks how far it can see, and
+ *    Kore settles on a chunk radius. Chunks and spawning come after that.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
 class Session(
-    private val protocol: Int,
+    private val config: ServerConfig,
     private val networkId: String,
+    /** The player's entity ID, unique across the server. */
+    private val entityId: Long,
     /** The key the client proved when it connected, which its login must match. */
     private val offerKey: ECPublicKey?,
     private val authenticator: LoginAuthenticator,
     private val send: (ByteArray) -> Unit,
 ) {
-    private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, NEGOTIATING_RESOURCE_PACKS, READY_TO_SPAWN, CLOSED }
+    private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, NEGOTIATING_RESOURCE_PACKS, LOADING_WORLD, CLOSED }
 
     private val batches = BatchCodec()
     private var state = State.AWAITING_NETWORK_SETTINGS_REQUEST
@@ -70,8 +86,12 @@ class Session(
     var cacheSupported = false
         private set
 
-    /** Whether the client has finished logging in and applying packs, and is waiting for the world. */
-    val isReadyToSpawn get() = state == State.READY_TO_SPAWN
+    /** Whether `StartGame` has gone out and the client is loading the world. */
+    val isLoadingWorld get() = state == State.LOADING_WORLD
+
+    /** How many chunks around the player to send, once the client has asked. */
+    var chunkRadius: Int? = null
+        private set
 
     fun receive(message: ByteArray) {
         val packets = try {
@@ -92,7 +112,8 @@ class Session(
                 is ResourcePackClientResponse -> onResourcePackResponse(packet)
                 else -> unexpected(packet)
             }
-            State.READY_TO_SPAWN, State.CLOSED -> unexpected(packet)
+            State.LOADING_WORLD -> if (packet is RequestChunkRadius) onRequestChunkRadius(packet) else unexpected(packet)
+            State.CLOSED -> unexpected(packet)
         }
     }
 
@@ -150,16 +171,43 @@ class Session(
                 send(ResourcePackStack())
             }
 
-            ResourcePackClientResponse.Response.RESOURCE_PACK_STACK_FINISHED -> {
-                state = State.READY_TO_SPAWN
-                log.info("{} is ready to spawn", player?.displayName)
-            }
+            ResourcePackClientResponse.Response.RESOURCE_PACK_STACK_FINISHED -> startGame()
 
             ResourcePackClientResponse.Response.CANCEL -> {
                 log.info("{} cancelled joining during resource packs", player?.displayName)
                 state = State.CLOSED
             }
         }
+    }
+
+    private fun startGame() {
+        val spawn = config.spawn
+        send(
+            StartGame(
+                entityId = entityId,
+                runtimeId = entityId,
+                playerGameMode = config.gameMode,
+                position = Vec3(spawn.x + 0.5f, spawn.y + EYE_HEIGHT, spawn.z + 0.5f),
+                seed = config.seed,
+                worldGameMode = config.gameMode,
+                difficulty = config.difficulty,
+                worldSpawn = spawn,
+                worldName = config.level,
+                serverVersion = config.version,
+            ),
+            ItemRegistry,
+        )
+        state = State.LOADING_WORLD
+        log.info("{} is loading the world, spawning at {}", player?.displayName, spawn)
+    }
+
+    /** Settles the view distance: what the client wants, within what it can handle and what Kore allows. */
+    private fun onRequestChunkRadius(packet: RequestChunkRadius) {
+        val wanted = if (packet.maxRadius > 0) minOf(packet.radius, packet.maxRadius) else packet.radius
+        val radius = wanted.coerceIn(MIN_CHUNK_RADIUS, config.viewDistance)
+        chunkRadius = radius
+        send(ChunkRadiusUpdated(radius))
+        log.debug("{} asked for {} chunks and gets {}", player?.displayName, packet.radius, radius)
     }
 
     private fun reject() {
@@ -169,10 +217,10 @@ class Session(
 
     /** Turns away clients on another protocol, telling them whose version is behind. */
     private fun acceptsProtocol(clientProtocol: Int): Boolean {
-        if (clientProtocol == protocol) return true
+        if (clientProtocol == config.protocol) return true
 
-        log.info("Network {} speaks protocol {}, but Kore speaks {}", networkId, clientProtocol, protocol)
-        val status = if (clientProtocol < protocol) PlayStatus.Status.LOGIN_FAILED_CLIENT_OLD else PlayStatus.Status.LOGIN_FAILED_SERVER_OLD
+        log.info("Network {} speaks protocol {}, but Kore speaks {}", networkId, clientProtocol, config.protocol)
+        val status = if (clientProtocol < config.protocol) PlayStatus.Status.LOGIN_FAILED_CLIENT_OLD else PlayStatus.Status.LOGIN_FAILED_SERVER_OLD
         send(PlayStatus(status))
         state = State.CLOSED
         return false
@@ -187,11 +235,14 @@ class Session(
 }
 
 /** Every connected player's session, driven by the transport's connection callbacks on the UDP event loop. */
-class Sessions(private val protocol: Int, private val authenticator: LoginAuthenticator) {
+class Sessions(private val config: ServerConfig, private val authenticator: LoginAuthenticator) {
     private val sessions = HashMap<NetherNetConnection, Session>()
+    private var nextEntityId = 1L
 
     fun connect(connection: NetherNetConnection) {
-        sessions[connection] = Session(protocol, connection.networkId, connection.clientKey, authenticator) { message -> connection.send(message) }
+        sessions[connection] = Session(config, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
+            connection.send(message)
+        }
     }
 
     fun receive(connection: NetherNetConnection, message: ByteArray) {

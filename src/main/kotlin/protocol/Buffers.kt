@@ -26,6 +26,17 @@ fun ByteBuf.writeVarUInt(value: Int): ByteBuf {
     return writeByte(remaining)
 }
 
+fun ByteBuf.writeVarULong(value: Long): ByteBuf {
+    var remaining = value
+    while (remaining and 0x7FL.inv() != 0L) {
+        writeByte(((remaining and 0x7F) or 0x80).toInt())
+        remaining = remaining ushr 7
+    }
+    return writeByte(remaining.toInt())
+}
+
+fun ByteBuf.writeVarLong(value: Long): ByteBuf = writeVarULong((value shl 1) xor (value shr 63))
+
 /** A signed varint, zigzag-encoded so small negative numbers stay short. */
 fun ByteBuf.readVarInt(): Int = readVarUInt().let { (it ushr 1) xor -(it and 1) }
 

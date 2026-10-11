@@ -86,6 +86,17 @@ class PacketsTest {
     }
 
     @Test
+    fun `an empty item registry is just its count`() {
+        assertContentEquals(bytes(0xA2, 0x01, 0x00), ItemRegistry.encode())
+    }
+
+    @Test
+    fun `chunk radius packets zigzag the radius`() {
+        assertEquals(RequestChunkRadius(radius = 16, maxRadius = 16), decodeClientPacket(bytes(0x45, 0x20, 0x10)))
+        assertContentEquals(bytes(0x46, 0x10), ChunkRadiusUpdated(8).encode())
+    }
+
+    @Test
     fun `packets Kore doesn't decode yet pass through`() {
         val packet = assertIs<UnhandledPacket>(decodeClientPacket(bytes(0x05, 0x01, 0x02)))
 

@@ -12,11 +12,13 @@ import org.koremc.protocol.connectionRequest
 import org.koremc.protocol.loginPacket
 import org.koremc.protocol.tokenAuthentication
 import org.koremc.protocol.writeString
+import org.koremc.protocol.writeVarInt
 import org.koremc.protocol.writeVarUInt
 import java.security.interfaces.ECPublicKey
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -28,8 +30,9 @@ class SessionTest {
     private val clientKey = client.public as ECPublicKey
     private val authenticator = LoginAuthenticator(MultiplayerTokenVerifier(keys = { authority.keys }), onlineMode = true)
 
+    private val config = ServerConfig(protocol = PROTOCOL, viewDistance = 8)
     private val sent = mutableListOf<ByteArray>()
-    private val session = Session(PROTOCOL, networkId = "9876543210123456789", offerKey = clientKey, authenticator) { sent += it }
+    private val session = Session(config, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
 
     /** The client's side of batching, which switches on compression when NetworkSettings arrives. */
     private val batches = BatchCodec()
@@ -76,17 +79,36 @@ class SessionTest {
     }
 
     @Test
-    fun `resource packs end with the client ready to spawn`() {
+    fun `resource packs end with start game and the item registry`() {
         logIn()
 
         clientSends(clientCacheStatus(supported = true))
         clientSends(packResponse(2, "downloadingfinished"))
         assertEquals(0x07, receivedPacket()[0].toInt())
-        assertTrue(!session.isReadyToSpawn)
+        assertFalse(session.isLoadingWorld)
 
         clientSends(packResponse(3, "resourcepackstackfinished"))
-        assertTrue(session.isReadyToSpawn)
+        val (startGame, itemRegistry) = batches.decode(sent.last())
+        assertEquals(0x0B, startGame[0].toInt())
+        assertEquals(0x0E, startGame[1].toInt()) // Entity ID 7, zigzagged
+        assertContentEquals(bytes(0xA2, 0x01, 0x00), itemRegistry)
+        assertTrue(session.isLoadingWorld)
         assertTrue(session.cacheSupported)
+    }
+
+    @Test
+    fun `the chunk radius is what the client asks for, within kore's view distance`() {
+        loadWorld()
+
+        clientSends(requestChunkRadius(radius = 6, maxRadius = 16))
+        assertContentEquals(bytes(0x46, 0x0C), receivedPacket())
+
+        clientSends(requestChunkRadius(radius = 32, maxRadius = 32))
+        assertContentEquals(bytes(0x46, 0x10), receivedPacket())
+        assertEquals(8, session.chunkRadius)
+
+        clientSends(requestChunkRadius(radius = 12, maxRadius = 4))
+        assertEquals(4, session.chunkRadius)
     }
 
     @Test
@@ -97,7 +119,7 @@ class SessionTest {
         clientSends(packResponse(2, "downloadingfinished"))
 
         assertTrue(sent.isEmpty())
-        assertTrue(!session.isReadyToSpawn)
+        assertFalse(session.isLoadingWorld)
     }
 
     @Test
@@ -142,6 +164,16 @@ class SessionTest {
         clientSends(login(authority.multiplayerToken(clientKey)))
         sent.clear()
     }
+
+    private fun loadWorld() {
+        logIn()
+        clientSends(packResponse(2, "downloadingfinished"))
+        clientSends(packResponse(3, "resourcepackstackfinished"))
+        sent.clear()
+    }
+
+    private fun requestChunkRadius(radius: Int, maxRadius: Int) =
+        ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(69).writeVarInt(radius).writeByte(maxRadius))
 
     private fun clientCacheStatus(supported: Boolean) =
         ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(129).writeBoolean(supported))
