@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. The server completes NetherNet signaling, but players can't join yet.
+> Kore is in early development. Clients get through signaling, ICE and DTLS, but players can't join yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -39,6 +39,7 @@ Kore is not a fork, a wrapper, or a port of an existing server. It's a ground-up
 | Build | **Gradle** (Kotlin DSL) | One language for the code and the build. |
 | Networking | **Netty 4** | Battle-tested non-blocking I/O for both the TCP signaling and the UDP game traffic. |
 | Serialization | **kotlinx.serialization** | Compile-time JSON codecs with no reflection. |
+| Security | **JDK** (DTLS 1.2, ECDSA) | The JDK's non-blocking DTLS engine fits Netty, and needs no native libraries or BouncyCastle. |
 | Logging | **SLF4J + Logback** | Structured, configurable, and fast enough to stay out of the way. |
 
 ## 🔌 How a Client Connects
@@ -62,9 +63,10 @@ sequenceDiagram
 | --- | --- | --- |
 | Discovery | `GET /v1/join` returns name, version, level and player counts as JSON | ✅ Implemented |
 | Offer / answer | `POST /v1/join/{networkId}` exchanges SDP with all ICE candidates included. The answer is signed with the operator identity. | ✅ Implemented |
-| Peer connection | ICE, DTLS and SCTP bring up the `ReliableDataChannel` and `UnreliableDataChannel` | ⏳ Planned |
+| Connectivity | ICE checks find a UDP path, then DTLS secures it | ✅ Implemented |
+| Data channels | SCTP inside DTLS carries the `ReliableDataChannel` and `UnreliableDataChannel` | ⏳ Planned |
 
-Kore keeps its side of WebRTC as small as possible. It runs **ICE-lite** and takes the **passive DTLS** role, so it never initiates anything. It answers the client's connectivity checks on one UDP port and waits for the client's first DTLS message.
+Kore keeps its side of WebRTC as small as possible. It runs **ICE-lite** and takes the **passive DTLS** role, so it never initiates anything. Every client shares one UDP port: Kore answers their connectivity checks, then waits for each client's first DTLS message. A client's DTLS certificate is accepted only if it matches the fingerprint in that client's offer.
 
 ## 🚀 Getting Started
 
@@ -106,13 +108,18 @@ src/main/kotlin/
 ├── Main.kt                          # Entry point: wires config, server and shutdown
 ├── ServerConfig.kt                  # Server settings
 └── network/
-    ├── SignalingServer.kt           # Netty bootstrap and HTTP pipeline
+    ├── SignalingServer.kt           # TCP bootstrap and HTTP pipeline
     ├── NetherNetSignalingHandler.kt # Routes /v1/join requests
     ├── JoinInfo.kt                  # Discovery response body
+    ├── RtcServer.kt                 # UDP bootstrap
+    ├── NetherNetRtcHandler.kt       # Splits UDP traffic into STUN and DTLS per client
     └── rtc/
         ├── Sdp.kt                   # Offer parsing and answer encoding
         ├── LocalPeer.kt             # Builds answers from this server's WebRTC state
+        ├── Peer.kt                  # Clients between signaling and disconnect
         ├── Ice.kt                   # ICE credentials and host candidates
+        ├── Stun.kt                  # STUN messages for ICE-lite
+        ├── Dtls.kt                  # DTLS engines and per-client transport
         ├── DtlsCertificate.kt       # Self-signed DTLS certificate and fingerprint
         └── OperatorIdentity.kt      # Operator key and a=identity assertions
 ```
@@ -125,7 +132,9 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Netty bootstrap with an HTTP/1.1 pipeline
 - [x] **NetherNet HTTP Signaling:** discovery (`GET /v1/join`)
 - [x] **NetherNet HTTP Signaling:** SDP offer/answer (`POST /v1/join/{networkId}`)
-- [ ] **UDP Channel Negotiation:** ICE, DTLS and SCTP
+- [x] **UDP Channel Negotiation:** ICE-lite connectivity checks
+- [x] **UDP Channel Negotiation:** DTLS 1.2 handshake with fingerprint verification
+- [ ] **UDP Channel Negotiation:** SCTP association and data channels
 - [ ] Message framing over reliable and unreliable data channels
 
 ### Phase 2: Protocol

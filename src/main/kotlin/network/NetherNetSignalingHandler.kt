@@ -42,7 +42,7 @@ private val IDENTITY_LINE = Regex("(?m)^a=identity:.*$")
 @Sharable
 class NetherNetSignalingHandler(
     private val joinInfo: () -> JoinInfo,
-    private val answerOffer: (SdpOffer) -> SdpAnswer,
+    private val answerOffer: (networkId: String, offer: SdpOffer) -> SdpAnswer,
 ) : SimpleChannelInboundHandler<FullHttpRequest>() {
 
     override fun channelRead0(ctx: ChannelHandlerContext, request: FullHttpRequest) {
@@ -78,14 +78,14 @@ class NetherNetSignalingHandler(
         // The identity line carries the player's auth token, which has no business in a log file.
         log.debug("SDP offer from network {}:\n{}", networkId, sdp.replace(IDENTITY_LINE, "a=identity:<redacted>"))
 
-        val offer = try {
-            parseOffer(sdp)
+        val (offer, answer) = try {
+            val offer = parseOffer(sdp)
+            offer to answerOffer(networkId, offer)
         } catch (e: InvalidOfferException) {
             log.warn("Rejected offer from network {}: {}", networkId, e.message)
             return textResponse(HttpResponseStatus.BAD_REQUEST)
         }
 
-        val answer = answerOffer(offer)
         log.info(
             "Answered network {} ({} candidates, {} identity)",
             networkId, offer.candidates.size, if (offer.identity != null) "with" else "no",

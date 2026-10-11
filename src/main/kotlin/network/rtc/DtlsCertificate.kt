@@ -3,7 +3,7 @@ package org.koremc.network.rtc
 import java.math.BigInteger
 import java.security.KeyPair
 import java.security.KeyPairGenerator
-import java.security.MessageDigest
+import java.security.KeyStore
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.cert.CertificateFactory
@@ -13,6 +13,8 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.HexFormat
+import javax.net.ssl.KeyManager
+import javax.net.ssl.KeyManagerFactory
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.days
 import kotlin.time.toJavaDuration
@@ -24,11 +26,18 @@ import kotlin.time.toJavaDuration
  * [OperatorIdentity], which signs this fingerprint.
  */
 class DtlsCertificate private constructor(val keyPair: KeyPair, val certificate: X509Certificate) {
-    val fingerprint = Fingerprint(
-        algorithm = "sha-256",
-        digest = HexFormat.ofDelimiter(":").withUpperCase()
-            .formatHex(MessageDigest.getInstance("SHA-256").digest(certificate.encoded)),
-    )
+    val fingerprint = Fingerprint.of(certificate)
+
+    /** Key managers that present this certificate, for building an `SSLContext`. */
+    val keyManagers: Array<KeyManager> by lazy {
+        // The store only lives in memory, but PKCS12 still insists on a password.
+        val password = "kore".toCharArray()
+        val store = KeyStore.getInstance("PKCS12").apply {
+            load(null, null)
+            setKeyEntry("dtls", keyPair.private, password, arrayOf(certificate))
+        }
+        KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply { init(store, password) }.keyManagers
+    }
 
     companion object {
         fun generate(validity: Duration = 30.days): DtlsCertificate {

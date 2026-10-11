@@ -1,5 +1,9 @@
 package org.koremc.network.rtc
 
+import java.security.MessageDigest
+import java.security.cert.X509Certificate
+import java.util.HexFormat
+
 private val DTLS_ROLES = setOf("actpass", "active", "passive")
 
 /** Thrown when a client's SDP offer is malformed or isn't a NetherNet data channel offer. */
@@ -9,11 +13,20 @@ class InvalidOfferException(message: String) : Exception(message)
 data class Fingerprint(val algorithm: String, val digest: String) {
     override fun toString() = "$algorithm $digest"
 
+    fun matches(certificate: X509Certificate): Boolean =
+        runCatching { of(certificate, algorithm).digest.equals(digest, ignoreCase = true) }.getOrDefault(false)
+
     companion object {
         fun parse(value: String): Fingerprint {
             val parts = value.trim().split(' ')
             if (parts.size != 2) invalid("malformed fingerprint '$value'")
             return Fingerprint(parts[0], parts[1])
+        }
+
+        /** Fingerprints [certificate] the way SDP writes it: colon-separated uppercase hex. */
+        fun of(certificate: X509Certificate, algorithm: String = "sha-256"): Fingerprint {
+            val digest = MessageDigest.getInstance(algorithm.uppercase()).digest(certificate.encoded)
+            return Fingerprint(algorithm, HexFormat.ofDelimiter(":").withUpperCase().formatHex(digest))
         }
     }
 }

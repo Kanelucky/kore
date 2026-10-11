@@ -17,17 +17,21 @@ class LocalPeer(
     private val identity: OperatorIdentity,
     private val candidates: List<IceCandidate>,
 ) {
-    fun answer(offer: SdpOffer) = SdpAnswer(
-        sessionId = Random.nextLong(0, Long.MAX_VALUE),
-        mid = offer.mid,
-        ice = IceCredentials.random(),
-        fingerprint = certificate.fingerprint,
-        identity = identity.assert(listOf(certificate.fingerprint)),
-        // Taking the DTLS server role whenever the client allows it means Kore never initiates
-        // anything: ICE-lite answers the client's checks, and the client sends the first DTLS flight.
-        setup = if (offer.setup == "passive") "active" else "passive",
-        sctpPort = SCTP_PORT,
-        maxMessageSize = MAX_MESSAGE_SIZE,
-        candidates = candidates,
-    )
+    fun answer(offer: SdpOffer): SdpAnswer {
+        // Kore is always the DTLS server, so it never initiates anything: ICE-lite answers
+        // the client's checks, and the client sends the first DTLS flight.
+        if (offer.setup == "passive") throw InvalidOfferException("client wants the DTLS server role, which Kore always takes")
+
+        return SdpAnswer(
+            sessionId = Random.nextLong(0, Long.MAX_VALUE),
+            mid = offer.mid,
+            ice = IceCredentials.random(),
+            fingerprint = certificate.fingerprint,
+            identity = identity.assert(listOf(certificate.fingerprint)),
+            setup = "passive",
+            sctpPort = SCTP_PORT,
+            maxMessageSize = MAX_MESSAGE_SIZE,
+            candidates = candidates,
+        )
+    }
 }

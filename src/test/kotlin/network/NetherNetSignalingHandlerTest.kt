@@ -79,7 +79,7 @@ class NetherNetSignalingHandlerTest {
     private data class Reply(val status: HttpResponseStatus, val contentType: String?, val body: String)
 
     private fun send(method: HttpMethod, uri: String, body: String = ""): Reply {
-        val channel = EmbeddedChannel(NetherNetSignalingHandler(joinInfo = { info }, answerOffer = { answer }))
+        val channel = EmbeddedChannel(NetherNetSignalingHandler(joinInfo = { info }, answerOffer = { _, _ -> answer }))
         channel.writeInbound(DefaultFullHttpRequest(HttpVersion.HTTP_1_1, method, uri, Unpooled.copiedBuffer(body, UTF_8)))
 
         val response = channel.readOutbound<FullHttpResponse>()
