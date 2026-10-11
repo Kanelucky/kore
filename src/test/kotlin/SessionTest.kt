@@ -26,7 +26,10 @@ import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemVersion
+import org.koremc.world.ChunkPos
 import org.koremc.world.FlatWorld
+import org.koremc.world.Vec3
+import org.koremc.world.chunksAround
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
 import kotlin.test.Test
@@ -168,6 +171,9 @@ class SessionTest {
 
         clientSends(setLocalPlayerAsInitialised(runtimeId = 7))
         assertTrue(session.isInGame)
+
+        // Then the client learns about its own player: its actor data, attributes and abilities.
+        assertEquals(listOf(0x27, 0x1D, 0xBB), batches.decode(sent.last()).map { it[0].toInt() and 0xFF })
     }
 
     @Test
@@ -193,6 +199,42 @@ class SessionTest {
             ),
             lines.takeLast(4),
         )
+    }
+
+    @Test
+    fun `moving within a chunk only updates where the player is`() {
+        spawn()
+
+        clientSends(playerAuthInput(Vec3(8.5f, -61.38f, 8.5f)))
+
+        assertEquals(Vec3(8.5f, -61.38f, 8.5f), session.position)
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun `crossing into another chunk sends the chunks that came into view`() {
+        spawn()
+
+        clientSends(playerAuthInput(Vec3(16.5f, -61.38f, 8.5f)))
+        val packets = receivedPackets()
+
+        val cameIntoView = chunksAround(ChunkPos(1, 0), 2) - chunksAround(ChunkPos(0, 0), 2).toSet()
+        // The view now centres on block 16, -62, 8, two chunks out (32 blocks), and has no saved chunks.
+        assertContentEquals(bytes(0x79, 0x20, 0x7B, 0x10, 0x20, 0x00, 0x00, 0x00, 0x00), packets.first())
+        assertEquals(List(cameIntoView.size) { 0x3A }, packets.drop(1).map { it[0].toInt() })
+        assertEquals(5, cameIntoView.size)
+    }
+
+    @Test
+    fun `impossible positions are ignored`() {
+        spawn()
+        val start = session.position
+
+        clientSends(playerAuthInput(Vec3(Float.NaN, 0f, 0f)))
+        clientSends(playerAuthInput(Vec3(4e7f, 0f, 0f)))
+
+        assertEquals(start, session.position)
+        assertTrue(sent.isEmpty())
     }
 
     @Test
@@ -271,6 +313,23 @@ class SessionTest {
 
     /** Every packet sent since the last look, in order, across however many batches carried them. */
     private fun receivedPackets() = sent.flatMap { batches.decode(it) }.also { sent.clear() }
+
+    /** Spawns the player into a view two chunks wide, and forgets what was sent on the way. */
+    private fun spawn() {
+        loadWorld()
+        clientSends(requestChunkRadius(radius = 2, maxRadius = 2))
+        clientSends(setLocalPlayerAsInitialised(runtimeId = 7))
+        sent.clear()
+    }
+
+    /** A PlayerAuthInput with the player at [position], and nothing else going on. */
+    private fun playerAuthInput(position: Vec3) = ByteBufUtil.getBytes(
+        Unpooled.buffer()
+            .writeVarUInt(144)
+            .writeZero(8).writeFloatLE(position.x).writeFloatLE(position.y).writeFloatLE(position.z)
+            .writeZero(12).writeVarUInt(0).writeVarUInt(1).writeVarUInt(0).writeVarInt(1).writeZero(8)
+            .writeVarULong(100).writeZero(12).writeZero(5).writeZero(28),
+    )
 
     private fun setLocalPlayerAsInitialised(runtimeId: Long) =
         ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(113).writeVarULong(runtimeId))

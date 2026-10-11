@@ -7,6 +7,7 @@ import org.cloudburstmc.nbt.NbtMap
 import org.cloudburstmc.nbt.NbtType
 import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.ItemDefinition
+import org.koremc.world.Vec3
 import java.util.UUID
 
 // Packet IDs and layouts follow Mojang's protocol schemas for 1.26.50 (protocol 2193):
@@ -22,6 +23,7 @@ private const val CHUNK_RADIUS_UPDATED = 70
 private const val SET_LOCAL_PLAYER_AS_INITIALISED = 113
 private const val BIOME_DEFINITION_LIST = 122
 private const val CLIENT_CACHE_STATUS = 129
+private const val PLAYER_AUTH_INPUT = 144
 private const val CREATIVE_CONTENT = 145
 private const val ITEM_REGISTRY = 162
 private const val NETWORK_SETTINGS = 143
@@ -71,6 +73,24 @@ data class ResourcePackClientResponse(
 
 /** How many chunks around the player the client wants to see, and the most it can handle. */
 data class RequestChunkRadius(val radius: Int, val maxRadius: Int) : ClientPacket
+
+/**
+ * The client's input for one tick, with where it predicts its player is
+ * now. It arrives every tick once the player is in the world. Kore reads it
+ * as far as the movement; the item, block and vehicle actions after that
+ * are for later.
+ */
+data class PlayerAuthInput(
+    val pitch: Float,
+    val yaw: Float,
+    val headYaw: Float,
+    /** Where the player's eyes are. */
+    val position: Vec3,
+    /** How far the player moved this tick. */
+    val delta: Vec3,
+    /** The client's tick, which corrections name to say which moment they apply to. */
+    val tick: Long,
+) : ClientPacket
 
 /** The client has the chunks around it and has put its player in the world, naming the player's runtime ID from `StartGame`. */
 data class SetLocalPlayerAsInitialised(val runtimeId: Long) : ClientPacket
@@ -329,6 +349,22 @@ data class ChunkRadiusUpdated(val radius: Int) : ServerPacket {
     }
 }
 
+private fun decodePlayerAuthInput(buffer: ByteBuf): PlayerAuthInput {
+    val pitch = buffer.readFloatLE()
+    val yaw = buffer.readFloatLE()
+    val position = buffer.readVec3()
+    buffer.skipBytes(8) // Move vector
+    val headYaw = buffer.readFloatLE()
+    buffer.readList { readVarInt() } // Input flags, each one set
+    buffer.readVarUInt() // Input mode: mouse, touch, gamepad and so on
+    buffer.readVarUInt() // Play mode
+    buffer.readVarInt() // Interaction model
+    buffer.skipBytes(8) // Interact rotation
+    val tick = buffer.readVarULong()
+    val delta = buffer.readVec3()
+    return PlayerAuthInput(pitch, yaw, headYaw, position, delta, tick)
+}
+
 fun decodeClientPacket(packet: ByteArray): ClientPacket {
     val buffer = Unpooled.wrappedBuffer(packet)
     return try {
@@ -338,6 +374,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             CLIENT_CACHE_STATUS -> ClientCacheStatus(supported = buffer.readBoolean())
             REQUEST_CHUNK_RADIUS -> RequestChunkRadius(radius = buffer.readVarInt(), maxRadius = buffer.readUnsignedByte().toInt())
             SET_LOCAL_PLAYER_AS_INITIALISED -> SetLocalPlayerAsInitialised(runtimeId = buffer.readVarULong())
+            PLAYER_AUTH_INPUT -> decodePlayerAuthInput(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
         }

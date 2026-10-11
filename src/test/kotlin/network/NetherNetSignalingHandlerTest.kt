@@ -1,11 +1,18 @@
 package org.koremc.network
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
+import io.netty.buffer.ByteBuf
 import io.netty.buffer.Unpooled
 import io.netty.channel.embedded.EmbeddedChannel
 import io.netty.handler.codec.http.DefaultFullHttpRequest
 import io.netty.handler.codec.http.FullHttpResponse
 import io.netty.handler.codec.http.HttpHeaderNames
 import io.netty.handler.codec.http.HttpMethod
+import io.netty.handler.codec.http.HttpObjectAggregator
+import io.netty.handler.codec.http.HttpServerCodec
 import io.netty.handler.codec.http.HttpResponseStatus
 import io.netty.handler.codec.http.HttpVersion
 import kotlinx.serialization.json.Json
@@ -13,8 +20,12 @@ import org.koremc.network.rtc.Fingerprint
 import org.koremc.network.rtc.IceCredentials
 import org.koremc.network.rtc.SAMPLE_OFFER
 import org.koremc.network.rtc.SdpAnswer
+import org.slf4j.LoggerFactory
+import java.net.SocketException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.text.Charsets.UTF_8
 
 class NetherNetSignalingHandlerTest {
@@ -76,10 +87,44 @@ class NetherNetSignalingHandlerTest {
         assertEquals(HttpResponseStatus.NOT_FOUND, send(HttpMethod.GET, "/v1/join/9876543210123456789").status)
     }
 
+    @Test
+    fun `an https attempt is noted, and answered as before`() {
+        val channel = EmbeddedChannel(HttpsAttemptDetector(), HttpServerCodec(), HttpObjectAggregator(65536), handler())
+        // A TLS record header, then bytes the HTTP decoder can't make sense of, as a ClientHello looks to it.
+        channel.writeInbound(Unpooled.wrappedBuffer(byteArrayOf(0x16, 0x03, 0x01) + "\u0002 hello there\r\n\r\n".toByteArray()))
+
+        val response = channel.readOutbound<ByteBuf>()
+        try {
+            assertTrue(response.toString(UTF_8).startsWith("HTTP/1.1 400"))
+            assertTrue(channel.attr(TRIED_HTTPS).get())
+        } finally {
+            response.release()
+            channel.finishAndReleaseAll()
+        }
+    }
+
+    @Test
+    fun `a client hanging up is logged quietly`() {
+        val events = ListAppender<ILoggingEvent>().apply { start() }
+        val logger = LoggerFactory.getLogger(NetherNetSignalingHandler::class.java) as Logger
+        logger.addAppender(events)
+        val channel = EmbeddedChannel(handler())
+        try {
+            channel.pipeline().fireExceptionCaught(SocketException("Connection reset"))
+        } finally {
+            logger.detachAppender(events)
+        }
+
+        assertFalse(channel.isOpen)
+        assertEquals(listOf(Level.DEBUG), events.list.map { it.level })
+    }
+
+    private fun handler() = NetherNetSignalingHandler(joinInfo = { info }, answerOffer = { _, _ -> answer })
+
     private data class Reply(val status: HttpResponseStatus, val contentType: String?, val body: String)
 
     private fun send(method: HttpMethod, uri: String, body: String = ""): Reply {
-        val channel = EmbeddedChannel(NetherNetSignalingHandler(joinInfo = { info }, answerOffer = { _, _ -> answer }))
+        val channel = EmbeddedChannel(handler())
         channel.writeInbound(DefaultFullHttpRequest(HttpVersion.HTTP_1_1, method, uri, Unpooled.copiedBuffer(body, UTF_8)))
 
         val response = channel.readOutbound<FullHttpResponse>()

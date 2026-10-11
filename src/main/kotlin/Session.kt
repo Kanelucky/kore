@@ -2,6 +2,9 @@ package org.koremc
 
 import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
+import org.koremc.protocol.ActorDataId
+import org.koremc.protocol.ActorFlag
+import org.koremc.protocol.Attribute
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.BiomeDefinitionList
 import org.koremc.protocol.ClientCacheStatus
@@ -9,6 +12,7 @@ import org.koremc.protocol.ChunkRadiusUpdated
 import org.koremc.protocol.ClientPacket
 import org.koremc.protocol.CreativeContent
 import org.koremc.protocol.Disconnect
+import org.koremc.protocol.FloatItem
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.JigsawStructureData
 import org.koremc.protocol.LevelChunk
@@ -17,27 +21,41 @@ import org.koremc.protocol.LoginRequest
 import org.koremc.protocol.NetworkChunkPublisherUpdate
 import org.koremc.protocol.NetworkSettings
 import org.koremc.protocol.PacketException
+import org.koremc.protocol.PermissionLevel
 import org.koremc.protocol.PlayStatus
+import org.koremc.protocol.PlayerAuthInput
 import org.koremc.protocol.RequestChunkRadius
 import org.koremc.protocol.RequestNetworkSettings
 import org.koremc.protocol.ResourcePackClientResponse
 import org.koremc.protocol.ResourcePackStack
 import org.koremc.protocol.ResourcePacksInfo
 import org.koremc.protocol.ServerPacket
+import org.koremc.protocol.SetActorData
 import org.koremc.protocol.SetLocalPlayerAsInitialised
+import org.koremc.protocol.ShortItem
 import org.koremc.protocol.StartGame
 import org.koremc.protocol.UnhandledPacket
+import org.koremc.protocol.UpdateAbilities
+import org.koremc.protocol.UpdateAttributes
+import org.koremc.protocol.abilitiesFor
 import org.koremc.protocol.VoxelShapes
 import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
+import org.koremc.protocol.flagsItem
 import org.koremc.protocol.parseConnectionRequest
 import org.koremc.registry.VanillaData
 import org.koremc.world.ChunkPos
 import org.koremc.world.FlatWorld
+import org.koremc.world.PLAYER_EYE_HEIGHT
+import org.koremc.world.PLAYER_HEIGHT
+import org.koremc.world.PLAYER_MAX_AIR
+import org.koremc.world.PLAYER_WALK_SPEED
+import org.koremc.world.PLAYER_WIDTH
 import org.koremc.world.Vec3
 import org.koremc.world.chunksAround
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
+import kotlin.math.abs
 
 private val log = LoggerFactory.getLogger(Session::class.java)
 
@@ -47,14 +65,14 @@ private val packetLog = LoggerFactory.getLogger("org.koremc.packets")
 /** Batches this size or larger are compressed. Small ones cost more to compress than they save. */
 private const val COMPRESSION_THRESHOLD = 256
 
-/** How far above their feet a player's eyes are, which is where Bedrock places them. */
-private const val EYE_HEIGHT = 1.62f
-
 /** The smallest view distance Kore settles on, whatever the client asks for. */
 private const val MIN_CHUNK_RADIUS = 2
 
 /** Chunks per batch, so the client can start building terrain before the last of them arrives. */
 private const val CHUNKS_PER_BATCH = 16
+
+/** No real world reaches this far out, and it keeps block and chunk coordinates well inside an Int. */
+private const val MAX_COORDINATE = 30_000_000f
 
 /**
  * One player's protocol session. It owns the batch codec, so it decides
@@ -80,7 +98,15 @@ private const val CHUNKS_PER_BATCH = 16
  *    sends every chunk within it, nearest first, then
  *    `PlayStatus(PLAYER_SPAWN)`.
  * 6. Once its player is in the world, the client sends
- *    `SetLocalPlayerAsInitialised`, and the player is in the game.
+ *    `SetLocalPlayerAsInitialised`, and the player is in the game. Kore
+ *    tells the client about its player: that it breathes and falls, its
+ *    attributes, and what its game mode lets it do.
+ *
+ * From then on, `PlayerAuthInput` reports where the client predicts its
+ * player is, every tick. Kore takes its word for it, as Mojang's movement
+ * guide allows a server without physics to, and moves the player's view
+ * with them: crossing into another chunk sends the chunks that come into
+ * view.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
@@ -127,6 +153,13 @@ class Session(
     /** The chunks the client has, as far as Kore knows. */
     private val sentChunks = HashSet<ChunkPos>()
 
+    /** Where the player's eyes are, as the client last reported. */
+    var position = Vec3(world.spawn.x + 0.5f, world.spawn.y + PLAYER_EYE_HEIGHT, world.spawn.z + 0.5f)
+        private set
+
+    /** The chunk the player's view is centred on. */
+    private var viewCentre = world.spawn.chunk
+
     fun receive(message: ByteArray) {
         val packets = try {
             batches.decode(message).map(::decodeClientPacket)
@@ -134,8 +167,8 @@ class Session(
             log.warn("Dropped a batch from network {}: {}", networkId, e.message)
             return
         }
-        // Movement and the like arrive many times a second in game, and Kore ignores them, so they only go to trace.
-        if (state == State.IN_GAME && packets.all { it is UnhandledPacket }) {
+        // Movement arrives every tick in game, along with packets Kore ignores, so those batches only go to trace.
+        if (state == State.IN_GAME && packets.all { it is PlayerAuthInput || it is UnhandledPacket }) {
             packetLog.trace("<- {}: {} ({} bytes)", who, packets.joinToString(), message.size)
         } else {
             packetLog.debug("<- {}: {} ({} bytes)", who, packets.joinToString(), message.size)
@@ -154,6 +187,7 @@ class Session(
             }
             State.LOADING_WORLD -> if (packet is RequestChunkRadius) onRequestChunkRadius(packet) else unexpected(packet)
             State.SPAWNING, State.IN_GAME -> when (packet) {
+                is PlayerAuthInput -> onMove(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
                 is SetLocalPlayerAsInitialised -> if (state == State.SPAWNING) onPlayerInitialised(packet) else unexpected(packet)
                 // Movement and the rest of gameplay arrive many times a second, and Kore has nothing for them yet.
@@ -235,7 +269,7 @@ class Session(
                 entityId = entityId,
                 runtimeId = entityId,
                 playerGameMode = config.gameMode,
-                position = Vec3(spawn.x + 0.5f, spawn.y + EYE_HEIGHT, spawn.z + 0.5f),
+                position = position,
                 seed = config.seed,
                 worldGameMode = config.gameMode,
                 difficulty = config.difficulty,
@@ -252,22 +286,14 @@ class Session(
     /**
      * Settles the view distance: what the client wants, within what it can
      * handle and what Kore allows. Then sends the chunks in view that the
-     * client doesn't have, nearest first, and the first time, lets the
-     * player spawn.
+     * client doesn't have, and the first time, lets the player spawn.
      */
     private fun onRequestChunkRadius(packet: RequestChunkRadius) {
         val wanted = if (packet.maxRadius > 0) minOf(packet.radius, packet.maxRadius) else packet.radius
         val radius = wanted.coerceIn(MIN_CHUNK_RADIUS, config.viewDistance)
         chunkRadius = radius
-        send(ChunkRadiusUpdated(radius), NetworkChunkPublisherUpdate(world.spawn, radius * 16))
-
-        // Players can't move yet, so the view stays centred on the spawn.
-        val inView = chunksAround(world.spawn.chunk, radius)
-        // The client drops chunks that fall out of view, so those need sending again if they come back.
-        sentChunks.retainAll(inView.toSet())
-        val unsent = inView.filter(sentChunks::add)
-        unsent.chunked(CHUNKS_PER_BATCH).forEach { batch -> send(*batch.map { LevelChunk(it, world.chunkAt(it)) }.toTypedArray()) }
-        log.debug("{} asked for {} chunks and gets {}, {} of them new", player?.displayName, packet.radius, radius, unsent.size)
+        val sent = updateView(radius, ChunkRadiusUpdated(radius))
+        log.debug("{} asked for {} chunks and gets {}, {} of them new", player?.displayName, packet.radius, radius, sent)
 
         if (state == State.LOADING_WORLD) {
             send(PlayStatus(PlayStatus.Status.PLAYER_SPAWN))
@@ -275,14 +301,88 @@ class Session(
         }
     }
 
+    /**
+     * Takes the client's word for where its player is. Crossing into
+     * another chunk moves the view, which sends the chunks coming into it.
+     */
+    private fun onMove(packet: PlayerAuthInput) {
+        val reported = packet.position
+        if (!reported.isPlausible()) {
+            log.debug("{} reported an impossible position, {}", player?.displayName, reported)
+            return
+        }
+        position = reported
+
+        val chunk = reported.toBlockPos().chunk
+        val radius = chunkRadius
+        if (chunk == viewCentre || radius == null) return
+        viewCentre = chunk
+        val sent = updateView(radius)
+        log.debug("{} moved into chunk {}, {}, so {} chunks came into view", player?.displayName, chunk.x, chunk.z, sent)
+    }
+
+    /**
+     * Centres the client's view on [viewCentre], after any packets in
+     * [first], then sends the chunks in view that the client doesn't have,
+     * nearest first. Returns how many.
+     */
+    private fun updateView(radius: Int, vararg first: ServerPacket): Int {
+        send(*first, NetworkChunkPublisherUpdate(position.toBlockPos(), radius * 16))
+
+        val inView = chunksAround(viewCentre, radius)
+        // The client drops chunks that fall out of view, so those need sending again if they come back.
+        sentChunks.retainAll(inView.toSet())
+        val unsent = inView.filter(sentChunks::add)
+        unsent.chunked(CHUNKS_PER_BATCH).forEach { batch -> send(*batch.map { LevelChunk(it, world.chunkAt(it)) }.toTypedArray()) }
+        return unsent.size
+    }
+
+    private fun Vec3.isPlausible() =
+        listOf(x, y, z).all { it.isFinite() } && abs(x) <= MAX_COORDINATE && abs(z) <= MAX_COORDINATE
+
     private fun onPlayerInitialised(packet: SetLocalPlayerAsInitialised) {
         if (packet.runtimeId != entityId) {
             log.debug("Network {} initialised runtime ID {}, but its player's is {}", networkId, packet.runtimeId, entityId)
             return
         }
         state = State.IN_GAME
+        send(*playerState())
         log.info("{} spawned", player?.displayName)
     }
+
+    /**
+     * What the client needs to know about its own player to move it like
+     * the game does. Without the flags, the client treats its player as
+     * something that doesn't breathe or fall. The attributes give it full
+     * health and hunger (sprinting needs food) and its walking speed.
+     */
+    private fun playerState(): Array<ServerPacket> = arrayOf(
+        SetActorData(
+            entityId,
+            listOf(
+                flagsItem(setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, ActorFlag.HAS_COLLISION, ActorFlag.CAN_CLIMB)),
+                ShortItem(ActorDataId.AIR_SUPPLY, PLAYER_MAX_AIR),
+                ShortItem(ActorDataId.AIR_SUPPLY_MAX, PLAYER_MAX_AIR),
+                FloatItem(ActorDataId.SCALE, 1f),
+                FloatItem(ActorDataId.WIDTH, PLAYER_WIDTH),
+                FloatItem(ActorDataId.HEIGHT, PLAYER_HEIGHT),
+            ),
+        ),
+        UpdateAttributes(
+            entityId,
+            listOf(
+                Attribute("minecraft:health", 0f, 20f, 20f),
+                Attribute("minecraft:absorption", 0f, Float.MAX_VALUE, 0f),
+                Attribute("minecraft:movement", 0f, Float.MAX_VALUE, PLAYER_WALK_SPEED),
+                Attribute("minecraft:player.hunger", 0f, 20f, 20f),
+                Attribute("minecraft:player.saturation", 0f, 20f, 5f, default = 20f), // The 5 a new player starts with
+                Attribute("minecraft:player.exhaustion", 0f, 5f, 0f),
+                Attribute("minecraft:player.level", 0f, Int.MAX_VALUE.toFloat(), 0f),
+                Attribute("minecraft:player.experience", 0f, 1f, 0f),
+            ),
+        ),
+        UpdateAbilities(entityId, PermissionLevel.MEMBER, abilitiesFor(config.gameMode), walkSpeed = PLAYER_WALK_SPEED),
+    )
 
     private fun reject() {
         send(Disconnect(Disconnect.Reason.NOT_AUTHENTICATED))

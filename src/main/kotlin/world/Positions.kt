@@ -1,6 +1,11 @@
 package org.koremc.world
 
-data class Vec3(val x: Float, val y: Float, val z: Float)
+import kotlin.math.floor
+
+data class Vec3(val x: Float, val y: Float, val z: Float) {
+    /** The block this point is inside, rounding each coordinate down, so -0.5 is in block -1. */
+    fun toBlockPos() = BlockPos(floor(x).toInt(), floor(y).toInt(), floor(z).toInt())
+}
 
 data class BlockPos(val x: Int, val y: Int, val z: Int) {
     /** The chunk column this block is in. */

@@ -21,6 +21,7 @@ import org.koremc.network.rtc.SdpAnswer
 import org.koremc.network.rtc.SdpOffer
 import org.koremc.network.rtc.parseOffer
 import org.slf4j.LoggerFactory
+import java.io.IOException
 import kotlin.text.Charsets.UTF_8
 
 private val log = LoggerFactory.getLogger(NetherNetSignalingHandler::class.java)
@@ -49,7 +50,11 @@ class NetherNetSignalingHandler(
         val remote = ctx.channel().remoteAddress()
 
         if (request.decoderResult().isFailure) {
-            log.warn("Malformed request from {}: {}", remote, request.decoderResult().cause().message)
+            if (ctx.channel().attr(TRIED_HTTPS).get() == true) {
+                log.debug("{} tried HTTPS, but signaling is plain HTTP", remote)
+            } else {
+                log.warn("Malformed request from {}: {}", remote, request.decoderResult().cause().message)
+            }
             ctx.reply(request, textResponse(HttpResponseStatus.BAD_REQUEST))
             return
         }
@@ -94,7 +99,12 @@ class NetherNetSignalingHandler(
     }
 
     override fun exceptionCaught(ctx: ChannelHandlerContext, cause: Throwable) {
-        log.error("Signaling error on {}", ctx.channel().remoteAddress(), cause)
+        // Clients hang up without warning all the time, like the game moving on from refreshing its server list.
+        if (cause is IOException) {
+            log.debug("{} dropped the connection: {}", ctx.channel().remoteAddress(), cause.message)
+        } else {
+            log.error("Signaling error on {}", ctx.channel().remoteAddress(), cause)
+        }
         ctx.close()
     }
 }

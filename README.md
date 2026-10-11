@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Players can join and spawn into a flat world, but Kore doesn't follow them as they move, or let them do anything there, yet.
+> Kore is in early development. Players can join a flat world and walk around it, but they can't change anything in it or see each other yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -152,6 +152,10 @@ Until worlds load from disk, every player joins the vanilla flat world: bedrock,
 
 Once the client says how far it wants to see, Kore settles on a radius no larger than `viewDistance` (8 chunks by default). It then sends every chunk within that circle whole, nearest first, so the client never has to ask for sub-chunks one at a time. Only then does the player spawn. All the chunks are identical, so the flat world builds just one and sends it everywhere.
 
+Movement is server-authoritative in Bedrock: every tick, the client sends its input and where it predicts its player now is. A server is meant to simulate the same movement and correct the client when they disagree. Mojang's movement guide also allows a server without physics to accept the client's position as given, and for now that's what Kore does. It only rejects positions that are impossible: not a number, or millions of blocks out. When a player crosses into another chunk, Kore centres their view there and sends the chunks that have come into it.
+
+The client also needs to be told about its own player once it spawns, or it moves the player wrongly: it floats instead of falling, and counts its air down as though underwater. So Kore sends the player's actor data (it breathes, falls, collides and climbs), its attributes (full health and hunger, since sprinting needs food, and walking speed), and the abilities its game mode allows.
+
 Chunks name biomes by number, and Cloudburst's data has none for vanilla biomes. For now, plains is hard-coded as biome `1`.
 
 > [!NOTE]
@@ -174,9 +178,13 @@ src/main/kotlin/
 │   ├── Packets.kt                   # Packet types and their encodings
 │   ├── StartGame.kt                 # The packet that sets up the world on the client
 │   ├── LevelChunk.kt                # Chunk columns and paletted storage on the wire
+│   ├── ActorData.kt                 # Actors' synced data and flags
+│   ├── Attributes.kt                # Health, hunger, speed and other attributes
+│   ├── Abilities.kt                 # What a player may do in their game mode
 │   └── LoginRequest.kt              # Reading who a client claims to be
 ├── world/
 │   ├── Positions.kt                 # Block, chunk and exact positions
+│   ├── Player.kt                    # A player's size, breath and speed
 │   ├── PalettedStorage.kt           # A sub-chunk's worth of values, as a palette and indices
 │   ├── Chunk.kt                     # Chunk columns, and which are in a player's view
 │   └── FlatWorld.kt                 # The same layers in every column
@@ -236,8 +244,10 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 
 ### Phase 3: World
 - [ ] **World Loading** (LevelDB)
-- [ ] Chunk serialization and streaming
-- [ ] Player spawning and movement
+- [ ] Chunk serialization
+- [x] Chunk streaming as players move
+- [x] Player spawning and movement, taking the client's word for its position
+- [ ] Movement simulation and corrections
 
 ### Phase 4: Gameplay
 - [ ] Block breaking and placing

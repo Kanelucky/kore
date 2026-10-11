@@ -1,9 +1,12 @@
 package org.koremc.protocol
 
+import io.netty.buffer.ByteBufUtil
+import io.netty.buffer.Unpooled
 import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemVersion
+import org.koremc.world.Vec3
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -135,6 +138,28 @@ class PacketsTest {
             bytes(0x04, 0x01) + "a".toByteArray() + bytes(0x05) + "ocean".toByteArray() + bytes(0x04) + "deep".toByteArray() + bytes(0x01) + "b".toByteArray()
 
         assertContentEquals(expected, list.encode())
+    }
+
+    @Test
+    fun `player auth input is read as far as the movement`() {
+        val packet = Unpooled.buffer()
+            .writeVarUInt(144)
+            .writeFloatLE(12.5f).writeFloatLE(-90f) // Pitch and yaw
+            .writeFloatLE(16.5f).writeFloatLE(-58.375f).writeFloatLE(-3.25f) // Position
+            .writeFloatLE(0f).writeFloatLE(1f) // Move vector
+            .writeFloatLE(-89f) // Head yaw
+            .writeVarUInt(2).writeVarInt(20).writeVarInt(10) // Input flags: sprinting, moving forward
+            .writeVarUInt(1).writeVarUInt(0).writeVarInt(1) // Mouse, normal play, crosshair
+            .writeFloatLE(12.5f).writeFloatLE(-90f) // Interact rotation
+            .writeVarULong(1234) // Tick
+            .writeFloatLE(0.25f).writeFloatLE(0f).writeFloatLE(-0.125f) // Delta
+            .writeBytes(bytes(0x00, 0x00, 0x00, 0x00, 0x00)) // No item use, stack request, block actions or vehicle
+            .writeZero(8 + 12 + 8) // Analogue move vector, camera orientation, raw move vector
+
+        assertEquals(
+            PlayerAuthInput(pitch = 12.5f, yaw = -90f, headYaw = -89f, Vec3(16.5f, -58.375f, -3.25f), Vec3(0.25f, 0f, -0.125f), tick = 1234),
+            decodeClientPacket(ByteBufUtil.getBytes(packet)),
+        )
     }
 
     @Test

@@ -1,0 +1,78 @@
+package org.koremc.protocol
+
+import io.netty.buffer.ByteBuf
+
+private const val SET_ACTOR_DATA = 39
+
+/** Mojang's IDs for the actor data Kore sends. */
+enum class ActorDataId(val id: Int) {
+    /** A bitmask of [ActorFlag]s. */
+    FLAGS(0),
+    AIR_SUPPLY(7),
+    SCALE(38),
+    AIR_SUPPLY_MAX(42),
+    WIDTH(53),
+    HEIGHT(54),
+}
+
+/** Bits in an actor's [ActorDataId.FLAGS]: what it's doing, and what the game should do with it. */
+enum class ActorFlag(val bit: Int) {
+    ON_FIRE(0),
+    SNEAKING(1),
+    SPRINTING(3),
+    CAN_CLIMB(19),
+    /** Without this, the client counts the player's air down as though they were underwater. */
+    BREATHING(35),
+    HAS_COLLISION(48),
+    /** Without this, the player floats rather than falls. */
+    HAS_GRAVITY(49),
+}
+
+/** One item of an actor's synced data: an ID, and a value of one of the types Mojang allows. */
+sealed interface DataItem {
+    val id: ActorDataId
+}
+
+data class ShortItem(override val id: ActorDataId, val value: Short) : DataItem
+
+data class FloatItem(override val id: ActorDataId, val value: Float) : DataItem
+
+data class LongItem(override val id: ActorDataId, val value: Long) : DataItem
+
+/** The flags item for [flags]. */
+fun flagsItem(flags: Set<ActorFlag>) = LongItem(ActorDataId.FLAGS, flags.fold(0L) { bits, flag -> bits or (1L shl flag.bit) })
+
+/**
+ * Changes an actor's synced data. [tick] ties the change to one of the
+ * client's input ticks, so it can rewind to apply it; 0 applies it now.
+ */
+data class SetActorData(val runtimeId: Long, val items: List<DataItem>, val tick: Long = 0) : ServerPacket {
+    override val id get() = SET_ACTOR_DATA
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarULong(runtimeId)
+        out.writeVarUInt(items.size)
+        // In order of ID, which some of the client's handling relies on.
+        for (item in items.sortedBy { it.id.id }) {
+            out.writeVarUInt(item.id.id)
+            when (item) {
+                is ShortItem -> out.writeType(SHORT).writeShortLE(item.value.toInt())
+                is FloatItem -> out.writeType(FLOAT).writeFloatLE(item.value)
+                is LongItem -> out.writeType(LONG).writeVarLong(item.value)
+            }
+        }
+        out.writeVarUInt(0) // Int properties, which only entities from behaviour packs have
+        out.writeVarUInt(0) // Float properties, likewise
+        out.writeVarULong(tick)
+    }
+
+    private companion object {
+        // Each value's type, as Mojang numbers them.
+        const val SHORT = 1
+        const val FLOAT = 3
+        const val LONG = 7
+
+        /** A value's type goes out twice: as a varint, then again as a single byte, which 1.26.40 added. */
+        fun ByteBuf.writeType(type: Int): ByteBuf = writeVarUInt(type).writeByte(type)
+    }
+}

@@ -5,6 +5,7 @@ import io.netty.buffer.ByteBufOutputStream
 import org.cloudburstmc.nbt.NbtMap
 import org.cloudburstmc.nbt.NbtUtils
 import org.koremc.world.BlockPos
+import org.koremc.world.Vec3
 import java.util.UUID
 
 /** Thrown when a client sends bytes that don't decode as what they claim to be. */
@@ -63,6 +64,9 @@ fun ByteBuf.writeByteArray(bytes: ByteArray): ByteBuf = writeVarUInt(bytes.size)
 fun ByteBuf.readString(): String = readByteArray().decodeToString()
 
 fun ByteBuf.writeString(value: String): ByteBuf = writeByteArray(value.encodeToByteArray())
+
+/** A point as three little-endian floats. */
+fun ByteBuf.readVec3() = Vec3(readFloatLE(), readFloatLE(), readFloatLE())
 
 /** A block position as three zigzagged varints. */
 fun ByteBuf.writeBlockPos(pos: BlockPos): ByteBuf = writeVarInt(pos.x).writeVarInt(pos.y).writeVarInt(pos.z)

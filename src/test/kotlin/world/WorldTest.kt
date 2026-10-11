@@ -41,6 +41,12 @@ class WorldTest {
     }
 
     @Test
+    fun `points round down to the block they're in`() {
+        assertEquals(BlockPos(-1, -59, 15), Vec3(-0.5f, -58.38f, 15.99f).toBlockPos())
+        assertEquals(ChunkPos(-1, 0), Vec3(-0.5f, 0f, 15.99f).toBlockPos().chunk)
+    }
+
+    @Test
     fun `the view is a circle of chunks, nearest first`() {
         val center = ChunkPos(3, -2)
 

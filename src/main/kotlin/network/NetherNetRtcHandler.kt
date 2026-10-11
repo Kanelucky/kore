@@ -187,7 +187,7 @@ class NetherNetRtcHandler(
             log.warn("Dropped a message from network {}: {}", peer.networkId, e.message)
             return
         }
-        log.debug("{}-byte message on '{}' from network {}", message.size, channel.label, peer.networkId)
+        log.trace("{}-byte message on '{}' from network {}", message.size, channel.label, peer.networkId)
         callGameCode("onMessage", peer) { onMessage(connection, message) }
     }
 
