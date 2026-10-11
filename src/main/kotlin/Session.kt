@@ -36,6 +36,7 @@ import org.koremc.protocol.JigsawStructureData
 import org.koremc.protocol.LevelChunk
 import org.koremc.protocol.LevelEvent
 import org.koremc.protocol.LevelSoundEvent
+import org.koremc.protocol.LoadingScreen
 import org.koremc.protocol.Login
 import org.koremc.protocol.LoginRequest
 import org.koremc.protocol.MobEquipment
@@ -182,6 +183,9 @@ private const val CREATIVE_REACH = 14f
 
 /** How far cracks have to spread for a block to break, in the units `LevelEvent` counts their pace in. */
 private const val CRACKED = 65535
+
+/** How long after a player's loading screen closes everyone hears they joined, in ticks. */
+private const val JOIN_MESSAGE_DELAY = 10
 
 /** The messages, in each client's own language, that a player joined or left: yellow, with their name filled in. */
 private const val JOINED = "\u00a7e%multiplayer.player.joined"
@@ -331,6 +335,12 @@ class Session(
     /** How the player looks to everyone else, from their login. */
     private var skin: Skin? = null
 
+    /** Whether the client's loading screen has closed since it joined. */
+    private var loadingScreenClosed = false
+
+    /** Whether everyone has been told the player joined, or soon will be. */
+    private var joinAnnounced = false
+
     /** The players on the client's player list, by entity ID. */
     private val listedPlayers = HashMap<Long, UUID>()
 
@@ -380,7 +390,11 @@ class Session(
                 is ResourcePackClientResponse -> onResourcePackResponse(packet)
                 else -> unexpected(packet)
             }
-            State.LOADING_WORLD -> if (packet is RequestChunkRadius) onRequestChunkRadius(packet) else unexpected(packet)
+            State.LOADING_WORLD -> when (packet) {
+                is RequestChunkRadius -> onRequestChunkRadius(packet)
+                is LoadingScreen -> {} // The loading screen opening, as the world loads
+                else -> unexpected(packet)
+            }
             State.SPAWNING, State.IN_GAME -> when (packet) {
                 is PlayerAuthInput -> {
                     onMove(packet)
@@ -400,6 +414,10 @@ class Session(
                 is Text -> onChat(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
                 is SetLocalPlayerAsInitialised -> if (state == State.SPAWNING) onPlayerInitialised(packet) else unexpected(packet)
+                is LoadingScreen -> if (packet.type == LoadingScreen.END) {
+                    loadingScreenClosed = true
+                    announceJoin()
+                }
                 // Movement and the rest of gameplay arrive many times a second, and Kore has nothing for them yet.
                 else -> log.trace("Ignored {} from network {}", packet, networkId)
             }
@@ -1090,7 +1108,22 @@ class Session(
         state = State.IN_GAME
         send(*playerState())
         log.info("{} spawned", player?.displayName)
-        player?.let { tellEveryone(Text(Text.TRANSLATION, JOINED, parameters = listOf(it.displayName), needsTranslation = true)) }
+        announceJoin()
+    }
+
+    /**
+     * Tells everyone the player joined, once they're in the game and their
+     * loading screen has closed, which the client reports together. The
+     * message waits a moment more: a client that hears its own join message
+     * as it comes out of loading sometimes shows it twice.
+     */
+    private fun announceJoin() {
+        val identity = player ?: return
+        if (state != State.IN_GAME || !loadingScreenClosed || joinAnnounced) return
+        joinAnnounced = true
+        schedule(JOIN_MESSAGE_DELAY) {
+            if (state == State.IN_GAME) tellEveryone(Text(Text.TRANSLATION, JOINED, parameters = listOf(identity.displayName), needsTranslation = true))
+        }
     }
 
     /**

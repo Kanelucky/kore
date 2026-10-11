@@ -67,6 +67,9 @@ class PlayersTest {
 
     private val clients = mutableListOf<Client>()
 
+    /** Tasks the sessions have asked to run later. Tests run them. */
+    private val scheduled = mutableListOf<() -> Unit>()
+
     /** One player's client, with its own session on the shared server. */
     private inner class Client(val entityId: Long, val name: String, xuid: String) {
         private val key = ecKeyPair()
@@ -75,7 +78,7 @@ class PlayersTest {
         val session: Session = Session(
             config, game, networkId = "network-$entityId", entityId, key.public as ECPublicKey, authenticator,
             viewers = { clients.map { it.session } },
-            schedule = { _, _ -> },
+            schedule = { _, task -> scheduled += task },
         ) { sent += it }
 
         init {
@@ -87,7 +90,15 @@ class PlayersTest {
             sends(packResponse(2, "downloadingfinished"))
             sends(packResponse(3, "resourcepackstackfinished"))
             sends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(69).writeVarInt(2).writeByte(2)))
-            sends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(113).writeVarULong(entityId)))
+            // The loading screen closes as the player is initialised, in one batch.
+            session.receive(
+                batches.encode(
+                    listOf(
+                        ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(312).writeVarInt(2).writeBoolean(false)),
+                        ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(113).writeVarULong(entityId)),
+                    ),
+                ),
+            )
             sent.clear()
         }
 
@@ -120,8 +131,11 @@ class PlayersTest {
     fun `players in the game are on each other's lists, and appear to those who have their chunk`() {
         val steve = Client(1, "Steve", "1111")
         val alex = Client(2, "Alex", "2222")
-        // Steve was in the game first, so he hears Alex join.
-        assertContentEquals(joined("Alex"), steve.received().single())
+        // A moment after each loading screen closes, everyone in the game hears who joined.
+        assertTrue(steve.received().isEmpty())
+        scheduled.forEach { it() }
+        assertEquals(listOf(joined("Steve"), joined("Alex")).map { it.toList() }, steve.received().map { it.toList() })
+        assertEquals(listOf(joined("Steve"), joined("Alex")).map { it.toList() }, alex.received().map { it.toList() })
 
         tick()
 

@@ -26,6 +26,7 @@ private const val CONTAINER_CLOSE = 47
 private const val REQUEST_CHUNK_RADIUS = 69
 private const val CHUNK_RADIUS_UPDATED = 70
 private const val SET_LOCAL_PLAYER_AS_INITIALISED = 113
+private const val LOADING_SCREEN = 312
 private const val BIOME_DEFINITION_LIST = 122
 private const val CLIENT_CACHE_STATUS = 129
 private const val PLAYER_AUTH_INPUT = 144
@@ -127,6 +128,14 @@ data class PlayerAuthInput(
 
 /** The client has the chunks around it and has put its player in the world, naming the player's runtime ID from `StartGame`. */
 data class SetLocalPlayerAsInitialised(val runtimeId: Long) : ClientPacket
+
+/** The client's loading screen opening or closing, as when it joins and loads the world. */
+data class LoadingScreen(val type: Int) : ClientPacket {
+    companion object {
+        const val START = 1
+        const val END = 2
+    }
+}
 
 /** The player interacting with an entity, or with nothing, as when they press the key to open their inventory. */
 data class Interact(val action: Int, val targetRuntimeId: Long) : ClientPacket {
@@ -438,6 +447,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             CLIENT_CACHE_STATUS -> ClientCacheStatus(supported = buffer.readBoolean())
             REQUEST_CHUNK_RADIUS -> RequestChunkRadius(radius = buffer.readVarInt(), maxRadius = buffer.readUnsignedByte().toInt())
             SET_LOCAL_PLAYER_AS_INITIALISED -> SetLocalPlayerAsInitialised(runtimeId = buffer.readVarULong())
+            LOADING_SCREEN -> LoadingScreen(type = buffer.readVarInt()).also { if (buffer.readBoolean()) buffer.readUnsignedIntLE() } // An ID, for a screen the server opened
             INTERACT -> Interact(action = buffer.readUnsignedByte().toInt(), targetRuntimeId = buffer.readVarULong())
             CONTAINER_CLOSE -> ContainerClose(buffer.readUnsignedByte().toInt(), buffer.readUnsignedByte().toInt(), buffer.readBoolean())
             ITEM_STACK_REQUEST -> decodeItemStackRequest(buffer)

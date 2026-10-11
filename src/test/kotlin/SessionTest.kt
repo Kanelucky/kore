@@ -28,6 +28,7 @@ import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.SetActorData
+import org.koremc.protocol.Text
 import org.koremc.protocol.flagsItem
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.ResourcePackStack
@@ -284,10 +285,26 @@ class SessionTest {
         clientSends(setLocalPlayerAsInitialised(runtimeId = 7))
         assertTrue(session.isInGame)
 
-        // Then the client learns about its own player: its actor data, attributes and abilities. Then everyone hears they joined.
-        val (state, joined) = sent.takeLast(2).map { batch -> batches.decode(batch).map { it[0].toInt() and 0xFF } }
-        assertEquals(listOf(0x27, 0x1D, 0xBB), state)
-        assertEquals(listOf(0x09), joined)
+        // Then the client learns about its own player: its actor data, attributes and abilities.
+        assertEquals(listOf(0x27, 0x1D, 0xBB), batches.decode(sent.last()).map { it[0].toInt() and 0xFF })
+    }
+
+    @Test
+    fun `everyone hears a player joined half a second after their loading screen closes`() {
+        loadWorld()
+        clientSends(requestChunkRadius(radius = 2, maxRadius = 2))
+        clientSends(loadingScreen(type = 1))
+        assertTrue(scheduled.isEmpty())
+
+        // The screen closing and the player being initialised come together, as the client sends them.
+        clientSends(loadingScreen(type = 2), setLocalPlayerAsInitialised(runtimeId = 7))
+        sent.clear()
+        val (ticks, announce) = scheduled.single()
+        assertEquals(10, ticks)
+
+        announce()
+        val joined = Text(Text.TRANSLATION, "\u00a7e%multiplayer.player.joined", parameters = listOf("Steve"), needsTranslation = true)
+        assertContentEquals(joined.encode(), receivedPacket())
     }
 
     @Test
@@ -889,7 +906,10 @@ class SessionTest {
     private fun packResponse(tag: Int, name: String) =
         ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(8).writeVarUInt(tag).writeString(name))
 
-    private fun clientSends(packet: ByteArray) = session.receive(batches.encode(listOf(packet)))
+    private fun clientSends(vararg packets: ByteArray) = session.receive(batches.encode(packets.toList()))
+
+    /** The client's loading screen opening (1) or closing (2), with no ID. */
+    private fun loadingScreen(type: Int) = ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(312).writeVarInt(type).writeBoolean(false))
 
     private fun receivedPacket() = batches.decode(sent.last()).single()
 

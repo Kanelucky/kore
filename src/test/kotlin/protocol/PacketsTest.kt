@@ -192,6 +192,12 @@ class PacketsTest {
     }
 
     @Test
+    fun `the loading screen opens and closes, with an ID only for a screen the server opened`() {
+        assertEquals(LoadingScreen(LoadingScreen.END), decodeClientPacket(bytes(0xB8, 0x02, 0x04, 0x00)))
+        assertEquals(LoadingScreen(LoadingScreen.START), decodeClientPacket(bytes(0xB8, 0x02, 0x02, 0x01, 0x07, 0x00, 0x00, 0x00)))
+    }
+
+    @Test
     fun `jigsaw structure data is a compound of four empty lists`() {
         val list = { name: String -> bytes(0x09, name.length) + name.toByteArray() + bytes(0x0A, 0x00) } // Compounds, none of them
 
