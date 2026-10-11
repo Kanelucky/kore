@@ -284,8 +284,10 @@ class SessionTest {
         clientSends(setLocalPlayerAsInitialised(runtimeId = 7))
         assertTrue(session.isInGame)
 
-        // Then the client learns about its own player: its actor data, attributes and abilities.
-        assertEquals(listOf(0x27, 0x1D, 0xBB), batches.decode(sent.last()).map { it[0].toInt() and 0xFF })
+        // Then the client learns about its own player: its actor data, attributes and abilities. Then everyone hears they joined.
+        val (state, joined) = sent.takeLast(2).map { batch -> batches.decode(batch).map { it[0].toInt() and 0xFF } }
+        assertEquals(listOf(0x27, 0x1D, 0xBB), state)
+        assertEquals(listOf(0x09), joined)
     }
 
     @Test

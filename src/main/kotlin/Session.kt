@@ -64,6 +64,7 @@ import org.koremc.protocol.ShowEquipment
 import org.koremc.protocol.Skin
 import org.koremc.protocol.StartGame
 import org.koremc.protocol.StringItem
+import org.koremc.protocol.Text
 import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateAbilities
 import org.koremc.protocol.UpdateAttributes
@@ -182,6 +183,13 @@ private const val CREATIVE_REACH = 14f
 /** How far cracks have to spread for a block to break, in the units `LevelEvent` counts their pace in. */
 private const val CRACKED = 65535
 
+/** The longest chat message Kore passes on, in characters. */
+private const val MAX_CHAT_LENGTH = 512
+
+/** The messages, in each client's own language, that a player joined or left: yellow, with their name filled in. */
+private const val JOINED = "\u00a7e%multiplayer.player.joined"
+private const val LEFT = "\u00a7e%multiplayer.player.left"
+
 /** The device a player plays on, when their client doesn't say. */
 private const val UNKNOWN_PLATFORM = -1
 
@@ -238,7 +246,8 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * Players see each other. Each tick, the client hears who's on the player
  * list, with their skins, and sees the players in the chunks it has appear,
  * move, sneak, change what they hold and go. Their arm swings reach it as
- * they come in.
+ * they come in. Their chat reaches it too, as do players joining and
+ * leaving.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
@@ -391,6 +400,7 @@ class Session(
                 is PlayerAction -> if (packet.action == PlayerAction.CREATIVE_DESTROY_BLOCK) onBreak(packet.position, creativeOnly = true)
                 is MobEquipment -> onEquip(packet)
                 is Animate -> if (packet.action == Animate.SWING_ARM) viewers().forEach { it.showSwing(entityId, packet.swingSource) }
+                is Text -> onChat(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
                 is SetLocalPlayerAsInitialised -> if (state == State.SPAWNING) onPlayerInitialised(packet) else unexpected(packet)
                 // Movement and the rest of gameplay arrive many times a second, and Kore has nothing for them yet.
@@ -1083,7 +1093,39 @@ class Session(
         state = State.IN_GAME
         send(*playerState())
         log.info("{} spawned", player?.displayName)
+        player?.let { tellEveryone(Text(Text.TRANSLATION, JOINED, parameters = listOf(it.displayName), needsTranslation = true)) }
     }
+
+    /**
+     * A message the player typed in chat, which everyone in the game sees:
+     * the player too, since the client shows its own messages only once the
+     * server sends them back. It goes out under the name and XUID the
+     * player logged in with, whatever the client put. A message that's
+     * blank, or longer than [MAX_CHAT_LENGTH] characters, goes nowhere.
+     */
+    private fun onChat(packet: Text) {
+        val identity = player ?: return
+        if (packet.type != Text.CHAT) return
+        val message = packet.message.trim()
+        if (message.isEmpty() || message.length > MAX_CHAT_LENGTH) {
+            log.debug("Refused a chat message of {} characters from {}", packet.message.length, identity.displayName)
+            return
+        }
+        log.info("<{}> {}", identity.displayName, message)
+        tellEveryone(Text(Text.CHAT, message, sourceName = identity.displayName, xuid = identity.xuid.orEmpty()))
+    }
+
+    /** Tells everyone still in the game that this player left, once their session has ended. */
+    fun leave() {
+        val identity = player ?: return
+        if (state != State.IN_GAME) return
+        state = State.CLOSED
+        log.info("{} left", identity.displayName)
+        tellEveryone(Text(Text.TRANSLATION, LEFT, parameters = listOf(identity.displayName), needsTranslation = true))
+    }
+
+    /** Sends [text] to every player in the game. */
+    private fun tellEveryone(text: Text) = viewers().filter { it.isInGame }.forEach { it.send(text) }
 
     /**
      * What the client needs to know about its own player to move it like
@@ -1203,7 +1245,7 @@ class Sessions(
     }
 
     fun disconnect(connection: NetherNetConnection, reason: DisconnectReason) {
-        sessions.remove(connection)
+        sessions.remove(connection)?.leave()
         log.debug("Session for network {} ended: {}", connection.networkId, reason)
     }
 }

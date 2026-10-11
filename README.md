@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Players can join a flat world, walk around it, mine it, build in it and open its doors, and see each other doing it.
+> Kore is in early development. Players can join a flat world, walk around it, mine it, build in it and open its doors, see each other doing it, and chat.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -191,6 +191,8 @@ Items lie in the world as entities. The game ticks 20 times a second, on the sam
 
 Players see each other. Everyone in the game is on each player's list, which the pause screen shows, with the skin their client described when they logged in. Each tick, each player sees the others in the chunks they have appear, move, sneak and sprint, change what they hold and go, and sees their arms swing as they mine and build. A persona skin, made in the game's character creator, also comes with the pieces it's made of; Kore leaves those out, as Dragonfly does, since the skin's image already shows them.
 
+Chat goes to everyone in the game, under the name the player logged in with, whatever their client says. The sender gets it back too, since the client only shows its own messages once the server sends them. Messages that are blank or longer than 512 characters go nowhere, and the console logs the rest. Everyone hears when a player joins or leaves, in their own language.
+
 Chunks name biomes by number, and Cloudburst's data has none for vanilla biomes. For now, plains is hard-coded as biome `1`.
 
 > [!NOTE]
@@ -223,6 +225,7 @@ src/main/kotlin/
 │   ├── Entities.kt                  # Item entities appearing, moving, going and being picked up, and inventory slots
 │   ├── Players.kt                   # Other players: the player list, appearing, moving, holding and swinging
 │   ├── Skins.kt                     # How players look, from their client data to the wire
+│   ├── Chat.kt                      # Chat messages, and the game's own messages in each client's language
 │   └── LoginRequest.kt              # Reading who a client claims to be
 ├── world/
 │   ├── Positions.kt                 # Block, chunk and exact positions
@@ -313,6 +316,7 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Moving items around the player's inventory, and taking them from the creative inventory
 - [ ] Other inventories: chests, crafting and so on
 - [x] Players seeing each other
+- [x] Chat, and players joining and leaving
 - [ ] Mobs
 - [ ] Commands
 

@@ -16,6 +16,7 @@ import org.koremc.protocol.MovePlayer
 import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.SetActorData
 import org.koremc.protocol.ShowEquipment
+import org.koremc.protocol.Text
 import org.koremc.protocol.clientDataToken
 import org.koremc.protocol.connectionRequest
 import org.koremc.protocol.encode
@@ -119,6 +120,8 @@ class PlayersTest {
     fun `players in the game are on each other's lists, and appear to those who have their chunk`() {
         val steve = Client(1, "Steve", "1111")
         val alex = Client(2, "Alex", "2222")
+        // Steve was in the game first, so he hears Alex join.
+        assertContentEquals(joined("Alex"), steve.received().single())
 
         tick()
 
@@ -172,10 +175,36 @@ class PlayersTest {
         tick()
         assertContentEquals(RemoveActor(2).encode(), steve.received().single())
 
+        // Alex's session ends, and Steve hears Alex left, then sees Alex go from the list.
         clients.remove(alex)
+        alex.session.leave()
+        assertContentEquals(
+            Text(Text.TRANSLATION, "\u00a7e%multiplayer.player.left", parameters = listOf("Alex"), needsTranslation = true).encode(),
+            steve.received().single(),
+        )
         tick()
         assertEquals(listOf(PLAYER_LIST), steve.received().map(::idOf))
     }
+
+    @Test
+    fun `chat goes to everyone in the game, under the name the player logged in with`() {
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        steve.received()
+
+        alex.sends(Text(Text.CHAT, "  hello  ", sourceName = "Notch").encode())
+
+        // Alex sees it too: the client only shows its own messages once the server sends them back.
+        val expected = Text(Text.CHAT, "hello", sourceName = "Alex", xuid = "2222").encode()
+        assertContentEquals(expected, steve.received().single())
+        assertContentEquals(expected, alex.received().single())
+
+        alex.sends(Text(Text.CHAT, "   ").encode())
+        alex.sends(Text(Text.CHAT, "x".repeat(513)).encode())
+        assertTrue(steve.received().isEmpty())
+    }
+
+    private fun joined(name: String) = Text(Text.TRANSLATION, "\u00a7e%multiplayer.player.joined", parameters = listOf(name), needsTranslation = true).encode()
 
     private fun idOf(packet: ByteArray) = Unpooled.wrappedBuffer(packet).readVarUInt() and 0x3FF
 

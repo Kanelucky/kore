@@ -444,6 +444,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             INVENTORY_TRANSACTION -> decodeInventoryTransaction(buffer)
             MOB_EQUIPMENT -> decodeMobEquipment(buffer)
             ANIMATE -> decodeAnimate(buffer)
+            TEXT -> decodeText(buffer)
             PLAYER_ACTION -> decodePlayerAction(buffer)
             PLAYER_AUTH_INPUT -> decodePlayerAuthInput(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
