@@ -54,7 +54,8 @@ fun main() {
 
     val peers = Peers()
     val world = FlatWorld.vanilla(vanilla.blocks)
-    val sessions = Sessions(config, vanilla, world, LoginAuthenticator(auth.verifier, config.onlineMode))
+    // Built once, on start, so no player's login pays to encode the definitions.
+    val sessions = Sessions(config, GameData.of(vanilla, world), LoginAuthenticator(auth.verifier, config.onlineMode))
 
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),

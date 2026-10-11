@@ -1,24 +1,25 @@
 package org.koremc
 
+import org.koremc.inventory.PlayerInventory
+import org.koremc.inventory.StackRequestHandler
 import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.Attribute
 import org.koremc.protocol.BatchCodec
-import org.koremc.protocol.BiomeDefinitionList
-import org.koremc.protocol.BlockDefinitions
 import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
 import org.koremc.protocol.ClientPacket
 import org.koremc.protocol.ContainerClose
 import org.koremc.protocol.ContainerOpen
-import org.koremc.protocol.CreativeContent
 import org.koremc.protocol.Disconnect
 import org.koremc.protocol.FloatItem
+import org.koremc.protocol.GameMode
 import org.koremc.protocol.Interact
+import org.koremc.protocol.ItemStackRequest
+import org.koremc.protocol.ItemStackResponse
 import org.koremc.protocol.InputFlag
-import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.JigsawStructureData
 import org.koremc.protocol.LevelChunk
 import org.koremc.protocol.Login
@@ -47,9 +48,7 @@ import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
 import org.koremc.protocol.flagsItem
 import org.koremc.protocol.parseConnectionRequest
-import org.koremc.registry.VanillaData
 import org.koremc.world.ChunkPos
-import org.koremc.world.FlatWorld
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
 import org.koremc.world.PLAYER_MAX_AIR
@@ -136,11 +135,8 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  */
 class Session(
     private val config: ServerConfig,
-    /** What follows `StartGame`: the item registry first, then the rest of the game's definitions. Shared by every session. */
-    private val definitions: List<ServerPacket>,
-    /** The blocks defined in data, sent in `StartGame`. Shared by every session. */
-    private val blockDefinitions: BlockDefinitions,
-    private val world: FlatWorld,
+    /** The world and the game's definitions, shared by every session. */
+    private val game: GameData,
     private val networkId: String,
     /** The player's entity ID, unique across the server. */
     private val entityId: Long,
@@ -152,6 +148,9 @@ class Session(
     private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, NEGOTIATING_RESOURCE_PACKS, LOADING_WORLD, SPAWNING, IN_GAME, CLOSED }
 
     private val batches = BatchCodec()
+    private val world = game.world
+    private val inventory = PlayerInventory()
+    private val stackRequests = StackRequestHandler(inventory, game.creative) { config.gameMode == GameMode.CREATIVE }
     private var state = State.AWAITING_NETWORK_SETTINGS_REQUEST
 
     /** The player, once their login has authenticated. */
@@ -230,6 +229,7 @@ class Session(
                 is PlayerAuthInput -> onMove(packet)
                 is Interact -> if (packet.action == Interact.OPEN_INVENTORY) openInventory()
                 is ContainerClose -> onContainerClose(packet)
+                is ItemStackRequest -> send(ItemStackResponse(packet.requests.map(stackRequests::handle)))
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
                 is SetLocalPlayerAsInitialised -> if (state == State.SPAWNING) onPlayerInitialised(packet) else unexpected(packet)
                 // Movement and the rest of gameplay arrive many times a second, and Kore has nothing for them yet.
@@ -319,9 +319,9 @@ class Session(
                 worldName = config.level,
                 serverVersion = config.version,
                 baseGameVersion = config.version,
-                blockDefinitions = blockDefinitions,
+                blockDefinitions = game.blockDefinitions,
             ),
-            *definitions.toTypedArray(),
+            *game.definitions.toTypedArray(),
         )
         state = State.LOADING_WORLD
         log.info("{} is loading the world, spawning at {}", player?.displayName, spawn)
@@ -538,16 +538,12 @@ private fun names(packets: Array<out ServerPacket>): String {
 }
 
 /** Every connected player's session, driven by the transport's connection callbacks on the UDP event loop. */
-class Sessions(private val config: ServerConfig, vanilla: VanillaData, private val world: FlatWorld, private val authenticator: LoginAuthenticator) {
+class Sessions(private val config: ServerConfig, private val game: GameData, private val authenticator: LoginAuthenticator) {
     private val sessions = HashMap<NetherNetConnection, Session>()
     private var nextEntityId = 1L
 
-    /** Built here, on start, so no player's login pays to encode them. */
-    private val definitions = listOf(ItemRegistry(vanilla.items), BiomeDefinitionList(vanilla.biomes), CreativeContent(vanilla.creative))
-    private val blockDefinitions = BlockDefinitions(vanilla.blockDefinitions)
-
     fun connect(connection: NetherNetConnection) {
-        sessions[connection] = Session(config, definitions, blockDefinitions, world, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
+        sessions[connection] = Session(config, game, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
             connection.send(message)
         }
     }

@@ -425,6 +425,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             SET_LOCAL_PLAYER_AS_INITIALISED -> SetLocalPlayerAsInitialised(runtimeId = buffer.readVarULong())
             INTERACT -> Interact(action = buffer.readUnsignedByte().toInt(), targetRuntimeId = buffer.readVarULong())
             CONTAINER_CLOSE -> ContainerClose(buffer.readUnsignedByte().toInt(), buffer.readUnsignedByte().toInt(), buffer.readBoolean())
+            ITEM_STACK_REQUEST -> decodeItemStackRequest(buffer)
             PLAYER_AUTH_INPUT -> decodePlayerAuthInput(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))

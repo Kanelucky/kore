@@ -32,6 +32,7 @@ import org.koremc.protocol.writeVarInt
 import org.koremc.protocol.writeVarUInt
 import org.koremc.protocol.writeVarULong
 import org.koremc.registry.BiomeDefinition
+import org.koremc.registry.CreativeInventory
 import org.koremc.registry.BlockDefinition
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemDefinition
@@ -70,7 +71,8 @@ class SessionTest {
     private val world = FlatWorld(listOf(BlockState("minecraft:stone", NbtMap.EMPTY, version = 18168865)))
     private val sent = mutableListOf<ByteArray>()
     private val blockDefinitions = BlockDefinitions(listOf(BlockDefinition("minecraft:white_wool_stairs", NbtMap.builder().putInt("molangVersion", 13).build())))
-    private val session = Session(config, listOf(itemRegistry, biomes), blockDefinitions, world, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
+    private val game = GameData(world, listOf(itemRegistry, biomes), blockDefinitions, CreativeInventory(emptyList(), emptyList()))
+    private val session = Session(config, game, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
 
     /** The client's side of batching, which switches on compression when NetworkSettings arrives. */
     private val batches = BatchCodec()
@@ -386,6 +388,22 @@ class SessionTest {
         }
 
         assertEquals(listOf("TRACE", "DEBUG"), packetLog.list.map { it.level.toString() })
+    }
+
+    @Test
+    fun `item stack requests get an answer each`() {
+        spawn()
+
+        // Request -1 picks the first creative item. This player isn't in creative mode, so it's turned down.
+        val request = ByteBufUtil.getBytes(
+            Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(-1)
+                .writeVarUInt(1).writeVarUInt(12).writeByte(14).writeVarUInt(1).writeByte(1)
+                .writeVarUInt(0).writeIntLE(0),
+        )
+        clientSends(request)
+
+        // ItemStackResponse: one response, rejected (1), for request -1 (zigzagged to 1), with no containers.
+        assertContentEquals(bytes(0x94, 0x01, 0x01, 0x01, 0x01, 0x00), receivedPacket())
     }
 
     @Test

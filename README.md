@@ -143,6 +143,8 @@ Clients expect the server to agree with them about the game itself: which items 
 - **Items** go to every player in the `ItemRegistry`, with the runtime ID each one travels by. The list is the same for everyone, so Kore encodes it once on start rather than at every login.
 - **Biomes** follow in the `BiomeDefinitionList`: each one's climate, colours and tags. Kore leaves out the world generation data, which only a client generating its own terrain would use, so the packet stays under 8 KB.
 - **The creative inventory** follows, as `CreativeContent`: 124 groups across the four tabs, and 1,980 items, including recent ones like the mushroom shelf and wool and concrete stairs and slabs. Each item names the block state it places and carries its NBT, like an enchanted book's enchantment. It's encoded once on start, too. Because Kore tells the client that the server owns inventories, the client can't even open its own inventory without asking: Kore answers with `ContainerOpen`, and agrees when the client closes it.
+
+For the same reason, Kore keeps each player's inventory itself. Every move the player makes is an item stack request: the client predicts the result, and Kore either agrees, listing each changed slot and the ID of the stack now there, or rejects it, which makes the client undo it. Each request names the stacks it expects to find, and one that doesn't match what Kore has is rejected whole. The client doesn't wait for one answer before the next request, so a request can name a stack that an earlier one made by that request's number. Kore remembers recent requests to follow those. Picking from the creative inventory puts a full stack in a hidden output slot for the client to take from. Dropping items waits for item entities, and crafting for recipes.
 - **Blocks defined in data**, rather than in the game's code, go in `StartGame`. Since 26.50 that includes the wool and concrete stairs and slabs and the shelf mushroom. Without their definitions, the client knows these blocks exist but not how they look, and shows them as placeholders.
 - **Block states** are named on the network by a hash, not by their place in a palette: the 32-bit FNV-1a hash of the state's name and properties, written as little-endian NBT. Mojang's protocol docs don't spell the rule out, so the tests check it against the network ID the game gave each of the 22,091 states in its palette.
 
@@ -172,6 +174,7 @@ src/main/kotlin/
 ├── Main.kt                          # Entry point: wires config, server and shutdown
 ├── ServerConfig.kt                  # Server settings
 ├── Session.kt                       # Each player's walk through the login sequence
+├── GameData.kt                      # What every session shares: the world and the game's definitions
 ├── Authentication.kt                # Deciding whether a login proves who it claims to be
 ├── auth/
 │   ├── Jose.kt                      # Signed tokens and the keys that verify them
@@ -185,6 +188,7 @@ src/main/kotlin/
 │   ├── ActorData.kt                 # Actors' synced data and flags
 │   ├── Attributes.kt                # Health, hunger, speed and other attributes
 │   ├── Abilities.kt                 # What a player may do in their game mode
+│   ├── ItemStackRequest.kt          # Inventory requests from the client, and the answers
 │   ├── CreativeContent.kt           # The creative inventory, and items on the wire
 │   └── LoginRequest.kt              # Reading who a client claims to be
 ├── world/
@@ -193,6 +197,9 @@ src/main/kotlin/
 │   ├── PalettedStorage.kt           # A sub-chunk's worth of values, as a palette and indices
 │   ├── Chunk.kt                     # Chunk columns, and which are in a player's view
 │   └── FlatWorld.kt                 # The same layers in every column
+├── inventory/
+│   ├── PlayerInventory.kt           # A player's slots: hotbar, inventory, offhand, armour and cursor
+│   └── StackRequests.kt             # Carrying out item stack requests, all or nothing
 ├── registry/
 │   ├── VanillaData.kt               # Loads the game's items, block states and biomes on start
 │   ├── Items.kt                     # Items, as the client's item registry lists them
@@ -258,7 +265,8 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 ### Phase 4: Gameplay
 - [x] Creative inventory, from CloudburstMC's data
 - [ ] Block breaking and placing
-- [ ] Inventories
+- [x] Moving items around the player's inventory, and taking them from the creative inventory
+- [ ] Other inventories: chests, crafting and so on
 - [ ] Entities
 - [ ] Commands
 

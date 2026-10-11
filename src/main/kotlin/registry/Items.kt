@@ -34,3 +34,10 @@ data class ItemStack(
     val block: BlockState? = null,
     val nbt: NbtMap = NbtMap.EMPTY,
 )
+
+/** The most of this item one slot holds. Data-driven items say; for the rest, Kore assumes the usual 64. */
+val ItemDefinition.maxStackSize: Int
+    get() = components.getCompound("components", NbtMap.EMPTY).getCompound("item_properties", NbtMap.EMPTY).getInt("max_stack_size", 64)
+
+/** Whether [other] is the same item, variant, block and NBT as this, so the two could share a slot. */
+fun ItemStack.sameKindAs(other: ItemStack) = item == other.item && aux == other.aux && block == other.block && nbt == other.nbt
