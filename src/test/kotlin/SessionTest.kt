@@ -212,17 +212,44 @@ class SessionTest {
     }
 
     @Test
-    fun `crossing into another chunk sends the chunks that came into view`() {
+    fun `straying two chunks moves the view and sends the chunks that came into it`() {
         spawn()
 
         clientSends(playerAuthInput(Vec3(16.5f, -61.38f, 8.5f)))
+        assertTrue(sent.isEmpty())
+
+        clientSends(playerAuthInput(Vec3(32.5f, -61.38f, 8.5f)))
         val packets = receivedPackets()
 
-        val cameIntoView = chunksAround(ChunkPos(1, 0), 2) - chunksAround(ChunkPos(0, 0), 2).toSet()
-        // The view now centres on block 16, -62, 8, two chunks out (32 blocks), and has no saved chunks.
-        assertContentEquals(bytes(0x79, 0x20, 0x7B, 0x10, 0x20, 0x00, 0x00, 0x00, 0x00), packets.first())
+        val cameIntoView = chunksAround(ChunkPos(2, 0), 2) - chunksAround(ChunkPos(0, 0), 2).toSet()
+        // The view now centres on block 32, -62, 8, two chunks out (32 blocks), and has no saved chunks.
+        assertContentEquals(bytes(0x79, 0x40, 0x7B, 0x10, 0x20, 0x00, 0x00, 0x00, 0x00), packets.first())
         assertEquals(List(cameIntoView.size) { 0x3A }, packets.drop(1).map { it[0].toInt() })
-        assertEquals(5, cameIntoView.size)
+        assertEquals(8, cameIntoView.size)
+    }
+
+    @Test
+    fun `stepping back and forth over a chunk border sends nothing`() {
+        spawn()
+
+        repeat(3) {
+            clientSends(playerAuthInput(Vec3(16.5f, -61.38f, 16.5f))) // Diagonally into chunk 1, 1
+            clientSends(playerAuthInput(Vec3(15.5f, -61.38f, 15.5f))) // And back into chunk 0, 0
+        }
+
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun `once the view has moved, stepping back doesn't move it again`() {
+        spawn()
+        clientSends(playerAuthInput(Vec3(32.5f, -61.38f, 8.5f)))
+        sent.clear()
+
+        clientSends(playerAuthInput(Vec3(31.5f, -61.38f, 8.5f))) // Back into chunk 1, 0, one from the new centre
+        clientSends(playerAuthInput(Vec3(32.5f, -61.38f, 8.5f)))
+
+        assertTrue(sent.isEmpty())
     }
 
     @Test

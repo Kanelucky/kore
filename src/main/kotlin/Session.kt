@@ -75,6 +75,14 @@ private const val CHUNKS_PER_BATCH = 16
 private const val MAX_COORDINATE = 30_000_000f
 
 /**
+ * How many chunks a player can stray from the centre of their view before
+ * it follows them. Players often step back and forth over a chunk border;
+ * if the view followed every step, each one would resend the same row of
+ * chunks. Strays of less than this send nothing.
+ */
+private const val RECENTRE_DISTANCE = 2
+
+/**
  * One player's protocol session. It owns the batch codec, so it decides
  * when compression switches on, and walks the login sequence one packet
  * at a time:
@@ -105,8 +113,8 @@ private const val MAX_COORDINATE = 30_000_000f
  * From then on, `PlayerAuthInput` reports where the client predicts its
  * player is, every tick. Kore takes its word for it, as Mojang's movement
  * guide allows a server without physics to, and moves the player's view
- * with them: crossing into another chunk sends the chunks that come into
- * view.
+ * with them once they stray from its centre, sending the chunks that come
+ * into it.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
@@ -302,8 +310,9 @@ class Session(
     }
 
     /**
-     * Takes the client's word for where its player is. Crossing into
-     * another chunk moves the view, which sends the chunks coming into it.
+     * Takes the client's word for where its player is. Straying far enough
+     * from the centre of their view moves it onto them, which sends the
+     * chunks coming into it.
      */
     private fun onMove(packet: PlayerAuthInput) {
         val reported = packet.position
@@ -314,11 +323,14 @@ class Session(
         position = reported
 
         val chunk = reported.toBlockPos().chunk
-        val radius = chunkRadius
-        if (chunk == viewCentre || radius == null) return
+        val radius = chunkRadius ?: return
+        val dx = chunk.x - viewCentre.x
+        val dz = chunk.z - viewCentre.z
+        if (dx * dx + dz * dz < RECENTRE_DISTANCE * RECENTRE_DISTANCE) return
+
         viewCentre = chunk
         val sent = updateView(radius)
-        log.debug("{} moved into chunk {}, {}, so {} chunks came into view", player?.displayName, chunk.x, chunk.z, sent)
+        log.debug("{}'s view moved to chunk {}, {}, so {} chunks came into it", player?.displayName, chunk.x, chunk.z, sent)
     }
 
     /**
