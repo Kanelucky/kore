@@ -24,6 +24,8 @@ data class ServerConfig(
     val operatorKeyFile: Path = Path.of("operator.key"),
     /** Shown to players as untrusted text when they first accept this server's key. */
     val operatorDomain: String = "localhost",
+    /** Where the game's item and block data lives: a checkout of https://github.com/KoreMC/data matching [version]. */
+    val dataDirectory: Path = Path.of("data"),
     val name: String = "Kore Server",
     val level: String = "world",
     val maxPlayers: Int = 20,

@@ -1,6 +1,9 @@
 package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
+import io.netty.buffer.ByteBufOutputStream
+import org.cloudburstmc.nbt.NbtMap
+import org.cloudburstmc.nbt.NbtUtils
 import java.util.UUID
 
 /** Thrown when a client sends bytes that don't decode as what they claim to be. */
@@ -52,6 +55,9 @@ fun ByteBuf.writeString(value: String): ByteBuf = writeByteArray(value.encodeToB
 
 /** A UUID as two little-endian 64-bit halves, most significant first. */
 fun ByteBuf.writeUuid(uuid: UUID): ByteBuf = writeLongLE(uuid.mostSignificantBits).writeLongLE(uuid.leastSignificantBits)
+
+/** [tag] as network NBT: little-endian, with varuint lengths for names and strings, and zigzag varints for ints, longs and list sizes. */
+fun ByteBuf.writeNbt(tag: NbtMap): ByteBuf = apply { NbtUtils.createNetworkWriter(ByteBufOutputStream(this)).writeTag(tag) }
 
 /** A varuint32 count followed by that many items, refusing counts the remaining bytes couldn't possibly hold. */
 fun <T> ByteBuf.readList(readItem: ByteBuf.() -> T): List<T> {

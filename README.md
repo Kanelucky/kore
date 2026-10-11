@@ -39,6 +39,8 @@ Kore is not a fork, a wrapper, or a port of an existing server. It's a ground-up
 | Build | **Gradle** (Kotlin DSL) | One language for the code and the build. |
 | Networking | **Netty 4** | Battle-tested non-blocking I/O for both the TCP signaling and the UDP game traffic. |
 | Serialization | **kotlinx.serialization** | Compile-time JSON codecs with no reflection. |
+| NBT | **Cloudburst NBT** | Reads the vanilla data, and writes NBT for packets and block state hashes. No dependencies of its own. |
+| Game data | **[KoreMC/data](https://github.com/KoreMC/data)** | Items and block states, dumped from the game by CloudburstMC. Kept in its own repository and read from `data/` on start. |
 | Security | **JDK** (DTLS 1.2, ECDSA) | The JDK's non-blocking DTLS engine fits Netty, and needs no native libraries or BouncyCastle. |
 | Logging | **SLF4J + Logback** | Structured, configurable, and fast enough to stay out of the way. |
 
@@ -88,8 +90,11 @@ All three run on the UDP event loop, so they must never block. If one throws, th
 ```bash
 git clone https://github.com/KoreMC/kore.git
 cd kore
+git clone https://github.com/KoreMC/data.git data
 ./gradlew run
 ```
+
+The second clone fetches the [game data](#-vanilla-data) Kore reads on start. Kore won't start without it.
 
 Kore uses port `19132` for both signaling (TCP) and gameplay (UDP), so open both in your firewall. Check that signaling is reachable:
 
@@ -124,8 +129,17 @@ Kore finds the authorization service through Minecraft's service discovery and k
 
 `onlineMode = false` turns all of this off for local testing. Anyone can then join under any name, so never run it where the public can reach it.
 
+### 📦 Vanilla Data
+
+Clients expect the server to agree with them about the game itself: which items exist, and what each block state is called on the network. [CloudburstMC/Data](https://github.com/CloudburstMC/Data) dumps that data from the game, and Kore keeps its copy in a repository of its own, [KoreMC/data](https://github.com/KoreMC/data), apart from the code. Kore reads it once on start from `data/` in its working directory (`dataDirectory` in `ServerConfig`). If a file is missing, Kore names it and stops.
+
+- **Items** go to every player in the `ItemRegistry`, with the runtime ID each one travels by. The list is the same for everyone, so Kore encodes it once on start rather than at every login.
+- **Block states** are named on the network by a hash, not by their place in a palette: the 32-bit FNV-1a hash of the state's name and properties, written as little-endian NBT. Mojang's protocol docs don't spell the rule out, so the tests check it against the network ID the game gave each of the 22,091 states in its palette.
+
+The data must be for the same client release as `version` in `ServerConfig`.
+
 > [!NOTE]
-> Server settings live in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) until there's a config file. The defaults target 1.26.50 (protocol `2193`). Update `protocol` and `version` together when moving to a new client release. Behind NAT, set `advertisedAddresses` to your public IP so clients get a candidate they can reach.
+> Server settings live in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) until there's a config file. The defaults target 1.26.50 (protocol `2193`). Update `protocol` and `version` together, along with the [vanilla data](#-vanilla-data), when moving to a new client release. Behind NAT, set `advertisedAddresses` to your public IP so clients get a candidate they can reach.
 
 ## 🗂️ Project Layout
 
@@ -144,6 +158,10 @@ src/main/kotlin/
 │   ├── Packets.kt                   # Packet types and their encodings
 │   ├── StartGame.kt                 # The packet that sets up the world on the client
 │   └── LoginRequest.kt              # Reading who a client claims to be
+├── registry/
+│   ├── VanillaData.kt               # Loads the game's items and block states on start
+│   ├── Items.kt                     # Items, as the client's item registry lists them
+│   └── BlockStates.kt               # Block states and the hashes the client knows them by
 └── network/
     ├── SignalingServer.kt           # TCP bootstrap and HTTP pipeline
     ├── NetherNetSignalingHandler.kt # Routes /v1/join requests
@@ -187,10 +205,11 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Verify login tokens, and bind them to the identity in the client's offer
 - [x] Login success and resource pack negotiation (no server packs yet)
 - [x] `StartGame` and chunk radius negotiation
-- [ ] Vanilla item, block and biome registries
+- [x] **Cloudburst NBT Parsing**
+- [x] Vanilla item registry and block state hashes, from CloudburstMC's data
+- [ ] Biome definitions
 - [ ] Chunks and spawning
 - [ ] Packet registry for the rest of the protocol
-- [ ] **Cloudburst NBT Parsing**
 
 ### Phase 3: World
 - [ ] **World Loading** (LevelDB)
@@ -211,7 +230,7 @@ Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) before openin
 
 - [NetherNet HTTP Signaling: Partner Onboarding Guide](https://mojang.github.io/bedrock-protocol-docs/guides/nether-net-onboarding-guide/) from Mojang
 - [NetherNet](https://minecraft.wiki/w/NetherNet) and [Bedrock Edition protocol](https://minecraft.wiki/w/Bedrock_Edition_protocol) on the Minecraft Wiki
-- [CloudburstMC](https://github.com/CloudburstMC) for NBT and protocol libraries
+- [CloudburstMC](https://github.com/CloudburstMC) for the [NBT library](https://github.com/CloudburstMC/NBT) and the [game data](https://github.com/CloudburstMC/Data) Kore reads
 
 ## 📄 License
 

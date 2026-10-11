@@ -3,6 +3,7 @@ package org.koremc.protocol
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
+import org.koremc.registry.ItemDefinition
 import java.util.UUID
 
 // Packet IDs and layouts follow Mojang's protocol schemas for 1.26.50 (protocol 2193):
@@ -190,14 +191,28 @@ data class ResourcePackStack(
 
 /**
  * The items in the world, with the runtime IDs the protocol refers to them
- * by. The client waits for this after `StartGame`. Kore has no item data
- * yet, so the list is empty.
+ * by. The client waits for this after `StartGame`, and knows no item it
+ * doesn't list.
+ *
+ * Every player gets the same thousands of items, so the packet encodes them
+ * once, when it's made, and every send reuses those bytes.
  */
-data object ItemRegistry : ServerPacket {
+class ItemRegistry(val items: List<ItemDefinition>) : ServerPacket {
     override val id get() = ITEM_REGISTRY
 
+    private val body = ByteBufUtil.getBytes(Unpooled.buffer().apply {
+        writeVarUInt(items.size)
+        for (item in items) {
+            writeString(item.name)
+            writeShortLE(item.runtimeId)
+            writeBoolean(item.componentBased)
+            writeVarInt(item.version.ordinal)
+            writeNbt(item.components)
+        }
+    })
+
     override fun encodeBody(out: ByteBuf) {
-        out.writeVarUInt(0)
+        out.writeBytes(body)
     }
 }
 

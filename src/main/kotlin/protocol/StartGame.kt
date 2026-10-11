@@ -1,6 +1,7 @@
 package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
+import org.cloudburstmc.nbt.NbtMap
 import java.util.UUID
 
 private const val START_GAME = 11
@@ -93,7 +94,7 @@ data class StartGame(
         out.writeString(multiplayerCorrelationId)
         out.writeBoolean(true) // Server-authoritative inventory
         out.writeString(serverVersion)
-        out.writeEmptyNbtCompound() // Player property data
+        out.writeNbt(NbtMap.EMPTY) // Player property data
         out.writeLongLE(0) // Block registry checksum. Zero skips the client's check.
         out.writeUuid(UUID(0, 0)) // World template
         out.writeBoolean(false) // Client-side generation
@@ -174,11 +175,4 @@ private fun ByteBuf.writeBlockPos(pos: BlockPos) {
     writeVarInt(pos.x)
     writeVarInt(pos.y)
     writeVarInt(pos.z)
-}
-
-/** An empty NBT compound in the network encoding: the compound tag, an empty name, then the end tag. */
-private fun ByteBuf.writeEmptyNbtCompound() {
-    writeByte(0x0A)
-    writeVarUInt(0)
-    writeByte(0x00)
 }

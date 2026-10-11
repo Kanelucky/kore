@@ -24,6 +24,7 @@ import org.koremc.protocol.Vec3
 import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
 import org.koremc.protocol.parseConnectionRequest
+import org.koremc.registry.VanillaData
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
 
@@ -53,14 +54,17 @@ private const val MIN_CHUNK_RADIUS = 2
  * 3. Resource packs. Kore offers none, the client answers that it has them
  *    all, Kore sends the (vanilla) pack stack, and the client confirms it
  *    has applied it.
- * 4. `StartGame` sets up the world, followed by the `ItemRegistry` the
- *    client waits for next. The client then asks how far it can see, and
- *    Kore settles on a chunk radius. Chunks and spawning come after that.
+ * 4. `StartGame` sets up the world, followed by the `ItemRegistry`: every
+ *    vanilla item and the runtime ID it travels by. The client then asks how
+ *    far it can see, and Kore settles on a chunk radius. Chunks and spawning
+ *    come after that.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
 class Session(
     private val config: ServerConfig,
+    /** Every vanilla item, which the client needs before it can load the world. Shared by every session. */
+    private val itemRegistry: ItemRegistry,
     private val networkId: String,
     /** The player's entity ID, unique across the server. */
     private val entityId: Long,
@@ -195,7 +199,7 @@ class Session(
                 worldName = config.level,
                 serverVersion = config.version,
             ),
-            ItemRegistry,
+            itemRegistry,
         )
         state = State.LOADING_WORLD
         log.info("{} is loading the world, spawning at {}", player?.displayName, spawn)
@@ -235,12 +239,15 @@ class Session(
 }
 
 /** Every connected player's session, driven by the transport's connection callbacks on the UDP event loop. */
-class Sessions(private val config: ServerConfig, private val authenticator: LoginAuthenticator) {
+class Sessions(private val config: ServerConfig, vanilla: VanillaData, private val authenticator: LoginAuthenticator) {
     private val sessions = HashMap<NetherNetConnection, Session>()
     private var nextEntityId = 1L
 
+    /** Built here, on start, so no player's login pays to encode it. */
+    private val itemRegistry = ItemRegistry(vanilla.items)
+
     fun connect(connection: NetherNetConnection) {
-        sessions[connection] = Session(config, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
+        sessions[connection] = Session(config, itemRegistry, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
             connection.send(message)
         }
     }

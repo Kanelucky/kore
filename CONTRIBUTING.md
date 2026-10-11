@@ -23,10 +23,13 @@ Thanks for your interest in Kore. The project is deliberately small, and keeping
 You need **JDK 25**. Gradle provisions a matching toolchain if it isn't installed. IntelliJ IDEA is recommended and picks up the project code style automatically.
 
 ```bash
+git clone https://github.com/KoreMC/data.git data   # the game data Kore reads on start
 ./gradlew build   # compile and run all tests
 ./gradlew test    # tests only
 ./gradlew run     # start the server on TCP 19132
 ```
+
+The server won't start without `data/`. Tests that check against the real game data are skipped without it, so clone it before you trust a green build.
 
 ## Code Standards
 
@@ -110,6 +113,7 @@ The compiler now tells you when a new packet isn't handled. That's the kind of s
 ## Protocol Research
 
 - **Clean-room only.** Don't commit Mojang binaries, decompiled or deobfuscated game code, or game assets. Base implementations on observed behaviour, packet captures, and public community documentation.
+- **Game data lives in [KoreMC/data](https://github.com/KoreMC/data), not here.** The item and block state definitions clients expect come from [CloudburstMC/Data](https://github.com/CloudburstMC/Data). Changes to them go to that repository, and this one never commits data files.
 - When a PR implements protocol behaviour, state the client version and platform you verified it against.
 
 ## Pull Request Process

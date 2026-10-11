@@ -1,5 +1,8 @@
 package org.koremc.protocol
 
+import org.cloudburstmc.nbt.NbtMap
+import org.koremc.registry.ItemDefinition
+import org.koremc.registry.ItemVersion
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -87,7 +90,28 @@ class PacketsTest {
 
     @Test
     fun `an empty item registry is just its count`() {
-        assertContentEquals(bytes(0xA2, 0x01, 0x00), ItemRegistry.encode())
+        assertContentEquals(bytes(0xA2, 0x01, 0x00), ItemRegistry(emptyList()).encode())
+    }
+
+    @Test
+    fun `item registry entries carry a 16-bit ID, a zigzagged version and network NBT`() {
+        val food = NbtMap.builder().putCompound("minecraft:food", NbtMap.builder().putInt("nutrition", 4).build()).build()
+        val registry = ItemRegistry(
+            listOf(
+                ItemDefinition("minecraft:air", -158, componentBased = false, ItemVersion.NONE),
+                ItemDefinition("minecraft:apple", 882, componentBased = true, ItemVersion.DATA_DRIVEN, NbtMap.builder().putCompound("components", food).build()),
+            ),
+        )
+
+        val expected = bytes(0xA2, 0x01, 0x02) +
+            // -158 as a little-endian int16, not component based, version 2 zigzagged, and an empty compound.
+            bytes(13) + "minecraft:air".toByteArray() + bytes(0x62, 0xFF, 0x00, 0x04, 0x0A, 0x00, 0x00) +
+            bytes(15) + "minecraft:apple".toByteArray() + bytes(0x72, 0x03, 0x01, 0x02) +
+            // Network NBT names its tags with varuint lengths, and zigzags ints: 4 becomes 8.
+            bytes(0x0A, 0x00, 0x0A, 10) + "components".toByteArray() + bytes(0x0A, 14) + "minecraft:food".toByteArray() +
+            bytes(0x03, 9) + "nutrition".toByteArray() + bytes(0x08, 0x00, 0x00, 0x00)
+
+        assertContentEquals(expected, registry.encode())
     }
 
     @Test

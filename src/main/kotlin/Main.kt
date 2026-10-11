@@ -15,14 +15,24 @@ import org.koremc.network.rtc.hostCandidates
 import org.koremc.network.rtc.localAddresses
 import org.koremc.network.rtc.maxSendableMessageSize
 import org.koremc.network.rtc.verifiedClientKey
+import org.koremc.registry.VanillaData
 import org.slf4j.LoggerFactory
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.nio.file.NoSuchFileException
+import kotlin.system.exitProcess
 
 private val log = LoggerFactory.getLogger("Kore")
 
 fun main() {
     val config = ServerConfig()
+    val vanilla = try {
+        VanillaData.load(config.dataDirectory)
+    } catch (e: NoSuchFileException) {
+        log.error("Missing {}. Kore needs the game data for {} in {}: clone https://github.com/KoreMC/data there.", e.file, config.version, config.dataDirectory.toAbsolutePath())
+        exitProcess(1)
+    }
+    log.info("Loaded {} items and {} block states for {}", vanilla.items.size, vanilla.blocks.states.size, config.version)
 
     val addresses = config.advertisedAddresses.map(InetAddress::getByName).ifEmpty { localAddresses() }
     val candidates = hostCandidates(config.port, addresses)
@@ -40,7 +50,7 @@ fun main() {
     if (config.onlineMode) auth.start() else log.warn("Offline mode: players aren't authenticated, so anyone can join as anyone")
 
     val peers = Peers()
-    val sessions = Sessions(config, LoginAuthenticator(auth.verifier, config.onlineMode))
+    val sessions = Sessions(config, vanilla, LoginAuthenticator(auth.verifier, config.onlineMode))
 
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),

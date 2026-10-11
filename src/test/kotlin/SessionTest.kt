@@ -7,13 +7,17 @@ import org.koremc.auth.TestAuthority
 import org.koremc.auth.XUID
 import org.koremc.auth.ecKeyPair
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.clientDataToken
 import org.koremc.protocol.connectionRequest
+import org.koremc.protocol.encode
 import org.koremc.protocol.loginPacket
 import org.koremc.protocol.tokenAuthentication
 import org.koremc.protocol.writeString
 import org.koremc.protocol.writeVarInt
 import org.koremc.protocol.writeVarUInt
+import org.koremc.registry.ItemDefinition
+import org.koremc.registry.ItemVersion
 import java.security.interfaces.ECPublicKey
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -31,8 +35,9 @@ class SessionTest {
     private val authenticator = LoginAuthenticator(MultiplayerTokenVerifier(keys = { authority.keys }), onlineMode = true)
 
     private val config = ServerConfig(protocol = PROTOCOL, viewDistance = 8)
+    private val itemRegistry = ItemRegistry(listOf(ItemDefinition("minecraft:stick", 323, componentBased = false, ItemVersion.NONE)))
     private val sent = mutableListOf<ByteArray>()
-    private val session = Session(config, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
+    private val session = Session(config, itemRegistry, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
 
     /** The client's side of batching, which switches on compression when NetworkSettings arrives. */
     private val batches = BatchCodec()
@@ -88,10 +93,10 @@ class SessionTest {
         assertFalse(session.isLoadingWorld)
 
         clientSends(packResponse(3, "resourcepackstackfinished"))
-        val (startGame, itemRegistry) = batches.decode(sent.last())
+        val (startGame, registry) = batches.decode(sent.last())
         assertEquals(0x0B, startGame[0].toInt())
         assertEquals(0x0E, startGame[1].toInt()) // Entity ID 7, zigzagged
-        assertContentEquals(bytes(0xA2, 0x01, 0x00), itemRegistry)
+        assertContentEquals(itemRegistry.encode(), registry)
         assertTrue(session.isLoadingWorld)
         assertTrue(session.cacheSupported)
     }

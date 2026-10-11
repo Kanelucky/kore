@@ -71,3 +71,6 @@ bin/
 .DS_Store
 ### Kore runtime ###
 operator.key
+
+# The game data, checked out from https://github.com/KoreMC/data
+/data/
