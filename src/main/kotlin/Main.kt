@@ -34,6 +34,7 @@ fun main() {
         candidates = candidates,
     )
     val peers = Peers()
+    val sessions = Sessions(config.protocol)
 
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),
@@ -48,7 +49,13 @@ fun main() {
     )
     val rtc = RtcServer(
         address = InetSocketAddress(config.port),
-        handler = NetherNetRtcHandler(peers, DtlsContext(certificate)),
+        handler = NetherNetRtcHandler(
+            peers = peers,
+            dtls = DtlsContext(certificate),
+            onConnect = sessions::connect,
+            onMessage = sessions::receive,
+            onDisconnect = sessions::disconnect,
+        ),
     )
 
     Runtime.getRuntime().addShutdownHook(Thread({ signaling.close(); rtc.close() }, "kore-shutdown"))

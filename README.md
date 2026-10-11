@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. The NetherNet transport is complete, from signaling to framed messages, but there's no game protocol on top yet, so players can't join.
+> Kore is in early development. The NetherNet transport is complete, and Kore reads the first packets of the login sequence, but players can't join yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -120,6 +120,12 @@ On first run, Kore creates `operator.key` in its working directory. Every SDP an
 src/main/kotlin/
 ├── Main.kt                          # Entry point: wires config, server and shutdown
 ├── ServerConfig.kt                  # Server settings
+├── Session.kt                       # Each player's walk through the login sequence
+├── protocol/
+│   ├── Buffers.kt                   # Varints, strings and other wire primitives
+│   ├── Batch.kt                     # Batching packets, with zlib compression
+│   ├── Packets.kt                   # Packet types and their encodings
+│   └── LoginRequest.kt              # Reading who a client claims to be
 └── network/
     ├── SignalingServer.kt           # TCP bootstrap and HTTP pipeline
     ├── NetherNetSignalingHandler.kt # Routes /v1/join requests
@@ -156,9 +162,11 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Message framing over reliable and unreliable data channels
 
 ### Phase 2: Protocol
-- [ ] Packet codec and registry
-- [ ] Verify client identity assertions in offers
-- [ ] Login, Xbox Live authentication and encryption
+- [x] Batches, zlib compression and the packet codec
+- [x] Network settings negotiation and protocol version checks
+- [x] Reading the login's connection request and client data
+- [ ] Verify login tokens, and bind them to the identity in the client's offer
+- [ ] Packet registry for the rest of the protocol
 - [ ] **Cloudburst NBT Parsing**
 - [ ] Resource pack and start game sequence
 
