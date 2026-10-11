@@ -13,11 +13,11 @@ private val json = Json { ignoreUnknownKeys = true }
 
 /**
  * The game's own definitions, which clients expect the server to agree with:
- * every item and every block state. They're dumped from the game by
+ * every item, block state and biome. They're dumped from the game by
  * CloudburstMC, kept apart from Kore's code in https://github.com/KoreMC/data,
  * and read once, on start.
  */
-data class VanillaData(val items: List<ItemDefinition>, val blocks: BlockPalette) {
+data class VanillaData(val items: List<ItemDefinition>, val blocks: BlockPalette, val biomes: List<BiomeDefinition>) {
     companion object {
         /**
          * Reads the data from [directory], which holds the files from KoreMC/data
@@ -29,6 +29,7 @@ data class VanillaData(val items: List<ItemDefinition>, val blocks: BlockPalette
                 components = readNbt(directory.resolve("item_components.nbt")),
             ),
             blocks = readBlockPalette(readNbt(directory.resolve("block_palette.nbt"))),
+            biomes = readBiomes(directory.resolve("stripped_biome_definitions.json").readText()),
         )
     }
 }
@@ -66,6 +67,52 @@ fun readBlockPalette(palette: NbtMap): BlockPalette {
         val name = block.getString("name").ifEmpty { error("A block state in the palette has no name") }
         BlockState(name, block.getCompound("states"), block.getInt("version"))
     })
+}
+
+/** An entry in `stripped_biome_definitions.json`, which keys them by name. Fields the protocol has since dropped are ignored. */
+@Serializable
+private class BiomeEntry(
+    val id: Int? = null,
+    val temperature: Float,
+    val downfall: Float,
+    val foliageSnow: Float,
+    val depth: Float,
+    val scale: Float,
+    val mapWaterColor: Argb,
+    val rain: Boolean,
+    val tags: List<String>? = null,
+)
+
+@Serializable
+private class Argb(val a: Int, val r: Int, val g: Int, val b: Int) {
+    fun pack() = (a shl 24) or (r shl 16) or (g shl 8) or b
+}
+
+/**
+ * Reads every biome from `stripped_biome_definitions.json`: the definitions
+ * the game sends, without the world generation data that only a client
+ * generating its own terrain needs.
+ */
+fun readBiomes(definitions: String): List<BiomeDefinition> {
+    val biomes = json.decodeFromString<Map<String, BiomeEntry>>(definitions).map { (name, biome) ->
+        BiomeDefinition(
+            name = name,
+            id = biome.id,
+            temperature = biome.temperature,
+            downfall = biome.downfall,
+            foliageSnow = biome.foliageSnow,
+            depth = biome.depth,
+            scale = biome.scale,
+            mapWaterColor = biome.mapWaterColor.pack(),
+            rain = biome.rain,
+            tags = biome.tags.orEmpty(),
+        )
+    }
+    check(biomes.isNotEmpty()) { "There are no biome definitions" }
+    // 0xFFFF is what a biome without an ID goes out as, so no biome can have it.
+    biomes.find { it.id != null && it.id !in 0 until 0xFFFF }?.let { error("${it.name}'s ID ${it.id} isn't between 0 and 65534") }
+    biomes.mapNotNull { it.id }.checkUnique("biome IDs") { it }
+    return biomes
 }
 
 private fun <T> List<T>.checkUnique(what: String, key: (T) -> Any) {

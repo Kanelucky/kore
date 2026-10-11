@@ -1,6 +1,7 @@
 package org.koremc.protocol
 
 import org.cloudburstmc.nbt.NbtMap
+import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemVersion
 import kotlin.test.Test
@@ -112,6 +113,28 @@ class PacketsTest {
             bytes(0x03, 9) + "nutrition".toByteArray() + bytes(0x08, 0x00, 0x00, 0x00)
 
         assertContentEquals(expected, registry.encode())
+    }
+
+    @Test
+    fun `biome definitions share one string list for names and tags`() {
+        val water = 0xA5112233.toInt()
+        val list = BiomeDefinitionList(
+            listOf(
+                BiomeDefinition("a", id = null, 0.5f, 0.25f, 0f, 1f, 2f, water, rain = true, tags = listOf("ocean", "deep")),
+                BiomeDefinition("b", id = 7, 0.5f, 0.25f, 0f, 1f, 2f, water, rain = false, tags = listOf("ocean")),
+            ),
+        )
+
+        // Temperature 0.5, downfall 0.25, foliage snow 0, depth 1 and scale 2, as little-endian floats.
+        val climate = bytes(0x00, 0x00, 0x00, 0x3F, 0x00, 0x00, 0x80, 0x3E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x40)
+        val expected = bytes(0x7A, 0x02) +
+            // Name "a" is string 0, and a biome without an ID sends -1. Tags "ocean" and "deep" are strings 1 and 2.
+            bytes(0x00, 0x00, 0xFF, 0xFF) + climate + bytes(0x33, 0x22, 0x11, 0xA5, 0x01) + bytes(0x01, 0x02, 0x01, 0x00, 0x02, 0x00) + bytes(0x00) +
+            // "b" is string 3, and its "ocean" tag reuses string 1.
+            bytes(0x03, 0x00, 0x07, 0x00) + climate + bytes(0x33, 0x22, 0x11, 0xA5, 0x00) + bytes(0x01, 0x01, 0x01, 0x00) + bytes(0x00) +
+            bytes(0x04, 0x01) + "a".toByteArray() + bytes(0x05) + "ocean".toByteArray() + bytes(0x04) + "deep".toByteArray() + bytes(0x01) + "b".toByteArray()
+
+        assertContentEquals(expected, list.encode())
     }
 
     @Test

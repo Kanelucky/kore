@@ -3,6 +3,7 @@ package org.koremc
 import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.BiomeDefinitionList
 import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
 import org.koremc.protocol.ClientPacket
@@ -54,17 +55,17 @@ private const val MIN_CHUNK_RADIUS = 2
  * 3. Resource packs. Kore offers none, the client answers that it has them
  *    all, Kore sends the (vanilla) pack stack, and the client confirms it
  *    has applied it.
- * 4. `StartGame` sets up the world, followed by the `ItemRegistry`: every
- *    vanilla item and the runtime ID it travels by. The client then asks how
- *    far it can see, and Kore settles on a chunk radius. Chunks and spawning
- *    come after that.
+ * 4. `StartGame` sets up the world, followed by the game's definitions:
+ *    the `ItemRegistry`, with every item and the runtime ID it travels by,
+ *    then the biomes. The client then asks how far it can see, and Kore
+ *    settles on a chunk radius. Chunks and spawning come after that.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
 class Session(
     private val config: ServerConfig,
-    /** Every vanilla item, which the client needs before it can load the world. Shared by every session. */
-    private val itemRegistry: ItemRegistry,
+    /** What follows `StartGame`: the item registry first, then the rest of the game's definitions. Shared by every session. */
+    private val definitions: List<ServerPacket>,
     private val networkId: String,
     /** The player's entity ID, unique across the server. */
     private val entityId: Long,
@@ -199,7 +200,7 @@ class Session(
                 worldName = config.level,
                 serverVersion = config.version,
             ),
-            itemRegistry,
+            *definitions.toTypedArray(),
         )
         state = State.LOADING_WORLD
         log.info("{} is loading the world, spawning at {}", player?.displayName, spawn)
@@ -243,11 +244,11 @@ class Sessions(private val config: ServerConfig, vanilla: VanillaData, private v
     private val sessions = HashMap<NetherNetConnection, Session>()
     private var nextEntityId = 1L
 
-    /** Built here, on start, so no player's login pays to encode it. */
-    private val itemRegistry = ItemRegistry(vanilla.items)
+    /** Built here, on start, so no player's login pays to encode them. */
+    private val definitions = listOf(ItemRegistry(vanilla.items), BiomeDefinitionList(vanilla.biomes))
 
     fun connect(connection: NetherNetConnection) {
-        sessions[connection] = Session(config, itemRegistry, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
+        sessions[connection] = Session(config, definitions, connection.networkId, nextEntityId++, connection.clientKey, authenticator) { message ->
             connection.send(message)
         }
     }

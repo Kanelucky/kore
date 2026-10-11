@@ -3,6 +3,7 @@ package org.koremc.protocol
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
+import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.ItemDefinition
 import java.util.UUID
 
@@ -16,6 +17,7 @@ private const val RESOURCE_PACK_STACK = 7
 private const val RESOURCE_PACK_CLIENT_RESPONSE = 8
 private const val REQUEST_CHUNK_RADIUS = 69
 private const val CHUNK_RADIUS_UPDATED = 70
+private const val BIOME_DEFINITION_LIST = 122
 private const val CLIENT_CACHE_STATUS = 129
 private const val ITEM_REGISTRY = 162
 private const val NETWORK_SETTINGS = 143
@@ -200,7 +202,7 @@ data class ResourcePackStack(
 class ItemRegistry(val items: List<ItemDefinition>) : ServerPacket {
     override val id get() = ITEM_REGISTRY
 
-    private val body = ByteBufUtil.getBytes(Unpooled.buffer().apply {
+    private val body = encodeOnce {
         writeVarUInt(items.size)
         for (item in items) {
             writeString(item.name)
@@ -209,10 +211,54 @@ class ItemRegistry(val items: List<ItemDefinition>) : ServerPacket {
             writeVarInt(item.version.ordinal)
             writeNbt(item.components)
         }
-    })
+    }
 
     override fun encodeBody(out: ByteBuf) {
         out.writeBytes(body)
+    }
+}
+
+/**
+ * Every biome in the world, with the climate and colours the client renders
+ * it with. Names and tags go once each into a string list at the end, and
+ * the definitions refer to them by index. Like the item registry, it's the
+ * same for every player, so it's encoded once.
+ */
+class BiomeDefinitionList(val biomes: List<BiomeDefinition>) : ServerPacket {
+    override val id get() = BIOME_DEFINITION_LIST
+
+    private val body = encodeOnce {
+        val strings = LinkedHashMap<String, Int>()
+        fun indexOf(string: String) = strings.getOrPut(string) { strings.size }
+
+        writeVarUInt(biomes.size)
+        for (biome in biomes) {
+            writeShortLE(indexOf(biome.name))
+            writeShortLE(biome.id ?: NO_BIOME_ID)
+            writeFloatLE(biome.temperature)
+            writeFloatLE(biome.downfall)
+            writeFloatLE(biome.foliageSnow)
+            writeFloatLE(biome.depth)
+            writeFloatLE(biome.scale)
+            writeIntLE(biome.mapWaterColor)
+            writeBoolean(biome.rain)
+            writeBoolean(true) // Tags present
+            writeVarUInt(biome.tags.size)
+            biome.tags.forEach { writeShortLE(indexOf(it)) }
+            writeBoolean(false) // World generation data, which only a client generating its own terrain needs
+        }
+        check(strings.size <= Short.MAX_VALUE) { "${strings.size} biome names and tags is more than a 16-bit index can reach" }
+        writeVarUInt(strings.size)
+        strings.keys.forEach { writeString(it) }
+    }
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeBytes(body)
+    }
+
+    private companion object {
+        /** What a biome without an ID sends instead, as the game's own server does for vanilla biomes. */
+        const val NO_BIOME_ID = -1
     }
 }
 
@@ -248,6 +294,9 @@ private fun decodeResourcePackClientResponse(buffer: ByteBuf): ResourcePackClien
     val packs = if (response == ResourcePackClientResponse.Response.DOWNLOADING) buffer.readList { readString() } else emptyList()
     return ResourcePackClientResponse(response, packs)
 }
+
+/** Encodes a body now, for packets that keep their bytes to send again and again. */
+private fun encodeOnce(write: ByteBuf.() -> Unit): ByteArray = ByteBufUtil.getBytes(Unpooled.buffer().apply(write))
 
 fun ServerPacket.encode(): ByteArray {
     val buffer = Unpooled.buffer()

@@ -7,6 +7,7 @@ import org.koremc.auth.TestAuthority
 import org.koremc.auth.XUID
 import org.koremc.auth.ecKeyPair
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.BiomeDefinitionList
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.clientDataToken
 import org.koremc.protocol.connectionRequest
@@ -16,6 +17,7 @@ import org.koremc.protocol.tokenAuthentication
 import org.koremc.protocol.writeString
 import org.koremc.protocol.writeVarInt
 import org.koremc.protocol.writeVarUInt
+import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemVersion
 import java.security.interfaces.ECPublicKey
@@ -36,8 +38,9 @@ class SessionTest {
 
     private val config = ServerConfig(protocol = PROTOCOL, viewDistance = 8)
     private val itemRegistry = ItemRegistry(listOf(ItemDefinition("minecraft:stick", 323, componentBased = false, ItemVersion.NONE)))
+    private val biomes = BiomeDefinitionList(listOf(BiomeDefinition("minecraft:plains", null, 0.8f, 0.4f, 0f, 0.125f, 0.05f, 0, rain = true, listOf("plains"))))
     private val sent = mutableListOf<ByteArray>()
-    private val session = Session(config, itemRegistry, networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
+    private val session = Session(config, listOf(itemRegistry, biomes), networkId = "9876543210123456789", entityId = 7, offerKey = clientKey, authenticator) { sent += it }
 
     /** The client's side of batching, which switches on compression when NetworkSettings arrives. */
     private val batches = BatchCodec()
@@ -84,7 +87,7 @@ class SessionTest {
     }
 
     @Test
-    fun `resource packs end with start game and the item registry`() {
+    fun `resource packs end with start game, the item registry and the biomes`() {
         logIn()
 
         clientSends(clientCacheStatus(supported = true))
@@ -93,10 +96,11 @@ class SessionTest {
         assertFalse(session.isLoadingWorld)
 
         clientSends(packResponse(3, "resourcepackstackfinished"))
-        val (startGame, registry) = batches.decode(sent.last())
+        val (startGame, registry, biomeList) = batches.decode(sent.last())
         assertEquals(0x0B, startGame[0].toInt())
         assertEquals(0x0E, startGame[1].toInt()) // Entity ID 7, zigzagged
         assertContentEquals(itemRegistry.encode(), registry)
+        assertContentEquals(biomes.encode(), biomeList)
         assertTrue(session.isLoadingWorld)
         assertTrue(session.cacheSupported)
     }
