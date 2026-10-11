@@ -8,6 +8,7 @@ import io.netty.buffer.Unpooled
 // https://github.com/Mojang/bedrock-protocol-docs
 private const val LOGIN = 1
 private const val PLAY_STATUS = 2
+private const val DISCONNECT = 5
 private const val NETWORK_SETTINGS = 143
 private const val REQUEST_NETWORK_SETTINGS = 193
 
@@ -72,6 +73,37 @@ data class PlayStatus(val status: Status) : ServerPacket {
 
     override fun encodeBody(out: ByteBuf) {
         out.writeInt(status.ordinal)
+    }
+}
+
+/** Ends the client's session, showing [message] if there is one, or a stock screen for [reason] if not. */
+data class Disconnect(
+    val reason: Reason,
+    val message: String? = null,
+    /** The message with profanity filtered, for players who've asked for that. */
+    val filteredMessage: String = message.orEmpty(),
+) : ServerPacket {
+    /** The handful of the client's 150 disconnect reasons Kore uses, with their wire values. */
+    enum class Reason(val id: Int) {
+        UNKNOWN(0),
+        OUTDATED_SERVER(34),
+        OUTDATED_CLIENT(35),
+        NOT_AUTHENTICATED(46),
+        KICKED(55),
+    }
+
+    override val id get() = DISCONNECT
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarInt(reason.id)
+        // The messages are an optional variant: 0 says they follow, 1 says there are none.
+        if (message == null) {
+            out.writeByte(1)
+        } else {
+            out.writeByte(0)
+            out.writeString(message)
+            out.writeString(filteredMessage)
+        }
     }
 }
 

@@ -4,6 +4,7 @@ import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.ClientPacket
+import org.koremc.protocol.Disconnect
 import org.koremc.protocol.Login
 import org.koremc.protocol.LoginRequest
 import org.koremc.protocol.NetworkSettings
@@ -15,6 +16,7 @@ import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
 import org.koremc.protocol.parseConnectionRequest
 import org.slf4j.LoggerFactory
+import java.security.interfaces.ECPublicKey
 
 private val log = LoggerFactory.getLogger(Session::class.java)
 
@@ -29,21 +31,29 @@ private const val COMPRESSION_THRESHOLD = 256
  * 1. `RequestNetworkSettings` names the client's protocol. A mismatch gets a
  *    failed `PlayStatus`; a match gets `NetworkSettings`, after which every
  *    batch is compressed.
- * 2. `Login` carries the client's identity and client data.
+ * 2. `Login` carries the client's identity and client data, which must
+ *    authenticate. A login that doesn't gets a `Disconnect`.
  *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
 class Session(
     private val protocol: Int,
     private val networkId: String,
+    /** The key the client proved when it connected, which its login must match. */
+    private val offerKey: ECPublicKey?,
+    private val authenticator: LoginAuthenticator,
     private val send: (ByteArray) -> Unit,
 ) {
-    private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, LOGIN_RECEIVED, REJECTED }
+    private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, AUTHENTICATED, REJECTED }
 
     private val batches = BatchCodec()
     private var state = State.AWAITING_NETWORK_SETTINGS_REQUEST
 
-    /** The client's login, once it has sent one. */
+    /** The player, once their login has authenticated. */
+    var player: PlayerIdentity? = null
+        private set
+
+    /** The authenticated login, kept for its client data: settings, skin and so on, which only the player's key vouches for. */
     var login: LoginRequest? = null
         private set
 
@@ -61,7 +71,7 @@ class Session(
         when (state) {
             State.AWAITING_NETWORK_SETTINGS_REQUEST -> if (packet is RequestNetworkSettings) onRequestNetworkSettings(packet) else unexpected(packet)
             State.AWAITING_LOGIN -> if (packet is Login) onLogin(packet) else unexpected(packet)
-            State.LOGIN_RECEIVED, State.REJECTED -> unexpected(packet)
+            State.AUTHENTICATED, State.REJECTED -> unexpected(packet)
         }
     }
 
@@ -81,18 +91,34 @@ class Session(
             parseConnectionRequest(packet.connectionRequest)
         } catch (e: PacketException) {
             log.warn("Network {} sent a login Kore can't read: {}", networkId, e.message)
+            reject()
             return
         }
-        login = request
-        state = State.LOGIN_RECEIVED
 
-        val identity = request.identity
+        val player = try {
+            authenticator.authenticate(request, offerKey)
+        } catch (e: AuthenticationException) {
+            // The reason stays in the log. The player only learns that they couldn't be verified.
+            log.info("Rejected the login from network {}, claiming to be {}: {}", networkId, request.identity.displayName, e.message)
+            reject()
+            return
+        }
+        this.player = player
+        login = request
+        state = State.AUTHENTICATED
+
         val client = request.clientInfo
         log.info(
-            "Login from {} ({}, {}) on network {}: {} {}, OS {}, {}. Identity is not verified yet",
-            identity.displayName, identity.xuid ?: "no XUID", identity.uuid, networkId,
+            "{} ({}, {}) authenticated on network {}{}: {} {}, OS {}, {}",
+            player.displayName, player.xuid ?: "no XUID", player.uuid, networkId,
+            if (player.verified) "" else " without verification (offline mode)",
             request.authenticationType ?: "unknown sign-in", client.gameVersion, client.deviceOs, client.languageCode,
         )
+    }
+
+    private fun reject() {
+        send(Disconnect(Disconnect.Reason.NOT_AUTHENTICATED))
+        state = State.REJECTED
     }
 
     /** Turns away clients on another protocol, telling them whose version is behind. */
@@ -114,11 +140,11 @@ class Session(
 }
 
 /** Every connected player's session, driven by the transport's connection callbacks on the UDP event loop. */
-class Sessions(private val protocol: Int) {
+class Sessions(private val protocol: Int, private val authenticator: LoginAuthenticator) {
     private val sessions = HashMap<NetherNetConnection, Session>()
 
     fun connect(connection: NetherNetConnection) {
-        sessions[connection] = Session(protocol, connection.networkId) { message -> connection.send(message) }
+        sessions[connection] = Session(protocol, connection.networkId, connection.clientKey, authenticator) { message -> connection.send(message) }
     }
 
     fun receive(connection: NetherNetConnection, message: ByteArray) {

@@ -2,6 +2,7 @@ package org.koremc.network.rtc
 
 import org.koremc.network.sctp.DataChannels
 import java.net.InetSocketAddress
+import java.security.interfaces.ECPublicKey
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -15,6 +16,8 @@ class Peer(
     val remoteFingerprints: List<Fingerprint>,
     /** The largest data channel message the client accepts. */
     val maxMessageSize: Int,
+    /** The key the client proved in its offer, which its login must carry too. Null if it sent no identity. */
+    val clientKey: ECPublicKey? = null,
 ) {
     // Set by the signaling thread before the peer is published, then only touched on the UDP event loop.
     var lastSeen: Long = System.nanoTime()

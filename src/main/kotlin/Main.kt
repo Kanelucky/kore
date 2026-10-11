@@ -1,5 +1,6 @@
 package org.koremc
 
+import org.koremc.auth.AuthService
 import org.koremc.network.NetherNetRtcHandler
 import org.koremc.network.NetherNetSignalingHandler
 import org.koremc.network.RtcServer
@@ -13,6 +14,7 @@ import org.koremc.network.rtc.Peers
 import org.koremc.network.rtc.hostCandidates
 import org.koremc.network.rtc.localAddresses
 import org.koremc.network.rtc.maxSendableMessageSize
+import org.koremc.network.rtc.verifiedClientKey
 import org.slf4j.LoggerFactory
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -33,16 +35,21 @@ fun main() {
         identity = OperatorIdentity.loadOrCreate(config.operatorKeyFile, config.operatorDomain, issuer = config.name),
         candidates = candidates,
     )
+    // Offline mode never contacts Minecraft's services, so it works without an internet connection.
+    val auth = AuthService(config.version)
+    if (config.onlineMode) auth.start() else log.warn("Offline mode: players aren't authenticated, so anyone can join as anyone")
+
     val peers = Peers()
-    val sessions = Sessions(config.protocol)
+    val sessions = Sessions(config.protocol, LoginAuthenticator(auth.verifier, config.onlineMode))
 
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),
         handler = NetherNetSignalingHandler(
             joinInfo = { config.toJoinInfo(onlinePlayers = 0) },
             answerOffer = { networkId, offer ->
+                val clientKey = offer.verifiedClientKey(requireIdentity = config.onlineMode)
                 localPeer.answer(offer).also { answer ->
-                    peers.add(Peer(networkId, answer.ice, offer.iceUfrag, offer.fingerprints, offer.maxSendableMessageSize))
+                    peers.add(Peer(networkId, answer.ice, offer.iceUfrag, offer.fingerprints, offer.maxSendableMessageSize, clientKey))
                 }
             },
         ),
@@ -58,7 +65,7 @@ fun main() {
         ),
     )
 
-    Runtime.getRuntime().addShutdownHook(Thread({ signaling.close(); rtc.close() }, "kore-shutdown"))
+    Runtime.getRuntime().addShutdownHook(Thread({ signaling.close(); rtc.close(); auth.close() }, "kore-shutdown"))
 
     try {
         val tcp = signaling.bind()
@@ -68,5 +75,6 @@ fun main() {
     } finally {
         signaling.close()
         rtc.close()
+        auth.close()
     }
 }

@@ -2,6 +2,7 @@ package org.koremc.network
 
 import org.koremc.network.sctp.DataChannel
 import java.nio.ByteBuffer
+import java.security.interfaces.ECPublicKey
 import kotlin.math.min
 
 private const val RELIABLE_CHANNEL = "ReliableDataChannel"
@@ -46,6 +47,12 @@ class NetherNetConnection internal constructor(
     val networkId: String,
     /** The largest data channel message the client accepts, header included. */
     private val maxFrameSize: Int,
+    /**
+     * The key the client proved it holds when it connected, by signing its
+     * DTLS fingerprints with it. Its login must name the same key. Null if
+     * the client sent no identity, which only offline mode allows.
+     */
+    val clientKey: ECPublicKey? = null,
 ) {
     private var reliable: DataChannel? = null
     private var unreliable: DataChannel? = null

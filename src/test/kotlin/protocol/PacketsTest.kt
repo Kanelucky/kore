@@ -46,6 +46,15 @@ class PacketsTest {
     }
 
     @Test
+    fun `disconnect zigzags its reason and marks whether messages follow`() {
+        assertContentEquals(bytes(0x05, 0x5C, 0x01), Disconnect(Disconnect.Reason.NOT_AUTHENTICATED).encode())
+        assertContentEquals(
+            bytes(0x05, 0x6E, 0x00, 0x02, 'H'.code, 'i'.code, 0x02, 'H'.code, 'i'.code),
+            Disconnect(Disconnect.Reason.KICKED, message = "Hi").encode(),
+        )
+    }
+
+    @Test
     fun `packets Kore doesn't decode yet pass through`() {
         val packet = assertIs<UnhandledPacket>(decodeClientPacket(bytes(0x05, 0x01, 0x02)))
 

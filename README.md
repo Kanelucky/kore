@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. The NetherNet transport is complete, and Kore reads the first packets of the login sequence, but players can't join yet.
+> Kore is in early development. The NetherNet transport is complete and Kore authenticates logins, but players can't join a world yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -111,6 +111,19 @@ On first run, Kore creates `operator.key` in its working directory. Every SDP an
 - **Don't regenerate it.** A new key prompts every returning player again.
 - **Share it across servers** if you run several. Players then trust them all with one prompt.
 
+### 🛡️ Authentication
+
+Kore runs in **online mode** by default: every player must prove who they are through Xbox Live. Each check closes off a different way of lying:
+
+1. **The offer** carries the client's key and its signature over the connection's DTLS fingerprints. That ties the connection to a key the client holds.
+2. **The login token** must be signed by Minecraft's authorization service, for the multiplayer audience, and must not have expired.
+3. **The login's key** must be the one the offer proved. A login captured from one connection can't be replayed on another.
+4. **The client data** (skin, device and so on) must be signed by that key.
+
+Kore finds the authorization service through Minecraft's service discovery and keeps its signing keys cached, refreshing them in the background. So the server needs outbound HTTPS. A login that fails any check gets a `Disconnect`, and the reason goes to the log.
+
+`onlineMode = false` turns all of this off for local testing. Anyone can then join under any name, so never run it where the public can reach it.
+
 > [!NOTE]
 > Server settings live in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) until there's a config file. The defaults target 1.26.50 (protocol `2193`). Update `protocol` and `version` together when moving to a new client release. Behind NAT, set `advertisedAddresses` to your public IP so clients get a candidate they can reach.
 
@@ -121,6 +134,10 @@ src/main/kotlin/
 ├── Main.kt                          # Entry point: wires config, server and shutdown
 ├── ServerConfig.kt                  # Server settings
 ├── Session.kt                       # Each player's walk through the login sequence
+├── Authentication.kt                # Deciding whether a login proves who it claims to be
+├── auth/
+│   ├── Jose.kt                      # Signed tokens and the keys that verify them
+│   └── MultiplayerTokens.kt         # Minecraft's authorization service and its signing keys
 ├── protocol/
 │   ├── Buffers.kt                   # Varints, strings and other wire primitives
 │   ├── Batch.kt                     # Batching packets, with zlib compression
@@ -137,6 +154,7 @@ src/main/kotlin/
     │   ├── Sdp.kt                   # Offer parsing and answer encoding
     │   ├── LocalPeer.kt             # Builds answers from this server's WebRTC state
     │   ├── Peer.kt                  # Clients between signaling and disconnect
+    │   ├── ClientIdentity.kt        # Checking the identity in a client's offer
     │   ├── Ice.kt                   # ICE credentials and host candidates
     │   ├── Stun.kt                  # STUN messages for ICE-lite
     │   ├── Dtls.kt                  # DTLS engines and per-client transport
@@ -165,10 +183,10 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Batches, zlib compression and the packet codec
 - [x] Network settings negotiation and protocol version checks
 - [x] Reading the login's connection request and client data
-- [ ] Verify login tokens, and bind them to the identity in the client's offer
+- [x] Verify login tokens, and bind them to the identity in the client's offer
+- [ ] Login success, resource packs and the start game sequence
 - [ ] Packet registry for the rest of the protocol
 - [ ] **Cloudburst NBT Parsing**
-- [ ] Resource pack and start game sequence
 
 ### Phase 3: World
 - [ ] **World Loading** (LevelDB)

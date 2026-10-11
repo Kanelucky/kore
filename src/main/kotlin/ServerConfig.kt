@@ -10,6 +10,11 @@ import java.nio.file.Path
 data class ServerConfig(
     /** TCP port for signaling and UDP port for gameplay. */
     val port: Int = 19132,
+    /**
+     * Whether players must prove who they are through Xbox Live. Turn this
+     * off only for local testing: offline mode admits anyone as anyone.
+     */
+    val onlineMode: Boolean = true,
     /** Addresses to advertise as ICE candidates. Empty means every routable local address. */
     val advertisedAddresses: List<String> = emptyList(),
     /** Where the operator identity key lives. Clients pin it, so keep it safe and don't regenerate it. */

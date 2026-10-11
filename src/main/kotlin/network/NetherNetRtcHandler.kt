@@ -160,7 +160,7 @@ class NetherNetRtcHandler(
     }
 
     private fun onChannelOpened(peer: Peer, channel: DataChannel) {
-        val connection = connections.getOrPut(peer) { NetherNetConnection(peer.networkId, peer.maxMessageSize) }
+        val connection = connections.getOrPut(peer) { NetherNetConnection(peer.networkId, peer.maxMessageSize, peer.clientKey) }
         val wasOpen = connection.isOpen
         if (!connection.bind(channel)) {
             log.warn("Network {} opened '{}', which NetherNet doesn't use", peer.networkId, channel.label)
