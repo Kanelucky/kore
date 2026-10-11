@@ -12,6 +12,7 @@ import org.koremc.network.rtc.Peer
 import org.koremc.network.rtc.Peers
 import org.koremc.network.rtc.hostCandidates
 import org.koremc.network.rtc.localAddresses
+import org.koremc.network.rtc.maxSendableMessageSize
 import org.slf4j.LoggerFactory
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -40,7 +41,7 @@ fun main() {
             joinInfo = { config.toJoinInfo(onlinePlayers = 0) },
             answerOffer = { networkId, offer ->
                 localPeer.answer(offer).also { answer ->
-                    peers.add(Peer(networkId, answer.ice, offer.iceUfrag, offer.fingerprints))
+                    peers.add(Peer(networkId, answer.ice, offer.iceUfrag, offer.fingerprints, offer.maxSendableMessageSize))
                 }
             },
         ),

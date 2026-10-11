@@ -48,11 +48,12 @@ class NetherNetRtcHandlerTest {
         localIce = IceCredentials("kore", "korekorekorekorekorekore"),
         remoteUfrag = "game",
         remoteFingerprints = listOf(clientCertificate.fingerprint),
+        maxMessageSize = 262144,
     )
     private val peers = Peers().apply { add(peer) }
     private val messages = mutableListOf<Pair<String, ByteArray>>()
     private val channel = EmbeddedChannel(
-        NetherNetRtcHandler(peers, DtlsContext(serverCertificate)) { _, channel, data -> messages += channel.label to data },
+        NetherNetRtcHandler(peers, DtlsContext(serverCertificate)) { connection, message -> messages += connection.networkId to message },
     )
     private val toServer = ArrayDeque<ByteBuffer>()
 
@@ -123,14 +124,16 @@ class NetherNetRtcHandlerTest {
         val initAck = pump(dtlsClient).flatMap { parse(it).chunks }.filterIsInstance<Init>().single()
 
         val open = DataChunk(Tsn(1), streamId = 0, ssn = 0, ppid = 50, payload = dcepOpen("ReliableDataChannel", 0x00))
-        val message = DataChunk(Tsn(2), streamId = 0, ssn = 1, ppid = 53, payload = byteArrayOf(4, 2))
-        dtlsClient.write(SctpPacket(initAck.initiateTag, listOf(CookieEcho(checkNotNull(initAck.parameter(7))), open, message)).encode())
+        // Two NetherNet fragments: header 1 (one more to come), then header 0.
+        val first = DataChunk(Tsn(2), streamId = 0, ssn = 1, ppid = 53, payload = byteArrayOf(1, 4))
+        val last = DataChunk(Tsn(3), streamId = 0, ssn = 2, ppid = 53, payload = byteArrayOf(0, 2))
+        dtlsClient.write(SctpPacket(initAck.initiateTag, listOf(CookieEcho(checkNotNull(initAck.parameter(7))), open, first, last)).encode())
         val replies = pump(dtlsClient).flatMap { parse(it).chunks }
 
         assertTrue(CookieAck in replies)
         assertContentEquals(byteArrayOf(0x02), replies.filterIsInstance<DataChunk>().single().payload)
         assertNotNull(peer.channels?.get("ReliableDataChannel"))
-        assertEquals(listOf("ReliableDataChannel"), messages.map { it.first })
+        assertEquals(listOf(peer.networkId), messages.map { it.first })
         assertContentEquals(byteArrayOf(4, 2), messages.single().second)
     }
 

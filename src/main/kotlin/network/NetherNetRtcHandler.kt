@@ -36,16 +36,17 @@ private val SWEEP_INTERVAL = 5.seconds
  * Kore runs ICE-lite, so the STUN side only answers the client's checks.
  * Every address that passes a check is a valid path for that client, and
  * replies follow the path the client is currently using. Inside DTLS, SCTP
- * carries the data channels, and every message on them goes to [onMessage]
- * on this event loop.
+ * carries the data channels, NetherNet framing rides on those, and every
+ * complete message goes to [onMessage] on this event loop.
  */
 class NetherNetRtcHandler(
     private val peers: Peers,
     private val dtls: DtlsContext,
-    private val onMessage: (peer: Peer, channel: DataChannel, data: ByteArray) -> Unit = { _, _, _ -> },
+    private val onMessage: (connection: NetherNetConnection, message: ByteArray) -> Unit = { _, _ -> },
 ) : SimpleChannelInboundHandler<DatagramPacket>() {
     // Only touched on this channel's event loop.
     private val byAddress = HashMap<InetSocketAddress, Peer>()
+    private val connections = HashMap<Peer, NetherNetConnection>()
 
     override fun channelActive(ctx: ChannelHandlerContext) {
         val interval = SWEEP_INTERVAL.inWholeMilliseconds
@@ -141,19 +142,37 @@ class NetherNetRtcHandler(
 
         for (message in messages) {
             when (val event = channels.receive(message)) {
-                is ChannelEvent.Opened -> log.info(
-                    "Network {} opened '{}' on stream {} ({}, {})",
-                    peer.networkId, event.channel.label, event.channel.streamId,
-                    if (event.channel.ordered) "ordered" else "unordered",
-                    event.channel.maxRetransmits?.let { "max $it retransmits" } ?: "reliable",
-                )
-                is ChannelEvent.Message -> {
-                    log.debug("{} bytes on '{}' from network {}", event.data.size, event.channel.label, peer.networkId)
-                    onMessage(peer, event.channel, event.data)
-                }
+                is ChannelEvent.Opened -> onChannelOpened(peer, event.channel)
+                is ChannelEvent.Message -> onChannelMessage(peer, event.channel, event.data)
                 null -> Unit
             }
         }
+    }
+
+    private fun onChannelOpened(peer: Peer, channel: DataChannel) {
+        val connection = connections.getOrPut(peer) { NetherNetConnection(peer.networkId, peer.maxMessageSize) }
+        if (!connection.bind(channel)) {
+            log.warn("Network {} opened '{}', which NetherNet doesn't use", peer.networkId, channel.label)
+            return
+        }
+        log.info(
+            "Network {} opened '{}' on stream {} ({}, {})",
+            peer.networkId, channel.label, channel.streamId,
+            if (channel.ordered) "ordered" else "unordered",
+            channel.maxRetransmits?.let { "max $it retransmits" } ?: "reliable",
+        )
+    }
+
+    private fun onChannelMessage(peer: Peer, channel: DataChannel, data: ByteArray) {
+        val connection = connections[peer] ?: return
+        val message = try {
+            connection.receive(channel, data) ?: return
+        } catch (e: FramingException) {
+            log.warn("Dropped a message from network {}: {}", peer.networkId, e.message)
+            return
+        }
+        log.debug("{}-byte message on '{}' from network {}", message.size, channel.label, peer.networkId)
+        onMessage(connection, message)
     }
 
     private fun sweep() {
@@ -172,6 +191,7 @@ class NetherNetRtcHandler(
     private fun forget(peer: Peer) {
         peer.validatedAddresses.forEach { byAddress.remove(it, peer) }
         peer.channels?.association?.close()
+        connections.remove(peer)
     }
 }
 

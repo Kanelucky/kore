@@ -102,6 +102,17 @@ class SdpTest {
     }
 
     @Test
+    fun `sendable message size follows the offer within kore's limit`() {
+        val offer = parseOffer(SAMPLE_OFFER)
+
+        assertEquals(262144, offer.maxSendableMessageSize)
+        assertEquals(65536, offer.copy(maxMessageSize = null).maxSendableMessageSize)
+        assertEquals(262144, offer.copy(maxMessageSize = 0).maxSendableMessageSize)
+        assertEquals(1200, offer.copy(maxMessageSize = 1200).maxSendableMessageSize)
+        assertEquals(262144, offer.copy(maxMessageSize = 1L shl 40).maxSendableMessageSize)
+    }
+
+    @Test
     fun `answers round trip through the offer parser`() {
         val local = IceCredentials.random()
         val answer = SdpAnswer(

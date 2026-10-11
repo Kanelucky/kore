@@ -13,6 +13,8 @@ class Peer(
     val localIce: IceCredentials,
     val remoteUfrag: String,
     val remoteFingerprints: List<Fingerprint>,
+    /** The largest data channel message the client accepts. */
+    val maxMessageSize: Int,
 ) {
     // Set by the signaling thread before the peer is published, then only touched on the UDP event loop.
     var lastSeen: Long = System.nanoTime()

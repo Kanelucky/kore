@@ -18,7 +18,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Clients can connect all the way to open data channels, but there's no game protocol on top yet, so players can't join.
+> Kore is in early development. The NetherNet transport is complete, from signaling to framed messages, but there's no game protocol on top yet, so players can't join.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -65,10 +65,13 @@ sequenceDiagram
 | Offer / answer | `POST /v1/join/{networkId}` exchanges SDP with all ICE candidates included. The answer is signed with the operator identity. | ✅ Implemented |
 | Connectivity | ICE checks find a UDP path, then DTLS secures it | ✅ Implemented |
 | Data channels | SCTP inside DTLS carries the `ReliableDataChannel` and `UnreliableDataChannel` | ✅ Implemented |
+| Framing | A one-byte header splits large messages across the reliable channel and joins them back up | ✅ Implemented |
 
 Kore keeps its side of WebRTC as small as possible. It runs **ICE-lite** and takes the **passive DTLS** role, so it never initiates anything. Every client shares one UDP port: Kore answers their connectivity checks, then waits for each client's first DTLS message. A client's DTLS certificate is accepted only if it matches the fingerprint in that client's offer.
 
 **SCTP is written in Kotlin**, with no native libraries. It covers only what data channels need: one path, no multihoming, and partial reliability so the unreliable channel can drop messages instead of retransmitting them.
+
+Game code sees none of this. Each client is a `NetherNetConnection` that sends and receives whole messages, reliably or not.
 
 ## 🚀 Getting Started
 
@@ -115,6 +118,7 @@ src/main/kotlin/
     ├── JoinInfo.kt                  # Discovery response body
     ├── RtcServer.kt                 # UDP bootstrap
     ├── NetherNetRtcHandler.kt       # Routes UDP traffic through STUN, DTLS and SCTP per client
+    ├── NetherNetConnection.kt       # One client's channels, with NetherNet's message framing
     ├── rtc/
     │   ├── Sdp.kt                   # Offer parsing and answer encoding
     │   ├── LocalPeer.kt             # Builds answers from this server's WebRTC state
@@ -141,7 +145,7 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] **UDP Channel Negotiation:** ICE-lite connectivity checks
 - [x] **UDP Channel Negotiation:** DTLS 1.2 handshake with fingerprint verification
 - [x] **UDP Channel Negotiation:** SCTP association and data channels
-- [ ] Message framing over reliable and unreliable data channels
+- [x] Message framing over reliable and unreliable data channels
 
 ### Phase 2: Protocol
 - [ ] Packet codec and registry
