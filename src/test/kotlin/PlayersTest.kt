@@ -12,6 +12,7 @@ import org.koremc.protocol.Animate
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
+import org.koremc.protocol.LevelSoundEvent
 import org.koremc.protocol.MovePlayer
 import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.SetActorData
@@ -218,6 +219,25 @@ class PlayersTest {
     }
 
     private fun joined(name: String) = Text(Text.TRANSLATION, "\u00a7e%multiplayer.player.joined", parameters = listOf(name), needsTranslation = true).encode()
+
+    @Test
+    fun `the sounds a player makes, like the block they're mining being hit, reach everyone around, them too`() {
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        steve.received()
+        alex.received()
+        val near = Vec3(world.spawn.x + 1.5f, world.spawn.y - 0.5f, world.spawn.z + 0.5f)
+
+        alex.sends(LevelSoundEvent("hit", near, 0x1234, entityType = "", entityId = 2).encode())
+
+        val heard = LevelSoundEvent("hit", near, 0x1234, entityType = "", entityId = 2).encode()
+        assertContentEquals(heard, steve.received().single())
+        assertContentEquals(heard, alex.received().single())
+
+        // One far beyond what the player reaches goes nowhere.
+        alex.sends(LevelSoundEvent("hit", Vec3(near.x + 100f, near.y, near.z), 0x1234).encode())
+        assertTrue(steve.received().isEmpty())
+    }
 
     private fun idOf(packet: ByteArray) = Unpooled.wrappedBuffer(packet).readVarUInt() and 0x3FF
 

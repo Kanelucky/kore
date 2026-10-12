@@ -144,6 +144,15 @@ class BlocksTest {
         assertContentEquals(expected, sound.encode())
     }
 
+    @Test
+    fun `the sounds a client sends name what made them`() {
+        // A block being hit as it's mined: no entity type, the player's own ID, and no point to fire at.
+        val sent = bytes(0x7B, 0x03) + "hit".encodeToByteArray() + POINT + bytes(0xE8, 0x48) +
+            bytes(0x00) + bytes(0x00, 0x01) + bytes(0x07, 0, 0, 0, 0, 0, 0, 0) + bytes(0x00)
+
+        assertEquals(LevelSoundEvent("hit", Vec3(2.5f, -59.5f, -2.5f), 0x1234, entityType = "", entityId = 7), decodeClientPacket(sent))
+    }
+
     private fun packet(id: Int, body: ByteBuf.() -> Unit): ByteArray = ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(id).apply(body))
 
     /** A PlayerAuthInput for a player standing still, with [actions] where the actions riding along go. */

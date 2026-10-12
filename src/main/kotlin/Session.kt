@@ -299,6 +299,9 @@ private const val CRACKED = 65535
  */
 private const val TELEPORT_SLACK = 4f
 
+/** How far from a player's eyes the sounds they make can be, a little beyond what they reach. */
+private const val SOUND_REACH = 16f
+
 /** How long after a player's loading screen closes everyone hears they joined, in ticks. */
 private const val JOIN_MESSAGE_DELAY = 10
 
@@ -357,7 +360,9 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * A survival player's input also carries the steps of breaking a block:
  * starting, a crack every tick, and stopping. Kore shows everyone with the
  * chunk the cracks spreading at the pace the block breaks at, and checks a
- * reported break didn't come too soon after the player started on it.
+ * reported break didn't come too soon after the player started on it. The
+ * sounds of the block being hit come from the client, for everyone around
+ * to hear, the player too.
  *
  * Players see each other. Each tick, the client hears who's on the player
  * list, with their skins, and sees the players in the chunks it has appear,
@@ -619,6 +624,7 @@ class Session(
                 is PlayerAction -> if (packet.action == PlayerAction.CREATIVE_DESTROY_BLOCK) onBreak(packet.position, creativeOnly = true)
                 is MobEquipment -> onEquip(packet)
                 is Animate -> if (packet.action == Animate.SWING_ARM) viewers().forEach { it.showSwing(entityId, packet.swingSource) }
+                is LevelSoundEvent -> onSound(packet)
                 is Text -> onChat(packet)
                 is CommandRequest -> onCommand(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
@@ -1294,6 +1300,20 @@ class Session(
         }
         used.releaseIn?.let { ticks -> schedule(ticks) { releaseButton(pos) } }
         log.debug("{} used {} at {}", player?.displayName, world.stateAt(pos)?.name, pos)
+    }
+
+    /**
+     * A sound the player made, which the client leaves to the server to
+     * play, like the block they're mining being hit: everyone with the
+     * chunk hears it, the player too. One from beyond the player's reach
+     * goes nowhere.
+     */
+    private fun onSound(sound: LevelSoundEvent) {
+        if (state != State.IN_GAME || sound.sound.isBlank() || !sound.position.isPlausible() || !sound.position.within(SOUND_REACH, position)) {
+            log.debug("Ignored {} from {}", sound, name)
+            return
+        }
+        showAround(sound.position.toBlockPos(), sound)
     }
 
     /** Lets a button pop back out, for everyone with its chunk to see and hear, if it's still pressed in. */

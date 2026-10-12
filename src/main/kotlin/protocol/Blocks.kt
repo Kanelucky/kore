@@ -11,7 +11,7 @@ private const val LEVEL_EVENT = 25
 internal const val INVENTORY_TRANSACTION = 30
 internal const val MOB_EQUIPMENT = 31
 internal const val PLAYER_ACTION = 36
-private const val LEVEL_SOUND_EVENT = 123
+internal const val LEVEL_SOUND_EVENT = 123
 
 /** The client's prediction for an item use that works. One that fails is 0. */
 private const val PREDICTED_SUCCESS = 1
@@ -190,18 +190,31 @@ data class LevelEvent(val event: Int, val position: Vec3, val data: Int) : Serve
     }
 }
 
-/** A sound at a point in the world, by the game's name for it, like [PLACE]. */
-data class LevelSoundEvent(val sound: String, val position: Vec3, val data: Int) : ServerPacket {
+/**
+ * A sound at a point in the world, by the game's name for it, like
+ * [PLACE]. A sound an entity makes names the entity's [entityType] and
+ * [entityId], and a baby's is higher. The client sends the sounds its
+ * player makes, like the block it's mining being hit, for the server to
+ * play to everyone around, the player too.
+ */
+data class LevelSoundEvent(
+    val sound: String,
+    val position: Vec3,
+    val data: Int,
+    val entityType: String = ":",
+    val baby: Boolean = false,
+    val entityId: Long = -1,
+) : ClientPacket, ServerPacket {
     override val id get() = LEVEL_SOUND_EVENT
 
     override fun encodeBody(out: ByteBuf) {
         out.writeString(sound)
         out.writeVec3(position)
         out.writeVarInt(data)
-        out.writeString(":") // The entity type making it: none
-        out.writeBoolean(false) // Whether that's a baby, which pitches the sound up
+        out.writeString(entityType)
+        out.writeBoolean(baby)
         out.writeBoolean(false) // Whether everyone hears it, wherever they are
-        out.writeLongLE(-1) // That entity's unique ID
+        out.writeLongLE(entityId)
         out.writeBoolean(false) // A separate point to fire it at
     }
 
@@ -212,6 +225,19 @@ data class LevelSoundEvent(val sound: String, val position: Vec3, val data: Int)
         /** A button popping back out. The data is the button's network ID, for the click of what it's made of. */
         const val BUTTON_CLICK_OFF = "button.click_off"
     }
+}
+
+/** Reads a sound the client's player made, leaving out whether everyone should hear it, which is for the server to say. */
+internal fun decodeLevelSoundEvent(buffer: ByteBuf): LevelSoundEvent {
+    val sound = buffer.readString()
+    val position = buffer.readVec3()
+    val data = buffer.readVarInt()
+    val entityType = buffer.readString()
+    val baby = buffer.readBoolean()
+    buffer.readBoolean() // Whether everyone hears it, wherever they are
+    val entityId = buffer.readLongLE()
+    if (buffer.isReadable && buffer.readBoolean()) buffer.readVec3() // A separate point to fire it at
+    return LevelSoundEvent(sound, position, data, entityType, baby, entityId)
 }
 
 internal fun decodeInventoryTransaction(buffer: ByteBuf): InventoryTransaction {

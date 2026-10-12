@@ -455,6 +455,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             CONTAINER_CLOSE -> ContainerClose(buffer.readUnsignedByte().toInt(), buffer.readUnsignedByte().toInt(), buffer.readBoolean())
             ITEM_STACK_REQUEST -> decodeItemStackRequest(buffer)
             INVENTORY_TRANSACTION -> decodeInventoryTransaction(buffer)
+            LEVEL_SOUND_EVENT -> decodeLevelSoundEvent(buffer)
             MOB_EQUIPMENT -> decodeMobEquipment(buffer)
             ANIMATE -> decodeAnimate(buffer)
             TEXT -> decodeText(buffer)
