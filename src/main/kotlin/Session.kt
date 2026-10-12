@@ -1,13 +1,20 @@
 package org.koremc
 
 import org.cloudburstmc.nbt.NbtMap
+import org.cloudburstmc.nbt.NbtType
 import org.koremc.command.CommandSource
 import org.koremc.command.Commands
 import org.koremc.command.ConsoleSource
 import org.koremc.command.Operators
 import org.koremc.command.Selectable
 import org.koremc.command.logOutput
+import org.koremc.inventory.CURSOR_SLOT
+import org.koremc.inventory.Container
 import org.koremc.inventory.HOTBAR_SIZE
+import org.koremc.inventory.LARGE_GRID
+import org.koremc.inventory.PairedContainer
+import org.koremc.inventory.SMALL_GRID
+import org.koremc.inventory.SlotStack
 import org.koremc.inventory.PlayerInventory
 import org.koremc.inventory.StackRequestHandler
 import org.koremc.network.DisconnectReason
@@ -22,6 +29,7 @@ import org.koremc.protocol.AddPlayer
 import org.koremc.protocol.Animate
 import org.koremc.protocol.Attribute
 import org.koremc.protocol.BlockAction
+import org.koremc.protocol.BlockEvent
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.BlockActorData
 import org.koremc.protocol.ByteItem
@@ -33,6 +41,8 @@ import org.koremc.protocol.CommandPermission
 import org.koremc.protocol.CommandRequest
 import org.koremc.protocol.ContainerClose
 import org.koremc.protocol.ContainerOpen
+import org.koremc.protocol.ContainerType
+import org.koremc.protocol.InventoryContent
 import org.koremc.protocol.Disconnect
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
@@ -77,6 +87,8 @@ import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.SetPlayerGameType
 import org.koremc.protocol.ShortItem
 import org.koremc.protocol.ShowEquipment
+import org.koremc.protocol.StackRequest
+import org.koremc.protocol.UI_WINDOW
 import org.koremc.protocol.Skin
 import org.koremc.protocol.StartGame
 import org.koremc.protocol.StringItem
@@ -97,6 +109,7 @@ import org.koremc.registry.AIR
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
+import org.koremc.registry.ItemStacks
 import org.koremc.world.BlockPos
 import org.koremc.world.Changes
 import org.koremc.world.FlatWorld
@@ -121,6 +134,15 @@ import org.koremc.world.chunksAround
 import org.koremc.world.facing
 import org.koremc.world.harvests
 import org.koremc.world.opensOnClick
+import org.koremc.world.BARREL
+import org.koremc.world.BARREL_OPEN
+import org.koremc.world.BrokenBlock
+import org.koremc.world.STORAGE_SLOTS
+import org.koremc.world.Storage
+import org.koremc.world.bit
+import org.koremc.world.chestHalves
+import org.koremc.world.isBlockedOpen
+import org.koremc.world.storage
 import org.koremc.world.otherHalf
 import org.koremc.world.place
 import org.koremc.world.releaseButton
@@ -192,6 +214,11 @@ private const val INVENTORY_CONTAINER = 0xFF
 
 /** The window a client closes when chat opens over a container. It gets no reply. */
 private const val CHAT_WINDOW = 0xFF
+
+/** The highest window ID a container gets, after which they start from 1 again. */
+private const val LAST_WINDOW = 99
+
+private const val CRAFTING_TABLE = "minecraft:crafting_table"
 
 /**
  * How far players reach to build and break, from their eyes to the
@@ -276,6 +303,11 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * they come in. Their chat reaches it too, as do players joining and
  * leaving.
  *
+ * Players open chests, barrels, shulker boxes and ender chests, and
+ * crafting tables, and craft. Everyone looking into the same chest sees
+ * the items others move in and out of it, and its lid stays open until the
+ * last of them closes it.
+ *
  * Players run commands from the chat, as themselves. Each has their own
  * game mode, which starts as the world's and commands can change, and is
  * an operator or not, which sets the commands they may run.
@@ -304,8 +336,22 @@ class Session(
 
     private val batches = BatchCodec()
     private val world = game.world
-    private val inventory = PlayerInventory()
-    private val stackRequests = StackRequestHandler(inventory, game.creative, creativeMode = { gameMode == GameMode.CREATIVE }, onDrop = ::throwItem)
+    private val inventory = PlayerInventory(world::newStackId)
+    private val stackRequests = StackRequestHandler(inventory, game.creative, creativeMode = { gameMode == GameMode.CREATIVE }, onDrop = ::throwItem, recipes = game.recipes)
+
+    /** The player's ender chest, the same whichever ender chest they open. */
+    private val enderChest = Container(STORAGE_SLOTS)
+
+    /** The window open besides the inventory, if any. */
+    private var window: Window? = null
+
+    private var lastWindowId = 0
+
+    /**
+     * A window open besides the inventory: a container's, which shows the
+     * items in [view] of the blocks at [blocks], or a crafting table's.
+     */
+    private class Window(val id: Int, val type: Int, val pos: BlockPos, val storage: Storage?, val blocks: List<BlockPos>, val view: Container?)
     private var state = State.AWAITING_NETWORK_SETTINGS_REQUEST
 
     /** The player, once their login has authenticated. */
@@ -457,12 +503,12 @@ class Session(
                     // The item use first: a block breaking this tick is checked against when the player
                     // started on it, before the step that ends the breaking clears that.
                     packet.itemUse?.let { onItemUse(it, packet.tick) }
-                    packet.stackRequest?.let { send(ItemStackResponse(listOf(stackRequests.handle(it)))) }
+                    packet.stackRequest?.let { onStackRequests(listOf(it)) }
                     onBlockActions(packet.blockActions, packet.tick)
                 }
                 is Interact -> if (packet.action == Interact.OPEN_INVENTORY) openInventory()
                 is ContainerClose -> onContainerClose(packet)
-                is ItemStackRequest -> send(ItemStackResponse(packet.requests.map(stackRequests::handle)))
+                is ItemStackRequest -> onStackRequests(packet.requests)
                 is InventoryTransaction -> onTransaction(packet)
                 is PlayerAction -> if (packet.action == PlayerAction.CREATIVE_DESTROY_BLOCK) onBreak(packet.position, creativeOnly = true)
                 is MobEquipment -> onEquip(packet)
@@ -698,16 +744,152 @@ class Session(
         send(ContainerOpen(INVENTORY_WINDOW, INVENTORY_CONTAINER, position.toBlockPos(), entityId = -1))
     }
 
-    /** Agrees to the client closing a window, except one closed by chat opening, which needs no answer. */
+    /**
+     * Agrees to the client closing a window, except one closed by chat
+     * opening, which needs no answer. What the player left on the cursor or
+     * in the crafting grid goes back among their items.
+     */
     private fun onContainerClose(packet: ContainerClose) {
         when (packet.windowId) {
             INVENTORY_WINDOW -> {
                 inventoryOpen = false
+                returnCraftingItems()
                 send(ContainerClose(INVENTORY_WINDOW, containerType = 0))
             }
-            CHAT_WINDOW -> inventoryOpen = false
+            CHAT_WINDOW -> {
+                inventoryOpen = false
+                closeWindow(reply = false)
+            }
+            window?.id -> closeWindow(reply = true)
             else -> send(ContainerClose(packet.windowId, packet.containerType))
         }
+    }
+
+    /**
+     * Carries out the player's item stack requests, and answers them. When
+     * they change a container others are looking into too, those others see
+     * the change.
+     */
+    private fun onStackRequests(requests: List<StackRequest>) {
+        val responses = requests.map(stackRequests::handle)
+        send(ItemStackResponse(responses))
+        val open = window ?: return
+        val storage = open.storage ?: return
+        if (storage == Storage.ENDER_CHEST) return
+        if (responses.none { response -> response.accepted && response.containers.any { it.container == storage.containerName } }) return
+        viewers().filter { it !== this }.forEach { it.refreshWindow(open.blocks) }
+    }
+
+    /**
+     * Opens the chest, barrel, shulker box or ender chest at [pos], of
+     * [storage], for the player, if they can: they're in reach, aren't a
+     * spectator, and nothing blocks it, like a solid block on a chest. A
+     * chest beside another opens with it, as one window. The first player
+     * to open it shows everyone with the chunk it opening, and they hear it.
+     */
+    private fun openStorage(pos: BlockPos, storage: Storage) {
+        if (gameMode == GameMode.SPECTATOR || !inReach(pos) || world.isBlockedOpen(pos)) {
+            log.debug("{} can't open {} at {}", name, world.stateAt(pos)?.name, pos)
+            return
+        }
+        closeWindow(reply = true)
+        val blocks = if (storage == Storage.CHEST) world.chestHalves(pos) else listOf(pos)
+        val view = when {
+            storage == Storage.ENDER_CHEST -> enderChest
+            blocks.size == 2 -> PairedContainer(world.containerAt(blocks[0]), world.containerAt(blocks[1]))
+            else -> world.containerAt(pos)
+        }
+        val first = blocks.none(::seenByOthers)
+        val opened = Window(nextWindowId(), ContainerType.CONTAINER, pos, storage, blocks, view)
+        window = opened
+        inventory.opened = storage.containerName to view
+        send(ContainerOpen(opened.id, ContainerType.CONTAINER, pos, entityId = -1), contentsOf(opened))
+        if (first) showOpening(opened, opening = true)
+        log.debug("{} opened {} at {}", name, world.stateAt(pos)?.name, pos)
+    }
+
+    /** Opens the crafting table at [pos] for the player, whose crafting grid is then its three by three. */
+    private fun openCraftingTable(pos: BlockPos) {
+        if (gameMode == GameMode.SPECTATOR || !inReach(pos)) return
+        closeWindow(reply = true)
+        val opened = Window(nextWindowId(), ContainerType.WORKBENCH, pos, storage = null, blocks = listOf(pos), view = null)
+        window = opened
+        inventory.craftingTable = true
+        send(ContainerOpen(opened.id, ContainerType.WORKBENCH, pos, entityId = -1))
+    }
+
+    private fun nextWindowId(): Int {
+        lastWindowId = lastWindowId % LAST_WINDOW + 1
+        return lastWindowId
+    }
+
+    /**
+     * Closes the window the player has open besides the inventory, telling
+     * the client so if [reply], and with [byServer] if it's Kore closing it.
+     * What they left in the crafting grid goes back among their items. The
+     * last player to close a container shows everyone it closing.
+     */
+    private fun closeWindow(reply: Boolean, byServer: Boolean = false) {
+        val open = window ?: return
+        window = null
+        inventory.opened = null
+        inventory.craftingTable = false
+        returnCraftingItems()
+        if (reply) send(ContainerClose(open.id, open.type, serverInitiated = byServer))
+        if (open.storage != null && open.blocks.none(::seenByOthers)) showOpening(open, opening = false)
+    }
+
+    /** Whether another player in the game is looking into the block at [pos]. */
+    private fun seenByOthers(pos: BlockPos) = viewers().any { it !== this && it.isInGame && it.window?.blocks?.contains(pos) == true }
+
+    /**
+     * Shows everyone with the chunk a container opening, or closing: a
+     * chest's, shulker box's or ender chest's lid, or a barrel's state, with
+     * the sound it makes.
+     */
+    private fun showOpening(open: Window, opening: Boolean) {
+        val storage = open.storage ?: return
+        if (world.stateAt(open.pos)?.storage != storage) return
+        val sound = open.pos to LevelSoundEvent(if (opening) storage.openSound else storage.closeSound, open.pos.centre, world.blockAt(open.pos))
+        if (storage.lid) {
+            showAround(open.blocks.map { it to BlockEvent(it, BlockEvent.CHANGE_STATE, if (opening) 1 else 0) } + sound)
+            return
+        }
+        val barrel = world.stateAt(open.pos)?.takeIf { it.name == BARREL } ?: return
+        world.blocks.find(barrel.name, barrel.properties + (BARREL_OPEN to bit(opening)))?.let { world[open.pos] = it }
+        showAround(listOf(open.pos to UpdateBlock(open.pos, world.blockAt(open.pos)), sound))
+    }
+
+    /** What every slot of the container [open] shows holds, for the client. */
+    private fun contentsOf(open: Window) = InventoryContent(open.id, open.view!!.contents().map { slot -> slot?.let { it.stack to it.id } })
+
+    /** Shows the client what the container it has open holds now, if it shows a block at [blocks]. */
+    private fun refreshWindow(blocks: List<BlockPos>) {
+        val open = window ?: return
+        if (open.view != null && open.blocks.any { it in blocks }) send(contentsOf(open))
+    }
+
+    /** Closes the player's window if it shows a block that broke, at one of [positions]. */
+    private fun containerBroke(positions: Collection<BlockPos>) {
+        if (window?.blocks?.any { it in positions } == true) closeWindow(reply = true, byServer = true)
+    }
+
+    /**
+     * Puts what the player left on the cursor and in the crafting grids
+     * back among their items, as closing the screen does, and drops what
+     * doesn't fit.
+     */
+    private fun returnCraftingItems() {
+        val changed = mutableListOf<ServerPacket>()
+        for (slot in listOf(CURSOR_SLOT) + SMALL_GRID + LARGE_GRID) {
+            val there = inventory.ui[slot] ?: continue
+            inventory.ui[slot] = null
+            changed += InventorySlot(slot, null, 0, UI_WINDOW)
+            val (filled, left) = inventory.add(there.stack)
+            changed += filled.map(::slotOf)
+            if (left > 0) throwItem(there.stack.copy(count = left))
+        }
+        if (changed.isNotEmpty()) send(*changed.toTypedArray())
     }
 
     /** Follows the hotbar slot the player holds. The offhand reports its item this way too, and changes nothing. */
@@ -801,6 +983,8 @@ class Session(
             sneaking && use.heldItem != 0 -> onPlace(use)
             clicked?.usable == true -> useBlock(use.position)
             // A chest, anvil or the like opens for the client, which Kore can't show yet. Either way, nothing's placed.
+            clicked?.storage != null -> openStorage(use.position, clicked.storage!!)
+            clicked?.name == CRAFTING_TABLE -> openCraftingTable(use.position)
             clicked?.opensOnClick == true -> log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
             else -> onPlace(use)
         }
@@ -867,6 +1051,7 @@ class Session(
             val sound = first to LevelSoundEvent(LevelSoundEvent.PLACE, first.centre, world.blockAt(first))
             val changes = world.settle(placed)
             showAround(placed.flatMap(world::withData) + sound + world.packetsFor(changes))
+            if (world.stateAt(first)?.storage == Storage.SHULKER_BOX) fillShulkerBox(first, stack!!)
             if (!creative) inventory.remove(heldSlot)
             log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.name, first)
         }
@@ -877,6 +1062,15 @@ class Session(
     }
 
     private val creative get() = gameMode == GameMode.CREATIVE
+
+    /** Puts the items the shulker box item [stack] held in the shulker box placed from it at [pos]. */
+    private fun fillShulkerBox(pos: BlockPos, stack: ItemStack) {
+        val container = world.containerAt(pos)
+        for (held in stack.nbt.getList(ItemStacks.ITEMS, NbtType.COMPOUND, emptyList())) {
+            val (slot, item) = game.items.fromNbt(held) ?: continue
+            if (slot in 0 until container.size) container[slot] = SlotStack(item, inventory.newStackId())
+        }
+    }
 
     /** Where the player's feet are, if they're in the game and standing on something. */
     internal val standingAt: Vec3? get() = if (isInGame && onGround) Vec3(position.x, position.y - PLAYER_EYE_HEIGHT, position.z) else null
@@ -911,18 +1105,21 @@ class Session(
         }
         val changes = world.breakBlock(pos)
         showAround(world.packetsFor(changes))
-        if (!creative) {
-            changes.broken.forEach { (at, broken) ->
-                // What the player broke drops only if what they hold harvests it. What fell with it always drops.
-                val byHand = at == pos || broken.state.otherHalf(at) == pos
-                if (!byHand || game.mining[broken.state.name]?.let { harvests(it, heldItem()) } != false) dropFrom(at, broken.state, broken.blockEntity)
-            }
+        changes.broken.forEach { (at, broken) ->
+            // What the player broke drops only if what they hold harvests it. What fell with it always drops.
+            val byHand = at == pos || broken.state.otherHalf(at) == pos
+            val harvested = !creative && (!byHand || game.mining[broken.state.name]?.let { harvests(it, heldItem()) } != false)
+            // What a container held drops too, even in creative. A shulker box keeps it inside itself.
+            val keepsItems = broken.state.storage == Storage.SHULKER_BOX
+            if (harvested || (keepsItems && broken.contents.any { it != null })) dropFrom(at, broken)
+            if (!keepsItems) world.dropFromBlock(at, broken.contents.filterNotNull())
         }
+        viewers().forEach { it.containerBroke(changes.broken.keys) }
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
     }
 
-    /** Drops what [block], broken at [pos], drops, given the data it kept, [blockEntity]. */
-    private fun dropFrom(pos: BlockPos, block: BlockState, blockEntity: NbtMap?) = world.dropFromBlock(pos, game.drops.of(block, blockEntity))
+    /** Drops what the [broken] block at [pos] drops, given the data and items it kept. */
+    private fun dropFrom(pos: BlockPos, broken: BrokenBlock) = world.dropFromBlock(pos, game.drops.of(broken.state, broken.blockEntity, broken.contents))
 
     /**
      * Throws [stack] the way the player looks, from just below their eyes,
@@ -1345,6 +1542,7 @@ class Session(
     fun leave() {
         val identity = player ?: return
         if (state != State.IN_GAME) return
+        closeWindow(reply = false)
         state = State.CLOSED
         log.info("{} left", identity.displayName)
         tellEveryone(Text(Text.TRANSLATION, LEFT, parameters = listOf(identity.displayName), needsTranslation = true))

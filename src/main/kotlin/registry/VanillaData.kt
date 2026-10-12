@@ -15,10 +15,11 @@ private val json = Json { ignoreUnknownKeys = true }
 
 /**
  * The game's own definitions, which clients expect the server to agree with:
- * every item, block state and biome, and the creative inventory. They're
- * dumped from the game by CloudburstMC, with how blocks take to mining, and
- * how many of each item stack, from PrismarineJS's minecraft-data, kept
- * apart from Kore's code in
+ * every item, block state and biome, the creative inventory and recipes.
+ * They're dumped from the game by CloudburstMC, with how blocks take to
+ * mining, and how many of each item stack, from PrismarineJS's
+ * minecraft-data, and which items each tag takes in from PocketMine's
+ * BedrockData, kept apart from Kore's code in
  * https://github.com/KoreMC/data, and read once, on start.
  */
 data class VanillaData(
@@ -30,6 +31,7 @@ data class VanillaData(
     val blockDefinitions: List<BlockDefinition>,
     /** How each block takes to mining, by block name. */
     val mining: Map<String, Mining>,
+    val recipes: Recipes = Recipes.NONE,
 ) {
     companion object {
         /**
@@ -45,13 +47,16 @@ data class VanillaData(
             val blocks = readBlockPalette(readNbt(directory.resolve("block_palette.nbt")))
             val blockDefinitions = readBlockDefinitions(readNbt(directory.resolve("data_driven_blocks.nbt")))
             val mining = readMining(directory.resolve("blocks.json").readText()) + readDataDrivenMining(blockDefinitions)
+            val creative = readCreativeInventory(directory.resolve("creative_items.json").readText(), items, blocks)
+            val tags = readItemTags(directory.resolve("item_tags.json").readText(), items)
             return VanillaData(
                 items = items,
                 blocks = blocks,
                 biomes = readBiomes(directory.resolve("stripped_biome_definitions.json").readText()),
-                creative = readCreativeInventory(directory.resolve("creative_items.json").readText(), items, blocks),
+                creative = creative,
                 blockDefinitions = blockDefinitions,
                 mining = withNewerBlocks(mining, blocks),
+                recipes = readRecipes(directory.resolve("recipes.json").readText(), ItemStacks(items, creative, blocks), blocks, tags),
             )
         }
     }

@@ -46,8 +46,8 @@ class ItemStackRequestTest {
                 StackAction.Swap(SlotRef(28, 0, 1), SlotRef(29, 9, 2)),
                 StackAction.Drop(1, SlotRef(28, 1, 3)),
                 StackAction.Destroy(2, SlotRef(59, 0, 4)),
-                StackAction.Informational(5),
-                StackAction.Unsupported(10),
+                StackAction.Consume(1, SlotRef(13, 28, 5)),
+                StackAction.Craft(recipe = 9, times = 1),
                 StackAction.Informational(17),
             ),
             actions,
@@ -68,10 +68,19 @@ class ItemStackRequestTest {
     }
 
     @Test
-    fun `reading stops at auto-crafting, whose ingredients Kore can't read`() {
-        val packet = request(id = -1) { action(11, legacy = 13) { writeVarUInt(3).writeByte(1).writeVarUInt(1).writeByte(0xFF) } }
+    fun `auto-crafting lists its ingredients, which are read past`() {
+        val packet = request(id = -1) {
+            action(11, legacy = 13) {
+                writeVarUInt(3).writeByte(1) // Recipe 3, once
+                writeVarUInt(2)
+                writeVarUInt(1).writeByte(1).writeString("minecraft:oak_planks").writeVarInt(32767).writeShortLE(2) // Two planks
+                writeVarUInt(3).writeByte(3).writeString("minecraft:logs").writeShortLE(1) // A log
+            }
+            action(5, legacy = 5) { writeByte(2); slot(12, 9, 5) }
+        }
 
-        assertEquals(ItemStackRequest(listOf(StackRequest(-1, listOf(StackAction.Unsupported(11))))), decodeClientPacket(packet))
+        val expected = listOf(StackAction.Craft(recipe = 3, times = 1, auto = true), StackAction.Consume(2, SlotRef(12, 9, 5)))
+        assertEquals(ItemStackRequest(listOf(StackRequest(-1, expected))), decodeClientPacket(packet))
     }
 
     @Test

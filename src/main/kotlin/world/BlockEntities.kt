@@ -75,5 +75,5 @@ internal fun FlatWorld.unpairChestFrom(chest: NbtMap): BlockPos? {
     return partner
 }
 
-private const val PAIR_X = "pairx"
-private const val PAIR_Z = "pairz"
+internal const val PAIR_X = "pairx"
+internal const val PAIR_Z = "pairz"

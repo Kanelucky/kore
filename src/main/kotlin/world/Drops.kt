@@ -30,6 +30,7 @@ private val DROPS_INSTEAD = buildMap {
     put("minecraft:lit_deepslate_redstone_ore", "minecraft:redstone" to 4)
     put("minecraft:nether_gold_ore", "minecraft:gold_nugget" to 2)
     put("minecraft:quartz_ore", "minecraft:quartz" to 1)
+    put("minecraft:ender_chest", "minecraft:obsidian" to 8)
 }
 
 /** Blocks that drop nothing, not even themselves, without Silk Touch, which nothing gives yet. */
@@ -52,8 +53,12 @@ private val DROPS_NOTHING = setOf(
 class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: BlockPalette) {
     private val stacks = ItemStacks(items, creative, blocks)
 
-    /** What [state] drops, given the data it kept, [blockEntity], which a player holding something that harvests it gets. */
-    fun of(state: BlockState, blockEntity: NbtMap? = null): List<ItemStack> {
+    /**
+     * What [state] drops, given the data it kept, [blockEntity], which a
+     * player holding something that harvests it gets. A shulker box keeps
+     * what it held, its [contents], in its item.
+     */
+    fun of(state: BlockState, blockEntity: NbtMap? = null, contents: List<ItemStack?> = emptyList()): List<ItemStack> {
         if (state.properties[UPPER_BLOCK] == 1.toByte() || state.properties[HEAD_PIECE] == 1.toByte() || dropsNothing(state.name)) return emptyList()
         val (name, count) = DROPS_INSTEAD[state.name] ?: singleSlabOf(state.name)?.let { it to 2 } ?: ((itemPlacing(state.name) ?: state.name) to 1)
         // Beds and banners keep their colour in their block entity, as their items do in their aux value.
@@ -63,7 +68,10 @@ class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: Bl
             blockEntity.containsKey("Base") -> blockEntity.getInt("Base")
             else -> null
         }
-        return listOfNotNull(stacks.of(name, count, aux = colour ?: 0))
+        val stack = stacks.of(name, count, aux = colour ?: 0) ?: return emptyList()
+        val held = contents.withIndex().mapNotNull { (slot, item) -> item?.let { slot to it } }
+        if (state.storage == Storage.SHULKER_BOX && held.isNotEmpty()) return listOf(stack.copy(nbt = ItemStacks.holding(held)))
+        return listOf(stack)
     }
 
     private fun dropsNothing(name: String) = name in DROPS_NOTHING || name.endsWith("_leaves") ||

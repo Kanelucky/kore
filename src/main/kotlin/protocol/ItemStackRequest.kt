@@ -8,11 +8,16 @@ private const val ITEM_STACK_RESPONSE = 148
 /** The containers Kore keeps, by the numbers the client names them with in item stack requests. */
 object ContainerName {
     const val ARMOR = 6
+    /** A chest's or an ender chest's items. */
+    const val LEVEL_ENTITY = 7
     const val HOTBAR_AND_INVENTORY = 12
+    /** The crafting grid: the inventory's two by two, or a crafting table's three by three. */
     const val CRAFTING_INPUT = 13
     const val HOTBAR = 28
     const val INVENTORY = 29
+    const val SHULKER_BOX = 30
     const val OFFHAND = 34
+    const val BARREL = 58
     const val CURSOR = 59
     /** Where crafted and creative items appear, before the client moves them somewhere. */
     const val CREATED_OUTPUT = 60
@@ -40,7 +45,20 @@ sealed interface StackAction {
     /** Puts a stack of the creative item numbered [creativeId] in the created output slot. */
     data class CraftCreative(val creativeId: Int, val times: Int) : StackAction
 
-    /** An action that only describes what others do, like consuming crafting inputs. It changes nothing itself. */
+    /**
+     * Crafts the recipe numbered [recipe], [times] over: from the crafting
+     * grid, or with [auto], from wherever the player has the ingredients, as
+     * the recipe book does. What it makes goes in the created output.
+     */
+    data class Craft(val recipe: Int, val times: Int, val auto: Boolean = false) : StackAction
+
+    /** Uses up [count] of what's in [source] for a craft. */
+    data class Consume(val count: Int, val source: SlotRef) : StackAction
+
+    /** Puts the craft's result numbered [result] in the created output, for a recipe that makes more than one thing. */
+    data class Create(val result: Int) : StackAction
+
+    /** An action that only describes what others do, like a craft's results. It changes nothing itself. */
     data class Informational(val type: Int) : StackAction
 
     /** An action Kore can't carry out yet, like crafting a recipe, which fails its request. */
@@ -92,41 +110,23 @@ data class ItemStackResponse(val responses: List<StackResponse>) : ServerPacket 
     }
 }
 
-/**
- * Reads the requests in [buffer]. One action carries a structure Kore
- * doesn't read: auto-crafting's list of ingredients, which can't come while
- * Kore sends no recipes. A request with one ends with an
- * [StackAction.Unsupported], and reading stops there, as nothing after it
- * can be found.
- */
+/** Reads the requests in [buffer]. */
 internal fun decodeItemStackRequest(buffer: ByteBuf): ItemStackRequest {
-    val requests = ArrayList<StackRequest>()
-    repeat(buffer.readVarUInt().also { if (it > 100) throw PacketException("$it item stack requests in one packet") }) {
-        val request = buffer.readStackRequest()
-        requests += request
-        if (request.cutShort) return ItemStackRequest(requests)
-    }
-    return ItemStackRequest(requests)
+    val count = buffer.readVarUInt()
+    if (count > 100) throw PacketException("$count item stack requests in one packet")
+    return ItemStackRequest(List(count) { buffer.readStackRequest() })
 }
 
-/** Reads one request, which ends early if it's [cutShort]. */
+/** Reads one request. */
 internal fun ByteBuf.readStackRequest(): StackRequest {
     val id = readVarInt()
-    val actions = ArrayList<StackAction>()
     val count = readVarUInt()
     if (count > 100) throw PacketException("$count actions in one item stack request")
-    for (i in 0 until count) {
-        val action = readStackAction()
-        actions += action
-        if (action is StackAction.Unsupported && action.type in UNREADABLE_ACTIONS) return StackRequest(id, actions)
-    }
+    val actions = List(count) { readStackAction() }
     readList { readString() } // Strings to filter, like an anvil's new name
     readIntLE() // Why they need filtering
     return StackRequest(id, actions)
 }
-
-/** Whether reading this request stopped at an action Kore can't read past, so nothing after it could be read either. */
-internal val StackRequest.cutShort get() = (actions.lastOrNull() as? StackAction.Unsupported)?.type in UNREADABLE_ACTIONS
 
 // Action types, as Mojang numbers them now.
 private const val TAKE = 0
@@ -148,8 +148,6 @@ private const val CRAFT_LOOM = 15
 private const val CRAFT_NON_IMPLEMENTED = 16
 private const val CRAFT_RESULTS = 17
 
-private val UNREADABLE_ACTIONS = setOf(CRAFT_RECIPE_AUTO)
-
 private fun ByteBuf.readStackAction(): StackAction {
     val type = readVarUInt()
     readUnsignedByte() // The type again, as it was numbered before 1.26.40
@@ -158,13 +156,13 @@ private fun ByteBuf.readStackAction(): StackAction {
         SWAP -> StackAction.Swap(readSlotRef(), readSlotRef())
         DROP -> StackAction.Drop(readUnsignedByte().toInt(), readSlotRef()).also { readBoolean() } // Whether to throw it somewhere random
         DESTROY -> StackAction.Destroy(readUnsignedByte().toInt(), readSlotRef())
-        CONSUME -> StackAction.Informational(type).also { readUnsignedByte(); readSlotRef() }
-        CREATE -> StackAction.Unsupported(type).also { readUnsignedByte() } // Results slot
+        CONSUME -> StackAction.Consume(readUnsignedByte().toInt(), readSlotRef())
+        CREATE -> StackAction.Create(readUnsignedByte().toInt())
         LAB_TABLE_COMBINE, CRAFT_NON_IMPLEMENTED -> StackAction.Unsupported(type)
         BEACON_PAYMENT -> StackAction.Unsupported(type).also { readVarInt(); readVarInt() }
         MINE_BLOCK -> StackAction.Unsupported(type).also { readVarInt(); readVarInt(); readIntLE() }
-        CRAFT_RECIPE -> StackAction.Unsupported(type).also { readVarUInt(); readUnsignedByte() }
-        CRAFT_RECIPE_AUTO -> StackAction.Unsupported(type)
+        CRAFT_RECIPE -> StackAction.Craft(readVarUInt(), readUnsignedByte().toInt())
+        CRAFT_RECIPE_AUTO -> StackAction.Craft(readVarUInt(), readUnsignedByte().toInt(), auto = true).also { readList { skipIngredient() } }
         CRAFT_CREATIVE -> StackAction.CraftCreative(readVarUInt(), readUnsignedByte().toInt())
         CRAFT_RECIPE_OPTIONAL -> StackAction.Unsupported(type).also { readVarUInt(); readIntLE() }
         CRAFT_REPAIR_AND_DISENCHANT -> StackAction.Unsupported(type).also { readIntLE(); readUnsignedByte(); readVarInt() }
@@ -179,6 +177,22 @@ private fun ByteBuf.readSlotRef(): SlotRef {
     val container = readUnsignedByte().toInt()
     if (readBoolean()) readIntLE() // Dynamic container ID
     return SlotRef(container, readUnsignedByte().toInt(), readIntLE())
+}
+
+/**
+ * Skips an ingredient as auto-crafting lists them, for the recipe book:
+ * its kind, twice, as the variant and the kind before 1.26.40, then the
+ * kind's own fields, and how many.
+ */
+private fun ByteBuf.skipIngredient() {
+    val kind = readVarUInt()
+    readUnsignedByte() // The kind again
+    when (kind) {
+        1 -> readString().also { readVarInt() } // An item, by name, and its aux value
+        2 -> readString().also { readShortLE() } // A Molang expression, and its version
+        3 -> readString() // A tag
+    }
+    readShortLE() // How many
 }
 
 /** Skips an item as the deprecated crafting results describe it: by name, then count, block and a buffer of extras. */

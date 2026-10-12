@@ -437,8 +437,7 @@ private fun decodePlayerAuthInput(buffer: ByteBuf): PlayerAuthInput {
     // Each action is there if a flag before it says so.
     val itemUse = if (buffer.readBoolean()) buffer.readPackedItemUse() else null
     val stackRequest = if (buffer.readBoolean()) buffer.readStackRequest() else null
-    // A request can end in an action Kore can't read past, and then the block actions can't be found.
-    val blockActions = if (stackRequest?.cutShort != true && buffer.readBoolean()) buffer.readList { readBlockAction() } else emptyList()
+    val blockActions = if (buffer.readBoolean()) buffer.readList { readBlockAction() } else emptyList()
     return PlayerAuthInput(pitch, yaw, headYaw, position, delta, tick, inputs, itemUse, stackRequest, blockActions)
 }
 

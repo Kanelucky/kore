@@ -1,6 +1,7 @@
 package org.koremc.world
 
 import org.cloudburstmc.nbt.NbtMap
+import org.koremc.inventory.Container
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
@@ -79,6 +80,11 @@ class FlatWorld(
     /** An ID for a new entity, unique among players and items alike. */
     fun newEntityId() = nextEntityId++
 
+    private var nextStackId = 1
+
+    /** An ID for a new stack of items, unique among every player's and every container's, which clients name stacks by. */
+    fun newStackId() = nextStackId++
+
     /** Puts [stack] in the world at [position], moving at [velocity], for anyone to pick up after [pickupDelay] ticks. */
     fun spawnItem(stack: ItemStack, position: Vec3, velocity: Vec3, pickupDelay: Int): ItemEntity =
         ItemEntity(newEntityId(), stack, position, velocity, pickupDelay).also { itemEntities[it.id] = it }
@@ -97,9 +103,21 @@ class FlatWorld(
      */
     operator fun set(pos: BlockPos, state: BlockState) {
         require(pos.y in MIN_Y..MAX_Y) { "$pos is outside the overworld" }
-        if (stateAt(pos)?.name != state.name) blockEntities[pos.chunk]?.remove(pos)
+        if (stateAt(pos)?.name != state.name) {
+            blockEntities[pos.chunk]?.remove(pos)
+            containers.remove(pos)
+        }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
     }
+
+    /** The items each chest, barrel and shulker box keeps, by where it is, once a player has opened it or put something in it. */
+    private val containers = HashMap<BlockPos, Container>()
+
+    /** The items the chest, barrel or shulker box at [pos] keeps. */
+    fun containerAt(pos: BlockPos): Container = containers.getOrPut(pos) { Container(STORAGE_SLOTS) }
+
+    /** Takes out every item the block at [pos] kept, as it breaks, slot by slot. */
+    fun emptyContainer(pos: BlockPos): List<ItemStack?> = containers.remove(pos)?.empty().orEmpty()
 
     /** The data the block at [pos] keeps beyond its state, like a bed's colour, or null for none. */
     fun blockEntityAt(pos: BlockPos): NbtMap? = blockEntities[pos.chunk]?.get(pos)
