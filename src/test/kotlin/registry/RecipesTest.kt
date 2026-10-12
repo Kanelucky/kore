@@ -93,5 +93,9 @@ class RecipesTest {
         val log = ItemStack(vanilla.items.single { it.name == "minecraft:oak_log" })
         assertNotNull(recipes.gridUses(oakPlanks, listOf(null, null, log, null), times = 1))
         assertTrue(CraftingData(recipes).encode().size > 100_000)
+        // Each recipe the client gets has a name of its own, which smithing recipes take from what they make.
+        val smithing = recipes.recipes.filterIsInstance<SmithingTransformRecipe>().map { it.id }
+        assertTrue("minecraft:smithing_netherite_sword" in smithing)
+        assertEquals(smithing.size, smithing.distinct().size)
     }
 }

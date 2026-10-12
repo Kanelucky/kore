@@ -169,10 +169,12 @@ fun readRecipes(recipes: String, items: ItemStacks, blocks: BlockPalette, tags: 
                 val template = readIngredient(input.getValue("template").jsonObject)
                 val base = readIngredient(input.getValue("base").jsonObject)
                 val addition = readIngredient(input.getValue("addition").jsonObject)
+                // The data gives smithing recipes no names, which the client tells recipes apart by, so they get the game's.
                 if (type == SMITHING_TRIM) {
-                    SmithingTrimRecipe(id, template, base, addition, block, networkId)
+                    SmithingTrimRecipe(id.ifEmpty { "minecraft:smithing_armor_trim" }, template, base, addition, block, networkId)
                 } else {
-                    SmithingTransformRecipe(id, template, base, addition, readOutput(recipe.getValue("output").jsonObject, items, blocks, id), block, networkId)
+                    val output = readOutput(recipe.getValue("output").jsonObject, items, blocks, id)
+                    SmithingTransformRecipe(id.ifEmpty { "minecraft:smithing_${output.item.name.substringAfter(':')}" }, template, base, addition, output, block, networkId)
                 }
             }
             else -> error("Recipe $id is of a type Kore doesn't know, $type")
