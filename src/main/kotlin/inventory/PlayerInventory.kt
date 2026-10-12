@@ -2,7 +2,6 @@ package org.koremc.inventory
 
 import org.koremc.protocol.ContainerName
 import org.koremc.registry.ItemStack
-import org.koremc.registry.maxStackSize
 import org.koremc.registry.sameKindAs
 
 /** A stack in a slot, with the ID the server gave it. The client names stacks by these IDs in its requests. */

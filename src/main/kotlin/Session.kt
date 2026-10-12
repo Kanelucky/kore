@@ -1,11 +1,19 @@
 package org.koremc
 
 import org.cloudburstmc.nbt.NbtMap
+import org.koremc.command.CommandSource
+import org.koremc.command.Commands
+import org.koremc.command.ConsoleSource
+import org.koremc.command.Operators
+import org.koremc.command.Selectable
+import org.koremc.command.logOutput
 import org.koremc.inventory.HOTBAR_SIZE
 import org.koremc.inventory.PlayerInventory
 import org.koremc.inventory.StackRequestHandler
 import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
+import org.koremc.protocol.ARMOUR_WINDOW
+import org.koremc.protocol.Ability
 import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorEvent
 import org.koremc.protocol.ActorFlag
@@ -20,6 +28,9 @@ import org.koremc.protocol.ByteItem
 import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
 import org.koremc.protocol.ClientPacket
+import org.koremc.protocol.CommandOutput
+import org.koremc.protocol.CommandPermission
+import org.koremc.protocol.CommandRequest
 import org.koremc.protocol.ContainerClose
 import org.koremc.protocol.ContainerOpen
 import org.koremc.protocol.Disconnect
@@ -46,6 +57,7 @@ import org.koremc.protocol.MoveActorAbsolute
 import org.koremc.protocol.MovePlayer
 import org.koremc.protocol.NetworkChunkPublisherUpdate
 import org.koremc.protocol.NetworkSettings
+import org.koremc.protocol.OFFHAND_WINDOW
 import org.koremc.protocol.PacketException
 import org.koremc.protocol.PermissionLevel
 import org.koremc.protocol.PlayStatus
@@ -62,6 +74,7 @@ import org.koremc.protocol.ResourcePacksInfo
 import org.koremc.protocol.ServerPacket
 import org.koremc.protocol.SetActorData
 import org.koremc.protocol.SetLocalPlayerAsInitialised
+import org.koremc.protocol.SetPlayerGameType
 import org.koremc.protocol.ShortItem
 import org.koremc.protocol.ShowEquipment
 import org.koremc.protocol.Skin
@@ -72,6 +85,7 @@ import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateAbilities
 import org.koremc.protocol.UpdateAttributes
 import org.koremc.protocol.UpdateBlock
+import org.koremc.protocol.UpdatePlayerGameType
 import org.koremc.protocol.abilitiesFor
 import org.koremc.protocol.VoxelShapes
 import org.koremc.protocol.decodeClientPacket
@@ -190,6 +204,12 @@ private const val CREATIVE_REACH = 14f
 /** How far cracks have to spread for a block to break, in the units `LevelEvent` counts their pace in. */
 private const val CRACKED = 65535
 
+/**
+ * How near to where a teleport put a player the client has to say they
+ * are, if it doesn't say it moved them there, for Kore to believe it.
+ */
+private const val TELEPORT_SLACK = 4f
+
 /** How long after a player's loading screen closes everyone hears they joined, in ticks. */
 private const val JOIN_MESSAGE_DELAY = 10
 
@@ -256,6 +276,10 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * they come in. Their chat reaches it too, as do players joining and
  * leaving.
  *
+ * Players run commands from the chat, as themselves. Each has their own
+ * game mode, which starts as the world's and commands can change, and is
+ * an operator or not, which sets the commands they may run.
+ *
  * Runs on the UDP event loop, with the connection callbacks that drive it.
  */
 class Session(
@@ -272,14 +296,16 @@ class Session(
     private val viewers: () -> Collection<Session>,
     /** Runs a task a number of ticks from now, on the same thread as the sessions, like a button popping back out. */
     private val schedule: (ticks: Int, task: () -> Unit) -> Unit,
+    /** The commands players run, which the whole server shares. */
+    private val commands: Commands = Commands(config, game, viewers),
     private val send: (ByteArray) -> Unit,
-) {
+) : CommandSource, Selectable {
     private enum class State { AWAITING_NETWORK_SETTINGS_REQUEST, AWAITING_LOGIN, NEGOTIATING_RESOURCE_PACKS, LOADING_WORLD, SPAWNING, IN_GAME, CLOSED }
 
     private val batches = BatchCodec()
     private val world = game.world
     private val inventory = PlayerInventory()
-    private val stackRequests = StackRequestHandler(inventory, game.creative, creativeMode = { config.gameMode == GameMode.CREATIVE }, onDrop = ::throwItem)
+    private val stackRequests = StackRequestHandler(inventory, game.creative, creativeMode = { gameMode == GameMode.CREATIVE }, onDrop = ::throwItem)
     private var state = State.AWAITING_NETWORK_SETTINGS_REQUEST
 
     /** The player, once their login has authenticated. */
@@ -323,12 +349,36 @@ class Session(
     private var flying = false
 
     /** Which way the player looks, around the vertical, as the client last reported. Blocks they place turn by it. */
-    var yaw = 0f
+    override var yaw = 0f
         private set
 
     /** How far the player looks up or down, as the client last reported. Items they throw go that way. */
-    var pitch = 0f
+    override var pitch = 0f
         private set
+
+    /** The player's game mode, which starts as the world's. */
+    override var gameMode = config.gameMode
+        private set
+
+    /** Where a teleport put the player's eyes, until the client says it has moved them there. */
+    private var teleportedTo: Vec3? = null
+
+    /** The player's name, or their network's until they've logged in. */
+    override val name get() = player?.displayName ?: "network $networkId"
+
+    /** Where the player's feet are. */
+    override val feet get() = Vec3(position.x, position.y - PLAYER_EYE_HEIGHT, position.z)
+
+    /** Commands the player runs start from their feet. */
+    override val origin get() = feet
+
+    /** Whether the player is one of the server's operators. */
+    val isOperator get() = player?.let { commands.operators.contains(it.displayName, it.xuid) } == true
+
+    /** What the player may do with commands: an operator's commands, or everyone's. */
+    override val permission get() = if (isOperator) CommandPermission.ADMIN else CommandPermission.ANY
+
+    private val permissionLevel get() = if (isOperator) PermissionLevel.OPERATOR else PermissionLevel.MEMBER
 
     /** Which way the player's head faces, around the vertical, which can be a little off their body's. */
     var headYaw = 0f
@@ -418,6 +468,7 @@ class Session(
                 is MobEquipment -> onEquip(packet)
                 is Animate -> if (packet.action == Animate.SWING_ARM) viewers().forEach { it.showSwing(entityId, packet.swingSource) }
                 is Text -> onChat(packet)
+                is CommandRequest -> onCommand(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
                 is SetLocalPlayerAsInitialised -> if (state == State.SPAWNING) onPlayerInitialised(packet) else unexpected(packet)
                 is LoadingScreen -> if (packet.type == LoadingScreen.END) {
@@ -503,11 +554,12 @@ class Session(
             StartGame(
                 entityId = entityId,
                 runtimeId = entityId,
-                playerGameMode = config.gameMode,
+                playerGameMode = gameMode,
                 position = position,
                 seed = config.seed,
                 worldGameMode = config.gameMode,
                 difficulty = config.difficulty,
+                playerPermissions = permissionLevel,
                 worldSpawn = spawn,
                 worldName = config.level,
                 serverVersion = config.version,
@@ -548,6 +600,14 @@ class Session(
         if (!reported.isPlausible()) {
             log.debug("{} reported an impossible position, {}", player?.displayName, reported)
             return
+        }
+        // Until the client has moved its player where a teleport put them, it reports where they were.
+        teleportedTo?.let { to ->
+            if (InputFlag.HANDLED_TELEPORT !in packet.inputs && !reported.within(TELEPORT_SLACK, to)) {
+                onInputs(packet)
+                return
+            }
+            teleportedTo = null
         }
         position = reported
         yaw = packet.yaw
@@ -621,6 +681,8 @@ class Session(
         unsent.chunked(CHUNKS_PER_BATCH).forEach { batch -> send(*batch.map { LevelChunk(it, world.chunkAt(it), world.blockEntitiesIn(it)) }.toTypedArray()) }
         return unsent.size
     }
+
+    private fun Vec3.within(distance: Float, of: Vec3) = abs(x - of.x) <= distance && abs(y - of.y) <= distance && abs(z - of.z) <= distance
 
     private fun Vec3.isPlausible() =
         listOf(x, y, z).all { it.isFinite() } && abs(x) <= MAX_COORDINATE && abs(z) <= MAX_COORDINATE
@@ -700,7 +762,7 @@ class Session(
         val count = drop.after.count
         // The client's stack must be Kore's: the same item, and as many of it.
         val same = there != null && there.stack.item.runtimeId == from.before.runtimeId && there.stack.count == from.before.count
-        if (same && count in 1..there.stack.count && config.gameMode != GameMode.SPECTATOR) {
+        if (same && count in 1..there.stack.count && gameMode != GameMode.SPECTATOR) {
             inventory.remove(from.slot, count)
             throwItem(there.stack.copy(count = count))
         } else {
@@ -751,7 +813,7 @@ class Session(
      * puts back what the client predicted.
      */
     private fun useBlock(pos: BlockPos) {
-        val used = if (config.gameMode != GameMode.SPECTATOR && inReach(pos)) world.use(pos, facing(yaw)) else null
+        val used = if (gameMode != GameMode.SPECTATOR && inReach(pos)) world.use(pos, facing(yaw)) else null
         if (used == null) {
             log.debug("Refused {} using {} at {}", player?.displayName, world.stateAt(pos)?.name, pos)
             send(UpdateBlock(pos, world.blockAt(pos)))
@@ -814,7 +876,7 @@ class Session(
         if (placed.isEmpty() && !creative) send(slotOf(heldSlot))
     }
 
-    private val creative get() = config.gameMode == GameMode.CREATIVE
+    private val creative get() = gameMode == GameMode.CREATIVE
 
     /** Where the player's feet are, if they're in the game and standing on something. */
     internal val standingAt: Vec3? get() = if (isInGame && onGround) Vec3(position.x, position.y - PLAYER_EYE_HEIGHT, position.z) else null
@@ -837,7 +899,6 @@ class Session(
         // Air is what a break leaves, so it's a break the client has already reported another way.
         if (state?.name == AIR) return
 
-        val creative = config.gameMode == GameMode.CREATIVE
         val ticks = state?.let { ticksToBreak(it.name) }
         val unbreakable = state != null && game.mining[state.name]?.unbreakable == true
         // Checked before the cracks stop, which forgets when the player started.
@@ -885,7 +946,7 @@ class Session(
      * the chunk sees the item fly to them. Run once a tick.
      */
     fun collectItems() {
-        if (state != State.IN_GAME || config.gameMode == GameMode.SPECTATOR) return
+        if (state != State.IN_GAME || gameMode == GameMode.SPECTATOR) return
         for (item in world.items.toList()) {
             if (item.pickupDelay > 0 || !inPickupReach(item)) continue
             val (slots, left) = inventory.add(item.stack)
@@ -1018,7 +1079,7 @@ class Session(
         val feet = Vec3(look.position.x, look.position.y - PLAYER_EYE_HEIGHT, look.position.z)
         return AddPlayer(
             identity.uuid, identity.displayName, entityId, feet, look.pitch, look.yaw, look.headYaw, look.held,
-            config.gameMode, data, abilitiesFor(config.gameMode), platform = login?.clientInfo?.deviceOs ?: UNKNOWN_PLATFORM,
+            gameMode, data, abilitiesFor(gameMode), platform = login?.clientInfo?.deviceOs ?: UNKNOWN_PLATFORM, permissions = permissionLevel,
         )
     }
 
@@ -1061,7 +1122,7 @@ class Session(
      * there's nothing to see.
      */
     private fun onBlockActions(actions: List<BlockAction>, tick: Long) {
-        if (config.gameMode != GameMode.SURVIVAL) return
+        if (gameMode != GameMode.SURVIVAL) return
         for (action in actions) {
             when (action.action) {
                 PlayerAction.START_DESTROY_BLOCK -> startBreaking(action.position, tick)
@@ -1094,10 +1155,10 @@ class Session(
     /** How many ticks the player takes to break the block called [name], with what they hold, if Kore knows. */
     private fun ticksToBreak(name: String): Int? = game.mining[name]?.let { breakTicks(it, heldItem()) }
 
-    private fun canBuild() = config.gameMode == GameMode.SURVIVAL || config.gameMode == GameMode.CREATIVE
+    private fun canBuild() = gameMode == GameMode.SURVIVAL || gameMode == GameMode.CREATIVE
 
     private fun inReach(pos: BlockPos): Boolean {
-        val reach = if (config.gameMode == GameMode.CREATIVE) CREATIVE_REACH else SURVIVAL_REACH
+        val reach = if (gameMode == GameMode.CREATIVE) CREATIVE_REACH else SURVIVAL_REACH
         val centre = pos.centre
         val dx = centre.x - position.x
         val dy = centre.y - position.y
@@ -1130,7 +1191,7 @@ class Session(
             return
         }
         state = State.IN_GAME
-        send(*playerState())
+        send(*playerState(), commands.map.availableTo(permission))
         log.info("{} spawned", player?.displayName)
         announceJoin()
     }
@@ -1167,6 +1228,117 @@ class Session(
         }
         log.info("<{}> {}", identity.displayName, message)
         tellEveryone(Text(Text.CHAT, message, sourceName = identity.displayName, xuid = identity.xuid.orEmpty()))
+    }
+
+    /**
+     * A command the player typed, which Kore runs as them. The client shows
+     * what came of it, under the request it made.
+     */
+    private fun onCommand(packet: CommandRequest) {
+        if (state != State.IN_GAME) return
+        log.info("{} ran {}", name, packet.command)
+        val result = commands.run(this, packet.command)
+        send(CommandOutput(packet.origin, result.messages, result.successes))
+    }
+
+    /** Shows the player [text], if they're in the game. */
+    fun message(text: Text) {
+        if (isInGame) send(text)
+    }
+
+    /**
+     * Puts the player in [mode]. The client changes what its player can do,
+     * and everyone hears of it, which changes how they see the player.
+     */
+    fun changeGameMode(mode: GameMode) {
+        gameMode = mode
+        if (mode != GameMode.SURVIVAL) stopBreaking()
+        if (Ability.MAY_FLY !in abilitiesFor(mode)) flying = false
+        send(SetPlayerGameType(mode), abilities())
+        viewers().filter { it.isInGame }.forEach { it.send(UpdatePlayerGameType(mode, entityId)) }
+        log.info("{} is now in {} mode", name, mode.name.lowercase())
+    }
+
+    /**
+     * Tells the client what the player may do now that they've become an
+     * operator, or stopped being one: their abilities, and the commands
+     * they may run.
+     */
+    fun permissionsChanged() {
+        if (!isInGame) return
+        send(abilities(), commands.map.availableTo(permission))
+        log.info("{} is {}", name, if (isOperator) "an operator" else "no longer an operator")
+    }
+
+    /**
+     * Moves the player's [feet] where a command says, facing the way [yaw]
+     * and [pitch] say. Their view follows, and the client gets the chunks
+     * around them it doesn't have.
+     */
+    fun teleport(feet: Vec3, yaw: Float, pitch: Float) {
+        position = Vec3(feet.x, feet.y + PLAYER_EYE_HEIGHT, feet.z)
+        this.yaw = yaw
+        this.pitch = pitch
+        headYaw = yaw
+        teleportedTo = position
+        send(MovePlayer(entityId, position, pitch, yaw, yaw, onGround = false, teleport = true))
+        viewCentre = position.toBlockPos().chunk
+        chunkRadius?.let { updateView(it) }
+        log.debug("{} was teleported to {}", name, feet)
+    }
+
+    /** Gives the player [stack]: as much as fits among their items, with the rest dropped at their feet. */
+    fun give(stack: ItemStack) {
+        val (slots, left) = inventory.add(stack)
+        if (slots.isNotEmpty()) send(*slots.map(::slotOf).toTypedArray())
+        var dropping = left
+        while (dropping > 0) {
+            val count = minOf(dropping, stack.item.maxStackSize)
+            world.spawnItem(stack.copy(count = count), feet, Vec3(0f, 0f, 0f), pickupDelay = 0)
+            dropping -= count
+        }
+        log.debug("{} was given {} {}", name, stack.count, stack.item.name)
+    }
+
+    /**
+     * Takes the player's items that [matching] picks out, from their
+     * inventory, offhand and armour, up to [maxCount] of them, or all with a
+     * negative count. A count of none takes nothing. Returns how many it
+     * took, or with none, how many there are.
+     */
+    fun clearItems(maxCount: Int, matching: (ItemStack) -> Boolean): Int {
+        var found = 0
+        val changed = mutableListOf<InventorySlot>()
+        for ((container, window) in listOf(inventory.items to INVENTORY_WINDOW, inventory.offhand to OFFHAND_WINDOW, inventory.armour to ARMOUR_WINDOW)) {
+            for (slot in 0 until container.size) {
+                val there = container[slot]?.takeIf { matching(it.stack) } ?: continue
+                if (maxCount == 0) {
+                    found += there.stack.count
+                    continue
+                }
+                val taking = if (maxCount < 0) there.stack.count else minOf(there.stack.count, maxCount - found)
+                if (taking == 0) continue
+                container[slot] = if (taking < there.stack.count) there.copy(stack = there.stack.copy(count = there.stack.count - taking)) else null
+                found += taking
+                changed += InventorySlot(slot, container[slot]?.stack, container[slot]?.id ?: 0, window)
+            }
+        }
+        if (changed.isNotEmpty()) send(*changed.toTypedArray())
+        return found
+    }
+
+    /** Disconnects the player, for [reason] if there is one, as a command kicking them does. Everyone hears they left. */
+    fun kick(reason: String?) {
+        log.info("{} was kicked{}", name, reason?.let { ": $it" }.orEmpty())
+        disconnect(Disconnect.Reason.KICKED, reason)
+    }
+
+    /** Disconnects the player, for [reason], with [message] to show them if there is one. Everyone hears they left. */
+    fun disconnect(reason: Disconnect.Reason, message: String? = null) {
+        if (state == State.CLOSED) return
+        send(Disconnect(reason, message))
+        leave()
+        state = State.CLOSED
     }
 
     /** Tells everyone still in the game that this player left, once their session has ended. */
@@ -1212,8 +1384,11 @@ class Session(
                 Attribute("minecraft:player.experience", 0f, 1f, 0f),
             ),
         ),
-        UpdateAbilities(entityId, PermissionLevel.MEMBER, abilitiesFor(config.gameMode), walkSpeed = PLAYER_WALK_SPEED),
+        abilities(),
     )
+
+    /** What the player may do: in their game mode, as an operator or not, and with commands. */
+    private fun abilities() = UpdateAbilities(entityId, permissionLevel, abilitiesFor(gameMode), walkSpeed = PLAYER_WALK_SPEED, commandPermission = permission)
 
     private fun reject() {
         send(Disconnect(Disconnect.Reason.NOT_AUTHENTICATED))
@@ -1304,7 +1479,8 @@ private fun names(packets: Array<out ServerPacket>): String {
  * Every connected player's session, driven by the transport's connection
  * callbacks on the UDP event loop. The game ticks on the same thread, 20
  * times a second: items move, players pick up those in reach, then each
- * player sees what changed.
+ * player sees what changed. The commands players run are shared, and the
+ * console runs them too.
  */
 class Sessions(
     private val config: ServerConfig,
@@ -1312,8 +1488,14 @@ class Sessions(
     private val authenticator: LoginAuthenticator,
     /** The thread the sessions run on, which runs what the world does later, too. */
     private val loop: ScheduledExecutorService,
+    /** Shuts the server down, once `/stop` has disconnected everyone. */
+    private val stop: () -> Unit = {},
 ) {
     private val sessions = HashMap<NetherNetConnection, Session>()
+    private val commands = Commands(config, game, { sessions.values }, Operators(config.permissionsFile), shutDown = ::stopAll)
+
+    /** The console runs commands from the middle of the world's spawn. */
+    private val console = ConsoleSource(game.world.spawn.let { Vec3(it.x + 0.5f, it.y.toFloat(), it.z + 0.5f) })
 
     init {
         loop.scheduleAtFixedRate({ runCatching(::tick).onFailure { log.error("A tick failed", it) } }, TICK_MILLIS, TICK_MILLIS, TimeUnit.MILLISECONDS)
@@ -1333,6 +1515,7 @@ class Sessions(
             viewers = { sessions.values },
             // A task that throws would otherwise fail quietly, in a future nobody looks at.
             schedule = { ticks, task -> loop.schedule({ runCatching(task).onFailure { log.error("A scheduled task failed", it) } }, ticks * TICK_MILLIS, TimeUnit.MILLISECONDS) },
+            commands = commands,
         ) { message ->
             connection.send(message)
         }
@@ -1345,5 +1528,18 @@ class Sessions(
     fun disconnect(connection: NetherNetConnection, reason: DisconnectReason) {
         sessions.remove(connection)?.leave()
         log.debug("Session for network {} ended: {}", connection.networkId, reason)
+    }
+
+    /** Runs [line], typed at the console, on the sessions' thread, and shows what it came to. */
+    fun runConsole(line: String) {
+        loop.execute {
+            runCatching { logOutput(commands.run(console, line)) }.onFailure { log.error("The console's command failed: {}", line, it) }
+        }
+    }
+
+    /** Disconnects everyone, as the server is shutting down, then shuts it down, once the command that asked has finished. */
+    private fun stopAll() {
+        sessions.values.forEach { it.disconnect(Disconnect.Reason.SHUTDOWN) }
+        loop.execute(stop)
     }
 }

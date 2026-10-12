@@ -6,6 +6,7 @@ import org.koremc.registry.BlockState
 import org.koremc.registry.CreativeInventory
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemStack
+import org.koremc.registry.ItemStacks
 
 /**
  * Blocks that drop another item than themselves, and how many. Ores drop
@@ -48,16 +49,13 @@ private val DROPS_NOTHING = setOf(
  * and beds and banners drop in the colour they kept. Chance drops, like
  * saplings from leaves, are for later.
  */
-class Drops(items: List<ItemDefinition>, creative: CreativeInventory, private val blocks: BlockPalette) {
-    private val items = items.associateBy { it.name }
-    private val placing = creative.items.map { it.stack }.filter { it.block != null }.distinctBy { it.item.name }.associateBy { it.item.name }
-    private val inCreative = creative.items.map { it.stack }.distinctBy { it.item.name }.associateBy { it.item.name }
+class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: BlockPalette) {
+    private val stacks = ItemStacks(items, creative, blocks)
 
     /** What [state] drops, given the data it kept, [blockEntity], which a player holding something that harvests it gets. */
     fun of(state: BlockState, blockEntity: NbtMap? = null): List<ItemStack> {
         if (state.properties[UPPER_BLOCK] == 1.toByte() || state.properties[HEAD_PIECE] == 1.toByte() || dropsNothing(state.name)) return emptyList()
         val (name, count) = DROPS_INSTEAD[state.name] ?: singleSlabOf(state.name)?.let { it to 2 } ?: ((itemPlacing(state.name) ?: state.name) to 1)
-        val stack = placing[name] ?: inCreative[name]?.copy(aux = 0) ?: items[name]?.let { ItemStack(it, block = blocks.defaultOf(name)) } ?: return emptyList()
         // Beds and banners keep their colour in their block entity, as their items do in their aux value.
         val colour = when {
             blockEntity == null -> null
@@ -65,7 +63,7 @@ class Drops(items: List<ItemDefinition>, creative: CreativeInventory, private va
             blockEntity.containsKey("Base") -> blockEntity.getInt("Base")
             else -> null
         }
-        return listOf(stack.copy(count = count, aux = colour ?: stack.aux))
+        return listOfNotNull(stacks.of(name, count, aux = colour ?: 0))
     }
 
     private fun dropsNothing(name: String) = name in DROPS_NOTHING || name.endsWith("_leaves") ||

@@ -12,7 +12,11 @@ private const val ACTOR_EVENT = 27
 private const val INVENTORY_SLOT = 50
 
 /** The window and container ID of a player's own items: the hotbar and the rest of the inventory. */
-private const val INVENTORY_WINDOW = 0
+const val INVENTORY_WINDOW = 0
+
+/** The windows of the player's offhand and armour. */
+const val OFFHAND_WINDOW = 119
+const val ARMOUR_WINDOW = 120
 
 /** An item entity's size, a quarter of a block each way. */
 private const val ITEM_SIZE = 0.25f
@@ -103,13 +107,14 @@ data class ActorEvent(val entityId: Long, val event: Int, val data: Int) : Serve
 /**
  * A slot of the player's own items holding [stack], with the ID [stackId],
  * or nothing. The client takes it as it is, as it does when the server
- * changes items outside a request of its own, like picking one up.
+ * changes items outside a request of its own, like picking one up. The
+ * [window] is the player's inventory, or their offhand or armour.
  */
-data class InventorySlot(val slot: Int, val stack: ItemStack?, val stackId: Int) : ServerPacket {
+data class InventorySlot(val slot: Int, val stack: ItemStack?, val stackId: Int, val window: Int = INVENTORY_WINDOW) : ServerPacket {
     override val id get() = INVENTORY_SLOT
 
     override fun encodeBody(out: ByteBuf) {
-        out.writeVarUInt(INVENTORY_WINDOW)
+        out.writeVarUInt(window)
         out.writeVarUInt(slot)
         out.writeBoolean(false) // A container within the window, which the player's own items don't need
         out.writeBoolean(false) // A storage item, like a bundle, to put it in

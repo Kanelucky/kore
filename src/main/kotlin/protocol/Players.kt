@@ -79,6 +79,7 @@ data class AddPlayer(
     val actorData: List<DataItem>,
     val abilities: Set<Ability>,
     val platform: Int,
+    val permissions: PermissionLevel = PermissionLevel.MEMBER,
 ) : ServerPacket {
     override val id get() = ADD_PLAYER
 
@@ -97,7 +98,7 @@ data class AddPlayer(
         out.writeActorData(actorData)
         out.writeVarUInt(0) // Int properties, which only entities from behaviour packs have
         out.writeVarUInt(0) // Float properties, likewise
-        out.writeAbilities(entityId, PermissionLevel.MEMBER, abilities)
+        out.writeAbilities(entityId, permissions, abilities)
         out.writeVarUInt(0) // Entities it rides or is ridden by
         out.writeString("") // Device ID
         out.writeIntLE(platform)
@@ -105,8 +106,10 @@ data class AddPlayer(
 }
 
 /**
- * Another player moving to [position], their eyes, and looking the way
- * [pitch], [yaw] and [headYaw] say. The client moves them there smoothly.
+ * A player moving to [position], their eyes, and looking the way [pitch],
+ * [yaw] and [headYaw] say. The client moves another player there smoothly.
+ * A [teleport] puts them there at once, which is how the server moves a
+ * client's own player, as a command does.
  */
 data class MovePlayer(
     val entityId: Long,
@@ -115,6 +118,7 @@ data class MovePlayer(
     val yaw: Float,
     val headYaw: Float,
     val onGround: Boolean,
+    val teleport: Boolean = false,
 ) : ServerPacket {
     override val id get() = MOVE_PLAYER
 
@@ -124,16 +128,22 @@ data class MovePlayer(
         out.writeFloatLE(pitch)
         out.writeFloatLE(yaw)
         out.writeFloatLE(headYaw)
-        out.writeByte(NORMAL)
+        out.writeByte(if (teleport) TELEPORT else NORMAL)
         out.writeBoolean(onGround)
         out.writeVarULong(0) // The entity they ride: none
-        out.writeBoolean(false) // How they were teleported, which only a teleport has
+        // How they were teleported, which only a teleport has: by a command, and by no entity.
+        out.writeBoolean(teleport)
+        if (teleport) out.writeIntLE(BY_COMMAND).writeIntLE(0)
         out.writeVarULong(0) // The input tick, which only the player's own client goes by
     }
 
     private companion object {
         /** A move like any other, rather than a teleport or a correction. */
         const val NORMAL = 0
+        const val TELEPORT = 2
+
+        /** Why a teleport by a command happened, as the teleport's cause. */
+        const val BY_COMMAND = 3
     }
 }
 

@@ -37,6 +37,34 @@ class VanillaDataTest {
     }
 
     @Test
+    fun `items stack and are named as the game data says, unless their components say how many stack`() {
+        val properties = NbtMap.builder().putCompound("item_properties", NbtMap.builder().putInt("max_stack_size", 1).build()).build()
+        val items = readItems(
+            """
+            [
+                {"name": "minecraft:diamond_sword", "id": 335, "version": 1, "componentBased": true},
+                {"name": "minecraft:ender_pearl", "id": 444, "version": 2, "componentBased": false},
+                {"name": "minecraft:black_wool_slab", "id": -1200, "version": 2, "componentBased": false}
+            ]
+            """,
+            NbtMap.builder().putCompound("minecraft:diamond_sword", NbtMap.builder().putCompound("components", properties).build()).build(),
+            """
+            [
+                {"id": 335, "name": "diamond_sword", "displayName": "Diamond Sword", "stackSize": 64},
+                {"id": 444, "name": "ender_pearl", "displayName": "Ender Pearl", "stackSize": 16}
+            ]
+            """,
+        ).associateBy { it.name }
+
+        assertEquals(1, items.getValue("minecraft:diamond_sword").maxStackSize)
+        assertEquals(16, items.getValue("minecraft:ender_pearl").maxStackSize)
+        assertEquals("Ender Pearl", items.getValue("minecraft:ender_pearl").displayName)
+        // Newer than the data: the usual stack, and a name from its identifier.
+        assertEquals(64, items.getValue("minecraft:black_wool_slab").maxStackSize)
+        assertEquals("Black Wool Slab", items.getValue("minecraft:black_wool_slab").displayName)
+    }
+
+    @Test
     fun `item lists that couldn't go on the wire are rejected`() {
         assertFailsWith<IllegalStateException> { readItems(items("a" to 1, "b" to 1), NbtMap.EMPTY) }
         assertFailsWith<IllegalStateException> { readItems(items("a" to 1, "a" to 2), NbtMap.EMPTY) }
@@ -167,7 +195,8 @@ class VanillaDataTest {
         val items = vanilla.items.associateBy { it.name }
 
         assertTrue(items.size > 1000)
-        assertEquals(ItemDefinition("minecraft:shield", 358, componentBased = false, ItemVersion.NONE), items["minecraft:shield"])
+        assertEquals(ItemDefinition("minecraft:shield", 358, componentBased = false, ItemVersion.NONE, maxStackSize = 1), items["minecraft:shield"])
+        assertEquals(16, items.getValue("minecraft:ender_pearl").maxStackSize)
         assertTrue(items.getValue("minecraft:apple").components.getCompound("components").containsKey("item_properties"))
 
         assertTrue(vanilla.blocks.states.size > 10_000)

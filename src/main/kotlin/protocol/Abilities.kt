@@ -54,11 +54,12 @@ data class UpdateAbilities(
     val walkSpeed: Float = 0.1f,
     val flySpeed: Float = 0.05f,
     val verticalFlySpeed: Float = 1f,
+    val commandPermission: CommandPermission = CommandPermission.ANY,
 ) : ServerPacket {
     override val id get() = UPDATE_ABILITIES
 
     override fun encodeBody(out: ByteBuf) {
-        out.writeAbilities(entityId, permissions, abilities, walkSpeed, flySpeed, verticalFlySpeed)
+        out.writeAbilities(entityId, permissions, abilities, walkSpeed, flySpeed, verticalFlySpeed, commandPermission)
     }
 }
 
@@ -70,10 +71,11 @@ internal fun ByteBuf.writeAbilities(
     walkSpeed: Float = 0.1f,
     flySpeed: Float = 0.05f,
     verticalFlySpeed: Float = 1f,
+    commandPermission: CommandPermission = CommandPermission.ANY,
 ): ByteBuf {
     writeLongLE(entityId)
     writeByte(permissions.ordinal)
-    writeByte(0) // Command permissions: the lowest
+    writeByte(commandPermission.ordinal)
     writeVarUInt(1)
     writeShortLE(BASE_LAYER)
     writeIntLE((1 shl Ability.entries.size) - 1) // Which abilities this layer settles: all of them

@@ -78,6 +78,8 @@ fun ByteBuf.writeBlockPos(pos: BlockPos): ByteBuf = writeVarInt(pos.x).writeVarI
 /** A UUID as two little-endian 64-bit halves, most significant first. */
 fun ByteBuf.writeUuid(uuid: UUID): ByteBuf = writeLongLE(uuid.mostSignificantBits).writeLongLE(uuid.leastSignificantBits)
 
+fun ByteBuf.readUuid() = UUID(readLongLE(), readLongLE())
+
 /** [tag] as network NBT: little-endian, with varuint lengths for names and strings, and zigzag varints for ints, longs and list sizes. */
 fun ByteBuf.writeNbt(tag: NbtMap): ByteBuf = apply { NbtUtils.createNetworkWriter(ByteBufOutputStream(this)).writeTag(tag) }
 

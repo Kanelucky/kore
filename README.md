@@ -136,9 +136,25 @@ Kore finds the authorization service through Minecraft's service discovery and k
 
 `onlineMode = false` turns all of this off for local testing. Anyone can then join under any name, so never run it where the public can reach it.
 
+### ⌨️ Commands and Operators
+
+Players run commands from the chat, and you can type them into the console Kore runs in, without the slash. Kore writes each command the game's way, so the client completes it as it's typed, with the item names `/give` takes. It also lists each command in its own `/help`, and shows what came of it in the player's own language. Target selectors work as in the game: `@s`, `@p`, `@a`, `@r`, `@e` and `@n`, with `r`, `rm`, `c`, `m`, `name` and the rest. Coordinates can be offsets from the player (`~`) or along the way they face (`^`).
+
+Every player may run `/list`, `/me` and `/tell` (or `/w` and `/msg`), and `/help`, which is the client's own: it lists the commands Kore sends, along with the client's, like `/gametips`. Sending the client a `/help` of Kore's replaces it, and the client then loses track of its own commands, so the console alone runs Kore's. Operators may also run `/say`, `/kick`, `/op` and `/deop`, and with cheats on (`allowCheats`, on by default), `/gamemode`, `/give`, `/clear` and `/teleport` (or `/tp`). The console runs all of these, cheats or not, and `/stop`, which disconnects everyone and shuts the server down.
+
+No one is an operator to start with. Type `op` and your name in the console once you've joined:
+
+```text
+op Steve
+```
+
+Kore keeps its operators in `permissions.json` (`permissionsFile` in `ServerConfig`), as the game's dedicated server does, by XUID. Kore also writes the player's name, which is how it knows a player without an XUID, as only offline mode lets in. Under `./gradlew run`, Gradle passes what you type on to Kore. The console prints what a command came to in English.
+
+Each player has their own game mode, which starts as the world's (`gameMode`) and `/gamemode` changes. Kore doesn't save players yet, so a player who leaves comes back in the world's game mode.
+
 ### 📦 Vanilla Data
 
-Clients expect the server to agree with them about the game itself: which items and biomes exist, what the creative inventory holds, and what each block state is called on the network. [CloudburstMC/Data](https://github.com/CloudburstMC/Data) dumps that data from the game, PrismarineJS's [minecraft-data](https://github.com/PrismarineJS/minecraft-data) adds how hard each block is to mine, and Kore keeps its copy in a repository of its own, [KoreMC/data](https://github.com/KoreMC/data), apart from the code. Kore reads it once on start from `data/` in its working directory (`dataDirectory` in `ServerConfig`). If a file is missing, Kore names it and stops.
+Clients expect the server to agree with them about the game itself: which items and biomes exist, what the creative inventory holds, and what each block state is called on the network. [CloudburstMC/Data](https://github.com/CloudburstMC/Data) dumps that data from the game, PrismarineJS's [minecraft-data](https://github.com/PrismarineJS/minecraft-data) adds how hard each block is to mine and how many of each item stack, and Kore keeps its copy in a repository of its own, [KoreMC/data](https://github.com/KoreMC/data), apart from the code. Kore reads it once on start from `data/` in its working directory (`dataDirectory` in `ServerConfig`). If a file is missing, Kore names it and stops.
 
 - **Items** go to every player in the `ItemRegistry`, with the runtime ID each one travels by. The list is the same for everyone, so Kore encodes it once on start rather than at every login.
 - **Biomes** follow in the `BiomeDefinitionList`: each one's climate, colours and tags. Kore leaves out the world generation data, which only a client generating its own terrain would use, so the packet stays under 8 KB.
@@ -147,6 +163,7 @@ Clients expect the server to agree with them about the game itself: which items 
 For the same reason, Kore keeps each player's inventory itself. Every move the player makes is an item stack request: the client predicts the result, and Kore either agrees, listing each changed slot and the ID of the stack now there, or rejects it, which makes the client undo it. Each request names the stacks it expects to find, and one that doesn't match what Kore has is rejected whole. The client doesn't wait for one answer before the next request, so a request can name a stack that an earlier one made by that request's number. Kore remembers recent requests to follow those. Some changes still come in the transactions from before item stack requests, like placing a candle on a candle, and the client names the stacks they changed by the transaction's number until it hears what those slots hold now. Kore remembers that number too, and sends the slots back. Picking from the creative inventory puts a full stack in a hidden output slot for the client to take from. Dropping an item throws it into the world, and crafting waits for recipes.
 - **Blocks defined in data**, rather than in the game's code, go in `StartGame`. Since 26.50 that includes the wool and concrete stairs and slabs and the shelf mushroom. Without their definitions, the client knows these blocks exist but not how they look, and shows them as placeholders.
 - **Block states** are named on the network by a hash, not by their place in a palette: the 32-bit FNV-1a hash of the state's name and properties, written as little-endian NBT. Mojang's protocol docs don't spell the rule out, so the tests check it against the network ID the game gave each of the 22,091 states in its palette.
+- **Stack sizes** come from minecraft-data's `items.json`: how many of each item one slot holds, so swords, beds and boats don't stack and ender pearls only to 16. Items whose components say how many stack go by those. Commands name items in English, from the same file, as Kore has no way to find the client's own name for each.
 - **Mining** takes each block's hardness, the tool that digs it quicker and whether it needs one to drop anything, from minecraft-data's `blocks.json`. Cloudburst's data only has these for the blocks defined in data, which use their own. minecraft-data's table is for 1.26.30, so the newer poplar wood borrows spruce's, and its leaves oak's. It names the tools that harvest a block by Java Edition item IDs, which Kore has no use for, but how many there are tells the tier: every tier, stone and up, iron and up, or diamond and up.
 
 The data must be for the same client release as `version` in `ServerConfig`, though minecraft-data trails a release or two behind.
@@ -220,6 +237,14 @@ src/main/kotlin/
 ├── Session.kt                       # Each player's walk through the login sequence
 ├── GameData.kt                      # What every session shares: the world and the game's definitions
 ├── Authentication.kt                # Deciding whether a login proves who it claims to be
+├── command/
+│   ├── Command.kt                   # Commands, their parameters, and a run of one
+│   ├── Syntax.kt                    # Reading a command line: the parameter types and coordinates
+│   ├── Selectors.kt                 # Players by name, and selectors like @a[r=10]
+│   ├── CommandMap.kt                # Running command lines, and listing commands for the client
+│   ├── Commands.kt                  # The game's commands that Kore has
+│   ├── Operators.kt                 # Who the operators are, kept in permissions.json
+│   └── Console.kt                   # The server console, and its output in English
 ├── auth/
 │   ├── Jose.kt                      # Signed tokens and the keys that verify them
 │   └── MultiplayerTokens.kt         # Minecraft's authorization service and its signing keys
@@ -239,6 +264,7 @@ src/main/kotlin/
 │   ├── Players.kt                   # Other players: the player list, appearing, moving, holding and swinging
 │   ├── Skins.kt                     # How players look, from their client data to the wire
 │   ├── Chat.kt                      # Chat messages, and the game's own messages in each client's language
+│   ├── Commands.kt                  # Commands the client may run, its requests, their output, and game modes
 │   └── LoginRequest.kt              # Reading who a client claims to be
 ├── world/
 │   ├── Positions.kt                 # Block, chunk and exact positions
@@ -266,6 +292,7 @@ src/main/kotlin/
 ├── registry/
 │   ├── VanillaData.kt               # Loads the game's items, block states and biomes on start
 │   ├── Items.kt                     # Items, as the client's item registry lists them
+│   ├── ItemStacks.kt                # Stacks of items by name, with the block each places
 │   ├── Biomes.kt                    # Biomes, as the client's biome definitions describe them
 │   ├── Creative.kt                  # The creative inventory's tabs, groups and items
 │   ├── Mining.kt                    # Each block's hardness and tools, from minecraft-data
@@ -338,7 +365,8 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Players seeing each other
 - [x] Chat, and players joining and leaving
 - [ ] Mobs
-- [ ] Commands
+- [x] Commands as the game writes them, with selectors, operators and the console
+- [ ] The rest of the game's commands
 
 ## 🤝 Contributing
 

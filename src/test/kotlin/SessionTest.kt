@@ -285,8 +285,8 @@ class SessionTest {
         clientSends(setLocalPlayerAsInitialised(runtimeId = 7))
         assertTrue(session.isInGame)
 
-        // Then the client learns about its own player: its actor data, attributes and abilities.
-        assertEquals(listOf(0x27, 0x1D, 0xBB), batches.decode(sent.last()).map { it[0].toInt() and 0xFF })
+        // Then the client learns about its own player: its actor data, attributes and abilities, and the commands it may run.
+        assertEquals(listOf(0x27, 0x1D, 0xBB, 0x4C), batches.decode(sent.last()).map { it[0].toInt() and 0xFF })
     }
 
     @Test

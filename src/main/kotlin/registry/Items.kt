@@ -20,7 +20,18 @@ data class ItemDefinition(
     val version: ItemVersion,
     /** The item's component data, which most items leave empty. */
     val components: NbtMap = NbtMap.EMPTY,
+    /** The most of this item one slot holds. Data-driven items say; for the rest, the game's item data does. */
+    val maxStackSize: Int = components.maxStackSize() ?: 64,
+    /** What the item is called in English, like `Diamond Sword`. */
+    val displayName: String = displayNameOf(name),
 )
+
+/** The most of an item one slot holds, if its [components][ItemDefinition.components] say. */
+internal fun NbtMap.maxStackSize(): Int? =
+    getCompound("components", NbtMap.EMPTY).getCompound("item_properties", NbtMap.EMPTY).takeIf { it.containsKey("max_stack_size") }?.getInt("max_stack_size")
+
+/** A name for the item called [name] when the game's data has none: `minecraft:black_wool_slab` is `Black Wool Slab`. */
+internal fun displayNameOf(name: String) = name.substringAfter(':').split('_').joinToString(" ") { word -> word.replaceFirstChar(Char::uppercaseChar) }
 
 /**
  * Some of an item, as inventories and the creative inventory hold it: how
@@ -34,10 +45,6 @@ data class ItemStack(
     val block: BlockState? = null,
     val nbt: NbtMap = NbtMap.EMPTY,
 )
-
-/** The most of this item one slot holds. Data-driven items say; for the rest, Kore assumes the usual 64. */
-val ItemDefinition.maxStackSize: Int
-    get() = components.getCompound("components", NbtMap.EMPTY).getCompound("item_properties", NbtMap.EMPTY).getInt("max_stack_size", 64)
 
 /** Whether [other] is the same item, variant, block and NBT as this, so the two could share a slot. */
 fun ItemStack.sameKindAs(other: ItemStack) = item == other.item && aux == other.aux && block == other.block && nbt == other.nbt

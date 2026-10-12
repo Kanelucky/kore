@@ -90,6 +90,9 @@ enum class InputFlag(val id: Int) {
     SNEAKING(8),
     START_SPRINTING(25),
     STOP_SPRINTING(26),
+
+    /** Set on the first tick after the client moved its player where a teleport put them. */
+    HANDLED_TELEPORT(37),
     START_FLYING(42),
     STOP_FLYING(43),
 
@@ -224,6 +227,7 @@ data class Disconnect(
         OUTDATED_CLIENT(35),
         NOT_AUTHENTICATED(46),
         KICKED(55),
+        SHUTDOWN(68),
     }
 
     override val id get() = DISCONNECT
@@ -455,6 +459,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             MOB_EQUIPMENT -> decodeMobEquipment(buffer)
             ANIMATE -> decodeAnimate(buffer)
             TEXT -> decodeText(buffer)
+            COMMAND_REQUEST -> decodeCommandRequest(buffer)
             PLAYER_ACTION -> decodePlayerAction(buffer)
             PLAYER_AUTH_INPUT -> decodePlayerAuthInput(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)

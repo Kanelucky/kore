@@ -6,6 +6,7 @@ import org.koremc.protocol.CreativeContent
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.ServerPacket
 import org.koremc.registry.CreativeInventory
+import org.koremc.registry.ItemStacks
 import org.koremc.registry.Mining
 import org.koremc.registry.VanillaData
 import org.koremc.world.Drops
@@ -14,8 +15,8 @@ import org.koremc.world.FlatWorld
 /**
  * What every session shares: the world players join, the game's
  * definitions they're sent as they join, encoded once, the creative
- * inventory their requests are checked against, and how blocks take to
- * mining.
+ * inventory their requests are checked against, how blocks take to mining,
+ * and the items there are, to hand out.
  */
 class GameData(
     val world: FlatWorld,
@@ -28,6 +29,8 @@ class GameData(
     val mining: Map<String, Mining>,
     /** What blocks drop when survival players break them. */
     val drops: Drops,
+    /** Every item, to make stacks of by name, as commands do. */
+    val items: ItemStacks = ItemStacks(emptyList(), creative, world.blocks),
 ) {
     companion object {
         fun of(vanilla: VanillaData, world: FlatWorld) = GameData(
@@ -37,6 +40,7 @@ class GameData(
             creative = vanilla.creative,
             mining = vanilla.mining,
             drops = Drops(vanilla.items, vanilla.creative, vanilla.blocks),
+            items = ItemStacks(vanilla.items, vanilla.creative, vanilla.blocks),
         )
     }
 }

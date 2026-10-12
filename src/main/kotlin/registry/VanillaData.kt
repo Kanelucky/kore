@@ -16,8 +16,9 @@ private val json = Json { ignoreUnknownKeys = true }
 /**
  * The game's own definitions, which clients expect the server to agree with:
  * every item, block state and biome, and the creative inventory. They're
- * dumped from the game by CloudburstMC, with how blocks take to mining from
- * PrismarineJS's minecraft-data, kept apart from Kore's code in
+ * dumped from the game by CloudburstMC, with how blocks take to mining, and
+ * how many of each item stack, from PrismarineJS's minecraft-data, kept
+ * apart from Kore's code in
  * https://github.com/KoreMC/data, and read once, on start.
  */
 data class VanillaData(
@@ -39,6 +40,7 @@ data class VanillaData(
             val items = readItems(
                 itemStates = directory.resolve("runtime_item_states.json").readText(),
                 components = readNbt(directory.resolve("item_components.nbt")),
+                details = directory.resolve("items.json").readText(),
             )
             val blocks = readBlockPalette(readNbt(directory.resolve("block_palette.nbt")))
             val blockDefinitions = readBlockDefinitions(readNbt(directory.resolve("data_driven_blocks.nbt")))
@@ -59,18 +61,31 @@ data class VanillaData(
 @Serializable
 private class ItemState(val name: String, val id: Int, val version: Int, val componentBased: Boolean)
 
+/** An entry in minecraft-data's `items.json`, which names items without their namespace. */
+@Serializable
+private class ItemDetails(val name: String, val stackSize: Int, val displayName: String)
+
 /**
  * Reads the item list from `runtime_item_states.json`, giving each item its
- * entry from `item_components.nbt`, which is keyed by item name.
+ * entry from `item_components.nbt`, which is keyed by item name. How many
+ * of an item a slot holds, and what it's called, come from the [details]
+ * in minecraft-data's `items.json`, unless its components say how many.
+ * Items newer than those details stack to 64, and get a name made from
+ * their identifier.
  */
-fun readItems(itemStates: String, components: NbtMap): List<ItemDefinition> {
+fun readItems(itemStates: String, components: NbtMap, details: String = "[]"): List<ItemDefinition> {
+    val byName = json.decodeFromString<List<ItemDetails>>(details).associateBy { "minecraft:${it.name}" }
     val items = json.decodeFromString<List<ItemState>>(itemStates).map { item ->
+        val itemComponents = components.getCompound(item.name, NbtMap.EMPTY)
+        val detail = byName[item.name]
         ItemDefinition(
             name = item.name,
             runtimeId = item.id,
             componentBased = item.componentBased,
             version = ItemVersion.entries.getOrNull(item.version) ?: error("${item.name} has unknown item version ${item.version}"),
-            components = components.getCompound(item.name, NbtMap.EMPTY),
+            components = itemComponents,
+            maxStackSize = itemComponents.maxStackSize() ?: detail?.stackSize ?: 64,
+            displayName = detail?.displayName ?: displayNameOf(item.name),
         )
     }
     items.find { it.runtimeId !in Short.MIN_VALUE..Short.MAX_VALUE }?.let { error("${it.name}'s runtime ID ${it.runtimeId} doesn't fit in 16 bits") }

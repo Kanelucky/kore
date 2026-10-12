@@ -2,7 +2,6 @@ package org.koremc.world
 
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
-import org.koremc.registry.maxStackSize
 import org.koremc.registry.sameKindAs
 import kotlin.math.abs
 import kotlin.math.floor
@@ -221,6 +220,24 @@ private fun FlatWorld.clip(box: Box, axis: Axis, by: Double): Double {
 }
 
 private fun blocksAcross(box: Box, axis: Int) = floor(box.min[axis]).toInt()..floor(box.max[axis] - TOUCHING).toInt()
+
+/**
+ * Whether something [width] across and [height] tall, standing at
+ * [bottom], would be clear of the solid part of every block, by the same
+ * reckoning items fall by.
+ */
+fun FlatWorld.isClear(bottom: Vec3, width: Float, height: Float): Boolean {
+    val half = width / 2.0
+    val box = Box(
+        doubleArrayOf(bottom.x - half, bottom.y.toDouble(), bottom.z - half),
+        doubleArrayOf(bottom.x + half, bottom.y + height.toDouble(), bottom.z + half),
+    )
+    for (x in blocksAcross(box, 0)) for (y in blocksAcross(box, 1)) for (z in blocksAcross(box, 2)) {
+        val heights = stateAt(BlockPos(x, y, z))?.solidHeights() ?: continue
+        if (y + heights.start < box.max[1] - TOUCHING && y + heights.endInclusive > box.min[1] + TOUCHING) return false
+    }
+    return true
+}
 
 /**
  * The heights within a block that items land on and bump into, or null for

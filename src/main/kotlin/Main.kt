@@ -2,6 +2,7 @@ package org.koremc
 
 import io.netty.channel.nio.NioEventLoopGroup
 import org.koremc.auth.AuthService
+import org.koremc.command.Console
 import org.koremc.network.NetherNetRtcHandler
 import org.koremc.network.NetherNetSignalingHandler
 import org.koremc.network.RtcServer
@@ -22,6 +23,7 @@ import org.slf4j.LoggerFactory
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.file.NoSuchFileException
+import java.util.concurrent.CompletableFuture
 import kotlin.system.exitProcess
 
 private val log = LoggerFactory.getLogger("Kore")
@@ -57,8 +59,10 @@ fun main() {
     val world = FlatWorld.vanilla(vanilla.blocks)
     // One thread carries every client's UDP traffic and runs every session, so the world needs no locks.
     val loop = NioEventLoopGroup(1)
+    // Completes when the server should stop: when `/stop` runs, or the signaling server closes.
+    val stopping = CompletableFuture<Unit>()
     // Built once, on start, so no player's login pays to encode the definitions.
-    val sessions = Sessions(config, GameData.of(vanilla, world), LoginAuthenticator(auth.verifier, config.onlineMode), loop.next())
+    val sessions = Sessions(config, GameData.of(vanilla, world), LoginAuthenticator(auth.verifier, config.onlineMode), loop.next(), stop = { stopping.complete(Unit) })
 
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),
@@ -90,7 +94,9 @@ fun main() {
         val tcp = signaling.bind()
         rtc.bind()
         log.info("Kore is listening for NetherNet on {} (TCP signaling, UDP gameplay)", tcp.localAddress())
-        tcp.closeFuture().syncUninterruptibly()
+        Console(sessions::runConsole).start()
+        tcp.closeFuture().addListener { stopping.complete(Unit) }
+        stopping.join()
     } finally {
         signaling.close()
         rtc.close()

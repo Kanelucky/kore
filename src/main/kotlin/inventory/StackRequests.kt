@@ -9,7 +9,6 @@ import org.koremc.protocol.StackRequest
 import org.koremc.protocol.StackResponse
 import org.koremc.registry.CreativeInventory
 import org.koremc.registry.ItemStack
-import org.koremc.registry.maxStackSize
 import org.koremc.registry.sameKindAs
 import org.slf4j.LoggerFactory
 

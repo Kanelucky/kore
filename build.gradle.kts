@@ -41,3 +41,8 @@ tasks.test {
     // Some tests check against the game data in data/, so they rerun when it changes. Without it, they're skipped.
     inputs.files(fileTree("data")).withPropertyName("gameData").withPathSensitivity(PathSensitivity.RELATIVE)
 }
+
+// The console reads commands from the server's input, which Gradle passes on only if asked.
+tasks.named<JavaExec>("run") {
+    standardInput = System.`in`
+}

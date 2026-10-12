@@ -30,6 +30,14 @@ data class ServerConfig(
     val maxPlayers: Int = 20,
     val gameMode: GameMode = GameMode.SURVIVAL,
     val difficulty: Difficulty = Difficulty.NORMAL,
+    /**
+     * Whether commands that change the game, like `/gamemode` and `/give`,
+     * work. Only operators may run those anyway, and the console runs them
+     * either way.
+     */
+    val allowCheats: Boolean = true,
+    /** Where the operators are kept, as the game's dedicated server keeps them, by XUID. */
+    val permissionsFile: Path = Path.of("permissions.json"),
     val seed: Long = 0,
     /** The most chunks around each player Kore will send, whatever the client asks for. */
     val viewDistance: Int = 8,
