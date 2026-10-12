@@ -7,20 +7,43 @@ private const val ITEM_STACK_RESPONSE = 148
 
 /** The containers Kore keeps, by the numbers the client names them with in item stack requests. */
 object ContainerName {
+    const val ANVIL_INPUT = 0
+    const val ANVIL_MATERIAL = 1
+    const val SMITHING_TABLE_INPUT = 3
+    const val SMITHING_TABLE_MATERIAL = 4
     const val ARMOR = 6
     /** A chest's or an ender chest's items. */
     const val LEVEL_ENTITY = 7
+    /** A brewing stand's reagent, its three bottles, and its blaze powder. */
+    const val BREWING_INPUT = 9
+    const val BREWING_RESULT = 10
+    const val BREWING_FUEL = 11
     const val HOTBAR_AND_INVENTORY = 12
     /** The crafting grid: the inventory's two by two, or a crafting table's three by three. */
     const val CRAFTING_INPUT = 13
+    const val ENCHANTING_INPUT = 22
+    const val ENCHANTING_MATERIAL = 23
+    /** A furnace's fuel, what it cooks and what it made. A blast furnace and a smoker name what they cook their own way. */
+    const val FURNACE_FUEL = 24
+    const val FURNACE_INGREDIENT = 25
+    const val FURNACE_RESULT = 26
     const val HOTBAR = 28
     const val INVENTORY = 29
     const val SHULKER_BOX = 30
     const val OFFHAND = 34
+    const val LOOM_INPUT = 41
+    const val LOOM_DYE = 42
+    const val LOOM_MATERIAL = 43
+    const val BLAST_FURNACE_INGREDIENT = 45
+    const val SMOKER_INGREDIENT = 46
+    const val GRINDSTONE_INPUT = 50
+    const val GRINDSTONE_ADDITIONAL = 51
+    const val STONECUTTER_INPUT = 53
     const val BARREL = 58
     const val CURSOR = 59
     /** Where crafted and creative items appear, before the client moves them somewhere. */
     const val CREATED_OUTPUT = 60
+    const val SMITHING_TABLE_TEMPLATE = 61
 }
 
 /** A slot a request names: its container, the slot there, and the ID of the stack the client expects in it. */
@@ -58,15 +81,32 @@ sealed interface StackAction {
     /** Puts the craft's result numbered [result] in the created output, for a recipe that makes more than one thing. */
     data class Create(val result: Int) : StackAction
 
+    /**
+     * Works the items in an anvil, as the recipe numbered [recipe], naming
+     * what it makes by the request's filter string numbered [nameIndex], if
+     * it has any.
+     */
+    data class CraftOptional(val recipe: Int, val nameIndex: Int) : StackAction
+
+    /** Weaves the banner pattern called [pattern] into the banners in a loom, [times] over. */
+    data class CraftLoom(val pattern: String, val times: Int) : StackAction
+
+    /** Takes the enchantments off, and mends, what's in a grindstone. */
+    data class CraftGrindstone(val recipe: Int, val times: Int) : StackAction
+
     /** An action that only describes what others do, like a craft's results. It changes nothing itself. */
     data class Informational(val type: Int) : StackAction
 
-    /** An action Kore can't carry out yet, like crafting a recipe, which fails its request. */
+    /** An action Kore can't carry out yet, like paying a beacon, which fails its request. */
     data class Unsupported(val type: Int) : StackAction
 }
 
-/** One request: actions the client has already predicted, which the server accepts or rejects as a whole. */
-data class StackRequest(val id: Int, val actions: List<StackAction>)
+/**
+ * One request: actions the client has already predicted, which the server
+ * accepts or rejects as a whole, and text the player typed for them, like
+ * an anvil's new name.
+ */
+data class StackRequest(val id: Int, val actions: List<StackAction>, val filterStrings: List<String> = emptyList())
 
 /** The client's item stack requests, sent whenever the player moves items around their inventory. */
 data class ItemStackRequest(val requests: List<StackRequest>) : ClientPacket
@@ -123,9 +163,9 @@ internal fun ByteBuf.readStackRequest(): StackRequest {
     val count = readVarUInt()
     if (count > 100) throw PacketException("$count actions in one item stack request")
     val actions = List(count) { readStackAction() }
-    readList { readString() } // Strings to filter, like an anvil's new name
+    val filterStrings = readList { readString() }
     readIntLE() // Why they need filtering
-    return StackRequest(id, actions)
+    return StackRequest(id, actions, filterStrings)
 }
 
 // Action types, as Mojang numbers them now.
@@ -164,9 +204,9 @@ private fun ByteBuf.readStackAction(): StackAction {
         CRAFT_RECIPE -> StackAction.Craft(readVarUInt(), readUnsignedByte().toInt())
         CRAFT_RECIPE_AUTO -> StackAction.Craft(readVarUInt(), readUnsignedByte().toInt(), auto = true).also { readList { skipIngredient() } }
         CRAFT_CREATIVE -> StackAction.CraftCreative(readVarUInt(), readUnsignedByte().toInt())
-        CRAFT_RECIPE_OPTIONAL -> StackAction.Unsupported(type).also { readVarUInt(); readIntLE() }
-        CRAFT_REPAIR_AND_DISENCHANT -> StackAction.Unsupported(type).also { readIntLE(); readUnsignedByte(); readVarInt() }
-        CRAFT_LOOM -> StackAction.Unsupported(type).also { readString(); readUnsignedByte() }
+        CRAFT_RECIPE_OPTIONAL -> StackAction.CraftOptional(readVarUInt(), readIntLE())
+        CRAFT_REPAIR_AND_DISENCHANT -> StackAction.CraftGrindstone(readIntLE(), readUnsignedByte().toInt()).also { readVarInt() } // What the client reckons it earns
+        CRAFT_LOOM -> StackAction.CraftLoom(readString(), readUnsignedByte().toInt())
         CRAFT_RESULTS -> StackAction.Informational(type).also { readList { skipRequestItem() }; readUnsignedByte() }
         else -> throw PacketException("Unknown item stack request action $type")
     }

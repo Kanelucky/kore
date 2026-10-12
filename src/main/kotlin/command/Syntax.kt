@@ -165,6 +165,23 @@ class SoftEnumType(val name: String, val values: List<String>, private val names
     }
 }
 
+/**
+ * A whole number written with [suffix] after it, in either case, like the
+ * levels in `/xp 5L`. The client can't take one: described with a
+ * suffix, `L` or `l`, marked valid or not, it breaks the client's
+ * grammar for the command, which crashes it as the command's typed. So a
+ * way to write a command that takes one isn't sent to the client, which
+ * sends the line all the same, for Kore to read.
+ */
+class SuffixedIntType(val suffix: String) : ParamType("int") {
+    override fun read(reader: CommandReader): Int {
+        val start = reader.skipSpaces().cursor
+        val word = reader.word()
+        if (!word.endsWith(suffix, ignoreCase = true)) reader.failAt(start)
+        return word.dropLast(suffix.length).toIntOrNull() ?: reader.failAt(start)
+    }
+}
+
 /** A number as a command gave it: as it is, or as an offset from a value it's [relative] to. */
 data class Relative(val value: Double, val relative: Boolean) {
     fun from(current: Double) = if (relative) current + value else value

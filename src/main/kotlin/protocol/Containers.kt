@@ -6,6 +6,8 @@ import org.koremc.world.BlockPos
 
 private const val BLOCK_EVENT = 26
 private const val INVENTORY_CONTENT = 49
+private const val CONTAINER_SET_DATA = 51
+private const val PLAYER_ENCHANT_OPTIONS = 146
 
 /** The window of the slots the inventory screen itself uses: the cursor, the crafting grid and the created output. */
 const val UI_WINDOW = 124
@@ -17,6 +19,16 @@ object ContainerType {
 
     /** A crafting table's three by three grid. */
     const val WORKBENCH = 1
+    const val FURNACE = 2
+    const val ENCHANTMENT = 3
+    const val BREWING_STAND = 4
+    const val ANVIL = 5
+    const val LOOM = 24
+    const val GRINDSTONE = 26
+    const val BLAST_FURNACE = 27
+    const val SMOKER = 28
+    const val STONECUTTER = 29
+    const val SMITHING_TABLE = 33
 }
 
 /**
@@ -48,5 +60,66 @@ data class BlockEvent(val position: BlockPos, val type: Int, val data: Int) : Se
     companion object {
         /** A chest, shulker box or ender chest opening (data 1) or closing (data 0). */
         const val CHANGE_STATE = 1
+    }
+}
+
+/**
+ * One of a window's numbers changing, like how far along a furnace is,
+ * which the client shows in its screen: [property] of the window [window]
+ * is now [value].
+ */
+data class ContainerSetData(val window: Int, val property: Int, val value: Int) : ServerPacket {
+    override val id get() = CONTAINER_SET_DATA
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeByte(window)
+        out.writeVarInt(property)
+        out.writeVarInt(value)
+    }
+
+    companion object {
+        /** How many ticks a furnace has cooked what it's cooking for. */
+        const val FURNACE_COOK_TIME = 0
+
+        /** How many ticks the fuel burning in a furnace has left, and how many it had, which the flame shows. */
+        const val FURNACE_LIT_TIME = 1
+        const val FURNACE_LIT_DURATION = 2
+
+        /** How many ticks a brewing stand has left to brew, from 400 down. */
+        const val BREWING_TIME = 0
+
+        /** How many brews a brewing stand's blaze powder has left, and how many it had. */
+        const val BREWING_FUEL = 1
+        const val BREWING_FUEL_TOTAL = 2
+    }
+}
+
+/** An enchantment at a level, as an enchanting table offers it. */
+data class OfferedEnchantment(val id: Int, val level: Int)
+
+/**
+ * One of the three things an enchanting table offers: the level a player
+ * needs, the enchantments, the made-up words it shows, and the number the
+ * client names it by when the player picks it.
+ */
+data class EnchantOption(val cost: Int, val slot: Int, val enchantments: List<OfferedEnchantment>, val name: String, val networkId: Int)
+
+/** What the enchanting table a player has open offers for the item in it. */
+data class PlayerEnchantOptions(val options: List<EnchantOption>) : ServerPacket {
+    override val id get() = PLAYER_ENCHANT_OPTIONS
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarUInt(options.size)
+        for (option in options) {
+            out.writeVarUInt(option.cost)
+            out.writeIntLE(option.slot)
+            // Three lists, of which the client shows the middle one.
+            out.writeVarUInt(0)
+            out.writeVarUInt(option.enchantments.size)
+            for (enchantment in option.enchantments) out.writeByte(enchantment.id).writeByte(enchantment.level)
+            out.writeVarUInt(0)
+            out.writeString(option.name)
+            out.writeVarUInt(option.networkId)
+        }
     }
 }

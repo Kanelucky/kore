@@ -195,7 +195,15 @@ class VanillaDataTest {
         val items = vanilla.items.associateBy { it.name }
 
         assertTrue(items.size > 1000)
-        assertEquals(ItemDefinition("minecraft:shield", 358, componentBased = false, ItemVersion.NONE, maxStackSize = 1), items["minecraft:shield"])
+        val shield = items.getValue("minecraft:shield")
+        assertEquals(ItemDefinition("minecraft:shield", 358, componentBased = false, ItemVersion.NONE, maxStackSize = 1), shield.copy(maxDurability = 0, repairItems = emptySet(), enchantCategories = emptySet()))
+        // A shield wears out, planks mend it, and it takes Unbreaking, but a table can't enchant it.
+        assertEquals(336, shield.maxDurability)
+        assertTrue("minecraft:oak_planks" in shield.repairItems && "durability" in shield.enchantCategories)
+        assertEquals(0, shield.enchantability)
+        assertEquals(10, items.getValue("minecraft:diamond_sword").enchantability)
+        assertEquals(9, items.getValue("minecraft:iron_chestplate").enchantability)
+        assertEquals(15, items.getValue("minecraft:netherite_spear").enchantability) // From its own components
         assertEquals(16, items.getValue("minecraft:ender_pearl").maxStackSize)
         assertTrue(items.getValue("minecraft:apple").components.getCompound("components").containsKey("item_properties"))
 

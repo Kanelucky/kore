@@ -5,8 +5,12 @@ import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
 
-/** A block that broke, with the data it kept, like a bed's colour, which what it drops can need. */
-data class BrokenBlock(val state: BlockState, val blockEntity: NbtMap? = null, val contents: List<ItemStack?> = emptyList())
+/**
+ * A block that broke, with the data it kept, like a bed's colour, which
+ * what it drops can need, the items it held, and the experience a furnace
+ * had stored.
+ */
+data class BrokenBlock(val state: BlockState, val blockEntity: NbtMap? = null, val contents: List<ItemStack?> = emptyList(), val experience: Float = 0f)
 
 /** A sound a block makes as it changes, by the game's name for it, with its data: the network ID of the block making it, or -1. */
 data class BlockSound(val pos: BlockPos, val sound: String, val data: Int)
@@ -148,7 +152,7 @@ internal val AROUND = listOf(Face.NORTH, Face.EAST, Face.SOUTH, Face.WEST)
  */
 internal fun FlatWorld.breakAt(pos: BlockPos, state: BlockState, broken: MutableMap<BlockPos, BrokenBlock>): BlockPos? {
     val blockEntity = blockEntityAt(pos)
-    broken[pos] = BrokenBlock(state, blockEntity, emptyContainer(pos))
+    broken[pos] = BrokenBlock(state, blockEntity, emptyContainer(pos), takeExperience(pos))
     set(pos, blocks.stateOf(AIR))
     return blockEntity?.let { unpairChestFrom(it) }
 }

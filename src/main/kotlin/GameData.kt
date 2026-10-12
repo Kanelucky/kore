@@ -7,6 +7,8 @@ import org.koremc.protocol.CreativeContent
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.ServerPacket
 import org.koremc.registry.CreativeInventory
+import org.koremc.registry.Enchantments
+import org.koremc.registry.Fuel
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.Recipes
 import org.koremc.registry.Mining
@@ -18,7 +20,8 @@ import org.koremc.world.FlatWorld
  * What every session shares: the world players join, the game's
  * definitions they're sent as they join, encoded once, the creative
  * inventory their requests are checked against, how blocks take to mining,
- * the items there are, to hand out, and the recipes that make them.
+ * the items there are, to hand out, the recipes that make them, what
+ * burns in a furnace, and the enchantments there are.
  */
 class GameData(
     val world: FlatWorld,
@@ -35,6 +38,10 @@ class GameData(
     val items: ItemStacks = ItemStacks(emptyList(), creative, world.blocks),
     /** Every recipe, for crafting. */
     val recipes: Recipes = Recipes.NONE,
+    /** What burns in a furnace, and for how long. */
+    val fuel: Fuel = Fuel(recipes, items.of("minecraft:bucket")),
+    /** Every enchantment, for anvils, grindstones and enchanting tables. */
+    val enchantments: Enchantments = Enchantments.NONE,
 ) {
     companion object {
         fun of(vanilla: VanillaData, world: FlatWorld) = GameData(
@@ -46,6 +53,7 @@ class GameData(
             drops = Drops(vanilla.items, vanilla.creative, vanilla.blocks),
             items = ItemStacks(vanilla.items, vanilla.creative, vanilla.blocks),
             recipes = vanilla.recipes,
+            enchantments = vanilla.enchantments,
         )
     }
 }

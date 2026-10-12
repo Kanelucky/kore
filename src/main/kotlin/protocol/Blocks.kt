@@ -165,6 +165,13 @@ data class LevelEvent(val event: Int, val position: Vec3, val data: Int) : Serve
         /** The burst of particles and the sound of a block breaking. The data is the block's network ID. */
         const val PARTICLES_DESTROY_BLOCK = 2001
 
+        /** An anvil clanging as a player uses it, or breaking as it wears out. */
+        const val SOUND_ANVIL_BREAK = 1020
+        const val SOUND_ANVIL_USE = 1021
+
+        /** The chime of a player picking up experience. */
+        const val SOUND_EXPERIENCE_ORB = 1051
+
         /**
          * Cracks spreading over a block as it's broken. The data is how much
          * of the way they get each tick, out of 65535, and the client carries

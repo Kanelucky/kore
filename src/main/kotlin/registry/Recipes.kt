@@ -115,6 +115,9 @@ class Recipes(
 ) {
     private val byNetworkId = recipes.associateBy { it.networkId }
 
+    /** A number past every recipe's, from which to number other things the client crafts, like an enchanting table's offers. */
+    val nextNetworkId = (recipes.maxOfOrNull { it.networkId } ?: 0) + 1
+
     operator fun get(networkId: Int): Recipe? = byNetworkId[networkId]
 
     /** Whether [stack] is what [ingredient] takes, setting aside how many. */
@@ -125,6 +128,30 @@ class Recipes(
 
     /** The items [tag] takes in. */
     fun tagged(tag: String): Set<String> = tags[tag].orEmpty()
+
+    /** The recipes of each block that cooks one item into another, like a furnace, by the item they take. */
+    private val cooked: Map<String, Map<String, List<ShapelessRecipe>>> = recipes.filterIsInstance<ShapelessRecipe>()
+        .filter { it.inputs.size == 1 && it.inputs[0] is Ingredient.Item }
+        .groupBy { it.block }
+        .mapValues { (_, recipes) -> recipes.groupBy { (it.inputs[0] as Ingredient.Item).name } }
+
+    /** What [block], like `furnace` or `smoker`, makes of one of [stack], or null if it makes nothing of it. */
+    fun cook(block: String, stack: ItemStack): ItemStack? =
+        cooked[block]?.get(stack.item.name)?.firstOrNull { accepts(it.inputs[0], stack) }?.outputs?.firstOrNull()
+
+    /**
+     * What brewing [reagent] into [bottle] makes of it, or null if nothing:
+     * a potion of another kind, or the same potion in another kind of
+     * bottle, like a splash potion.
+     */
+    fun brew(bottle: ItemStack, reagent: ItemStack): ItemStack? {
+        potionMixes.find { it.input.item == bottle.item && it.input.aux == bottle.aux && it.reagent.item == reagent.item && it.reagent.aux == reagent.aux }
+            ?.let { return it.output.copy(count = 1) }
+        return containerMixes.find { it.input == bottle.item && it.reagent == reagent.item }?.let { ItemStack(it.output, aux = bottle.aux) }
+    }
+
+    /** Whether brewing takes [stack] as a reagent, to brew into something. */
+    fun isReagent(stack: ItemStack) = potionMixes.any { it.reagent.item == stack.item } || containerMixes.any { it.reagent == stack.item }
 
     companion object {
         val NONE = Recipes(emptyList(), emptyList(), emptyList(), emptyMap())

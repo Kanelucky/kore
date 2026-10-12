@@ -8,15 +8,21 @@ import org.koremc.command.ConsoleSource
 import org.koremc.command.Operators
 import org.koremc.command.Selectable
 import org.koremc.command.logOutput
-import org.koremc.inventory.CURSOR_SLOT
 import org.koremc.inventory.Container
+import org.koremc.inventory.Crafted
+import org.koremc.inventory.Crafter
+import org.koremc.inventory.ENCHANTING_INPUT_SLOT
+import org.koremc.inventory.EnchantingOffer
 import org.koremc.inventory.HOTBAR_SIZE
-import org.koremc.inventory.LARGE_GRID
+import org.koremc.inventory.MAX_BOOKSHELVES
+import org.koremc.inventory.OpenContainer
 import org.koremc.inventory.PairedContainer
-import org.koremc.inventory.SMALL_GRID
 import org.koremc.inventory.SlotStack
 import org.koremc.inventory.PlayerInventory
 import org.koremc.inventory.StackRequestHandler
+import org.koremc.inventory.Workstation
+import org.koremc.inventory.offersFor
+import org.koremc.inventory.runes
 import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.ARMOUR_WINDOW
@@ -24,6 +30,7 @@ import org.koremc.protocol.Ability
 import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorEvent
 import org.koremc.protocol.ActorFlag
+import org.koremc.protocol.AddExperienceOrb
 import org.koremc.protocol.AddItemActor
 import org.koremc.protocol.AddPlayer
 import org.koremc.protocol.Animate
@@ -40,8 +47,11 @@ import org.koremc.protocol.CommandOutput
 import org.koremc.protocol.CommandPermission
 import org.koremc.protocol.CommandRequest
 import org.koremc.protocol.ContainerClose
+import org.koremc.protocol.ContainerName
 import org.koremc.protocol.ContainerOpen
+import org.koremc.protocol.ContainerSetData
 import org.koremc.protocol.ContainerType
+import org.koremc.protocol.EnchantOption
 import org.koremc.protocol.InventoryContent
 import org.koremc.protocol.Disconnect
 import org.koremc.protocol.FloatItem
@@ -68,11 +78,13 @@ import org.koremc.protocol.MovePlayer
 import org.koremc.protocol.NetworkChunkPublisherUpdate
 import org.koremc.protocol.NetworkSettings
 import org.koremc.protocol.OFFHAND_WINDOW
+import org.koremc.protocol.OfferedEnchantment
 import org.koremc.protocol.PacketException
 import org.koremc.protocol.PermissionLevel
 import org.koremc.protocol.PlayStatus
 import org.koremc.protocol.PlayerAction
 import org.koremc.protocol.PlayerAuthInput
+import org.koremc.protocol.PlayerEnchantOptions
 import org.koremc.protocol.PlayerList
 import org.koremc.protocol.PlayerListEntry
 import org.koremc.protocol.RequestChunkRadius
@@ -136,7 +148,24 @@ import org.koremc.world.harvests
 import org.koremc.world.opensOnClick
 import org.koremc.world.BARREL
 import org.koremc.world.BARREL_OPEN
+import org.koremc.world.BLAZE_POWDER
+import org.koremc.world.BREWING_BOTTLES
+import org.koremc.world.BREWING_FUEL
+import org.koremc.world.BREWING_REAGENT
+import org.koremc.world.BREWING_STAND
+import org.koremc.world.BREWS_PER_FUEL
+import org.koremc.world.BrewingStand
 import org.koremc.world.BrokenBlock
+import org.koremc.world.ExperienceOrb
+import org.koremc.world.FURNACE_FUEL
+import org.koremc.world.FURNACE_INPUT
+import org.koremc.world.FURNACE_OUTPUT
+import org.koremc.world.Furnace
+import org.koremc.world.Machine
+import org.koremc.world.PlayerExperience
+import org.koremc.world.dropExperience
+import org.koremc.world.furnaceKind
+import org.koremc.world.wholeExperience
 import org.koremc.world.STORAGE_SLOTS
 import org.koremc.world.Storage
 import org.koremc.world.bit
@@ -151,6 +180,7 @@ import org.koremc.world.side
 import org.koremc.world.stepOn
 import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
+import org.koremc.world.tickOrbs
 import org.koremc.world.usable
 import org.koremc.world.use
 import org.slf4j.LoggerFactory
@@ -161,6 +191,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.random.Random
 
 private val log = LoggerFactory.getLogger(Session::class.java)
 
@@ -218,7 +249,38 @@ private const val CHAT_WINDOW = 0xFF
 /** The highest window ID a container gets, after which they start from 1 again. */
 private const val LAST_WINDOW = 99
 
-private const val CRAFTING_TABLE = "minecraft:crafting_table"
+/** The workstations players open, by block, with the screen the client shows for each. */
+private val WORKSTATIONS = mapOf(
+    "crafting_table" to (Workstation.CRAFTING_TABLE to ContainerType.WORKBENCH),
+    "stonecutter_block" to (Workstation.STONECUTTER to ContainerType.STONECUTTER),
+    "smithing_table" to (Workstation.SMITHING_TABLE to ContainerType.SMITHING_TABLE),
+    "anvil" to (Workstation.ANVIL to ContainerType.ANVIL),
+    "chipped_anvil" to (Workstation.ANVIL to ContainerType.ANVIL),
+    "damaged_anvil" to (Workstation.ANVIL to ContainerType.ANVIL),
+    "grindstone" to (Workstation.GRINDSTONE to ContainerType.GRINDSTONE),
+    "loom" to (Workstation.LOOM to ContainerType.LOOM),
+    "enchanting_table" to (Workstation.ENCHANTING_TABLE to ContainerType.ENCHANTMENT),
+).mapKeys { "minecraft:${it.key}" }
+
+/** What an anvil wears into each time it does, until a damaged one breaks. */
+private val WORN_ANVILS = mapOf("minecraft:anvil" to "minecraft:chipped_anvil", "minecraft:chipped_anvil" to "minecraft:damaged_anvil")
+
+/** The chance an anvil wears each time a player outside creative uses it. */
+private const val ANVIL_WEAR_CHANCE = 0.12f
+
+/** What a brewing stand's bottle slots hold. */
+private val BOTTLES = setOf("minecraft:potion", "minecraft:splash_potion", "minecraft:lingering_potion", "minecraft:glass_bottle")
+
+private const val BOOKSHELF = "minecraft:bookshelf"
+
+/** How long a player waits after picking up an experience orb before they can pick up another, in ticks. */
+private const val ORB_PICKUP_DELAY = 2
+
+/** The sound of a player reaching a level that's a multiple of five. */
+private const val LEVEL_UP = "levelup"
+
+/** The sound of a brewing stand finishing a brew. */
+private const val BREWED = "potion.brewed"
 
 /**
  * How far players reach to build and break, from their eyes to the
@@ -306,7 +368,10 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * Players open chests, barrels, shulker boxes and ender chests, and
  * crafting tables, and craft. Everyone looking into the same chest sees
  * the items others move in and out of it, and its lid stays open until the
- * last of them closes it.
+ * last of them closes it. They open furnaces and brewing stands, and watch
+ * them work, and the workstations: stonecutters, smithing tables, anvils,
+ * grindstones, looms and enchanting tables. They pick up the experience
+ * orbs that fly to them, and spend levels at anvils and enchanting tables.
  *
  * Players run commands from the chat, as themselves. Each has their own
  * game mode, which starts as the world's and commands can change, and is
@@ -337,7 +402,26 @@ class Session(
     private val batches = BatchCodec()
     private val world = game.world
     private val inventory = PlayerInventory(world::newStackId)
-    private val stackRequests = StackRequestHandler(inventory, game.creative, creativeMode = { gameMode == GameMode.CREATIVE }, onDrop = ::throwItem, recipes = game.recipes)
+
+    /** The player's experience: their level, and how far into the next. */
+    private val experience = PlayerExperience()
+
+    /** Picks what enchanting tables offer the player, until they next enchant something. */
+    private var enchantmentSeed = Random.nextInt()
+
+    /** The crafts at workstations the requests just handled made, to carry out once they're answered. */
+    private val crafts = mutableListOf<Crafted>()
+
+    private val stackRequests = StackRequestHandler(
+        inventory, game.creative, creativeMode = { gameMode == GameMode.CREATIVE }, onDrop = ::throwItem, recipes = game.recipes,
+        enchantments = game.enchantments,
+        crafter = object : Crafter {
+            override val experienceLevel get() = experience.level
+
+            override fun enchantingOffers(stack: ItemStack) = this@Session.enchantingOffers(stack)
+        },
+        onCrafted = crafts::add,
+    )
 
     /** The player's ender chest, the same whichever ender chest they open. */
     private val enderChest = Container(STORAGE_SLOTS)
@@ -349,9 +433,31 @@ class Session(
 
     /**
      * A window open besides the inventory: a container's, which shows the
-     * items in [view] of the blocks at [blocks], or a crafting table's.
+     * items in [view] of the blocks at [blocks], a furnace's or brewing
+     * stand's, which shows its [machine] at work too, or a workstation's.
      */
-    private class Window(val id: Int, val type: Int, val pos: BlockPos, val storage: Storage?, val blocks: List<BlockPos>, val view: Container?)
+    private class Window(
+        val id: Int,
+        val type: Int,
+        val pos: BlockPos,
+        val storage: Storage?,
+        val blocks: List<BlockPos>,
+        val view: Container?,
+        val machine: Machine? = null,
+    ) {
+        /** What the client was last shown of the machine: each slot, and each number its screen shows. */
+        var shownSlots: List<SlotStack?>? = null
+        var shownData: List<Int> = emptyList()
+    }
+
+    /** The item in the open enchanting table that the client was last told the offers for. */
+    private var offeredFor: ItemStack? = null
+
+    /** Ticks until the player can pick up another experience orb. */
+    private var orbPickupDelay = 0
+
+    /** The orbs the client has been shown, by entity ID. */
+    private val shownOrbs = HashSet<Long>()
     private var state = State.AWAITING_NETWORK_SETTINGS_REQUEST
 
     /** The player, once their login has authenticated. */
@@ -773,7 +879,16 @@ class Session(
     private fun onStackRequests(requests: List<StackRequest>) {
         val responses = requests.map(stackRequests::handle)
         send(ItemStackResponse(responses))
+        crafts.toList().also { crafts.clear() }.forEach(::afterCraft)
         val open = window ?: return
+        open.machine?.let { machine ->
+            // The client knows what its requests changed already.
+            open.shownSlots = machine.slots.contents()
+            // Taking what a furnace made takes the experience it earned.
+            val tookOutput = responses.any { response -> response.accepted && response.containers.any { it.container == ContainerName.FURNACE_RESULT } }
+            if (machine is Furnace && tookOutput) wholeExperience(machine.takeExperience()).takeIf { it > 0 }?.let { world.dropExperience(position, it) }
+        }
+        if (inventory.workstation == Workstation.ENCHANTING_TABLE) offerEnchantments()
         val storage = open.storage ?: return
         if (storage == Storage.ENDER_CHEST) return
         if (responses.none { response -> response.accepted && response.containers.any { it.container == storage.containerName } }) return
@@ -802,20 +917,188 @@ class Session(
         val first = blocks.none(::seenByOthers)
         val opened = Window(nextWindowId(), ContainerType.CONTAINER, pos, storage, blocks, view)
         window = opened
-        inventory.opened = storage.containerName to view
+        inventory.opened = OpenContainer.named(storage.containerName, view)
         send(ContainerOpen(opened.id, ContainerType.CONTAINER, pos, entityId = -1), contentsOf(opened))
         if (first) showOpening(opened, opening = true)
         log.debug("{} opened {} at {}", name, world.stateAt(pos)?.name, pos)
     }
 
-    /** Opens the crafting table at [pos] for the player, whose crafting grid is then its three by three. */
-    private fun openCraftingTable(pos: BlockPos) {
+    /**
+     * Opens the [workstation] at [pos] for the player, whose screen the
+     * client shows as [type]: a crafting table's grid, three by three, or a
+     * stonecutter, smithing table, anvil, grindstone, loom or enchanting
+     * table.
+     */
+    private fun openWorkstation(pos: BlockPos, workstation: Workstation, type: Int) {
         if (gameMode == GameMode.SPECTATOR || !inReach(pos)) return
         closeWindow(reply = true)
-        val opened = Window(nextWindowId(), ContainerType.WORKBENCH, pos, storage = null, blocks = listOf(pos), view = null)
+        val opened = Window(nextWindowId(), type, pos, storage = null, blocks = listOf(pos), view = null)
         window = opened
-        inventory.craftingTable = true
-        send(ContainerOpen(opened.id, ContainerType.WORKBENCH, pos, entityId = -1))
+        inventory.workstation = workstation
+        offeredFor = null
+        send(ContainerOpen(opened.id, type, pos, entityId = -1))
+        log.debug("{} opened {} at {}", name, world.stateAt(pos)?.name, pos)
+    }
+
+    /**
+     * Opens the furnace or brewing stand at [pos] for the player, which they
+     * see at work for as long as it's open, whoever else is looking.
+     */
+    private fun openMachine(pos: BlockPos) {
+        if (gameMode == GameMode.SPECTATOR || !inReach(pos)) return
+        val machine: Machine = world.furnaceAt(pos) ?: world.brewingStandAt(pos) ?: return
+        closeWindow(reply = true)
+        val (type, names) = when (machine) {
+            is Furnace -> machine.kind.window to mapOf(
+                machine.kind.ingredient to FURNACE_INPUT..FURNACE_INPUT,
+                ContainerName.FURNACE_FUEL to FURNACE_FUEL..FURNACE_FUEL,
+                ContainerName.FURNACE_RESULT to FURNACE_OUTPUT..FURNACE_OUTPUT,
+            )
+            is BrewingStand -> ContainerType.BREWING_STAND to mapOf(
+                ContainerName.BREWING_INPUT to BREWING_REAGENT..BREWING_REAGENT,
+                ContainerName.BREWING_RESULT to BREWING_BOTTLES,
+                ContainerName.BREWING_FUEL to BREWING_FUEL..BREWING_FUEL,
+            )
+        }
+        val opened = Window(nextWindowId(), type, pos, storage = null, blocks = listOf(pos), view = machine.slots, machine = machine)
+        window = opened
+        inventory.opened = OpenContainer(machine.slots, names, limitsOf(machine))
+        send(ContainerOpen(opened.id, type, pos, entityId = -1))
+        syncWindow()
+        log.debug("{} opened {} at {}", name, world.stateAt(pos)?.name, pos)
+    }
+
+    /**
+     * How much of each stack each of [machine]'s slots holds. Nothing goes
+     * into what a furnace made, and only fuel under it. A brewing stand's
+     * bottles hold one potion or bottle each, its reagent slot only what
+     * brews, and its fuel slot only blaze powder.
+     */
+    private fun limitsOf(machine: Machine): (Int, ItemStack) -> Int = when (machine) {
+        is Furnace -> { slot, stack ->
+            when (slot) {
+                FURNACE_OUTPUT -> 0
+                FURNACE_FUEL -> if (game.fuel.burnTicks(stack) != null) stack.item.maxStackSize else 0
+                else -> stack.item.maxStackSize
+            }
+        }
+        is BrewingStand -> { slot, stack ->
+            when (slot) {
+                in BREWING_BOTTLES -> if (stack.item.name in BOTTLES) 1 else 0
+                BREWING_REAGENT -> if (game.recipes.isReagent(stack)) stack.item.maxStackSize else 0
+                else -> if (stack.item.name == BLAZE_POWDER) stack.item.maxStackSize else 0
+            }
+        }
+    }
+
+    /**
+     * Shows the client how the furnace or brewing stand it has open is
+     * getting on: what's in the slots that changed since it last saw, and
+     * the numbers its screen shows, like how far along cooking is. Run once
+     * a tick.
+     */
+    fun syncWindow() {
+        val open = window ?: return
+        val machine = open.machine ?: return
+        val slots = machine.slots.contents()
+        val shown = open.shownSlots
+        val packets = mutableListOf<ServerPacket>()
+        if (shown == null) {
+            packets += contentsOf(open)
+        } else {
+            slots.forEachIndexed { slot, stack -> if (stack != shown[slot]) packets += InventorySlot(slot, stack?.stack, stack?.id ?: 0, open.id) }
+        }
+        open.shownSlots = slots
+        val data = when (machine) {
+            is Furnace -> listOf(machine.cookTime, machine.litTime, machine.litDuration)
+            is BrewingStand -> listOf(machine.brewTime, machine.fuel, BREWS_PER_FUEL)
+        }
+        data.forEachIndexed { property, value -> if (open.shownData.getOrNull(property) != value) packets += ContainerSetData(open.id, property, value) }
+        open.shownData = data
+        if (packets.isNotEmpty()) send(*packets.toTypedArray())
+    }
+
+    /** What the enchanting table the player has open offers for [stack], by the bookshelves around it and the player's seed. */
+    private fun enchantingOffers(stack: ItemStack): List<EnchantingOffer> {
+        val table = window?.pos?.takeIf { inventory.workstation == Workstation.ENCHANTING_TABLE } ?: return emptyList()
+        return game.enchantments.offersFor(stack, bookshelvesAround(table), enchantmentSeed)
+    }
+
+    /**
+     * How many bookshelves power the enchanting table at [table], up to
+     * fifteen: those two blocks out from it, on its level or the one above,
+     * with nothing but air between.
+     */
+    private fun bookshelvesAround(table: BlockPos): Int {
+        var shelves = 0
+        fun shelf(x: Int, y: Int, z: Int) = world.stateAt(BlockPos(table.x + x, table.y + y, table.z + z))?.name == BOOKSHELF
+        for (x in -1..1) for (z in -1..1) for (y in 0..1) {
+            if (x == 0 && z == 0) continue
+            if (world.blockAt(BlockPos(table.x + x, table.y + y, table.z + z)) != AIR_NETWORK_ID) continue
+            if (shelf(x * 2, y, z * 2)) shelves++
+            if (x != 0 && z != 0) {
+                if (shelf(x * 2, y, z)) shelves++
+                if (shelf(x, y, z * 2)) shelves++
+            }
+        }
+        return minOf(shelves, MAX_BOOKSHELVES)
+    }
+
+    /**
+     * Tells the client what the enchanting table it has open offers for the
+     * item in it, whenever that item changes: three offers, each in runes,
+     * or none for an item the table can't enchant.
+     */
+    private fun offerEnchantments() {
+        val stack = inventory.ui[ENCHANTING_INPUT_SLOT]?.stack
+        if (stack == offeredFor) return
+        offeredFor = stack
+        val runes = Random(enchantmentSeed)
+        val options = stack?.let(::enchantingOffers).orEmpty().mapIndexedNotNull { index, offer ->
+            if (offer.enchantments.isEmpty()) return@mapIndexedNotNull null
+            EnchantOption(offer.cost, index, offer.enchantments.map { OfferedEnchantment(it.id, it.level) }, runes(runes), game.recipes.nextNetworkId + index)
+        }
+        send(PlayerEnchantOptions(options))
+    }
+
+    /**
+     * Carries out what a craft at a workstation did besides moving items,
+     * once its request has been answered: the levels it cost, the
+     * experience it gave back, and an anvil's clang and wear. Enchanting
+     * changes what tables offer the player next.
+     */
+    private fun afterCraft(crafted: Crafted) {
+        if (crafted.levels > 0) addLevels(-crafted.levels)
+        if (crafted.experience > 0) world.dropExperience(position, crafted.experience)
+        when (crafted.workstation) {
+            Workstation.ANVIL -> useAnvil()
+            Workstation.ENCHANTING_TABLE -> enchantmentSeed = Random.nextInt()
+            else -> {}
+        }
+        log.debug("{} crafted at {}, for {} levels", name, crafted.workstation, crafted.levels)
+    }
+
+    /**
+     * The anvil the player has open clangs for everyone with its chunk.
+     * Outside creative, it may wear, chipped and then damaged, until a
+     * damaged one breaks, which closes it for whoever had it open.
+     */
+    private fun useAnvil() {
+        val pos = window?.pos ?: return
+        val state = world.stateAt(pos) ?: return
+        if (!creative && Random.nextFloat() < ANVIL_WEAR_CHANCE) {
+            val worn = WORN_ANVILS[state.name]?.let { world.blocks.find(it, state.properties) }
+            if (worn == null) {
+                val changes = world.breakBlock(pos)
+                showAround(world.packetsFor(changes) + (pos to LevelEvent(LevelEvent.SOUND_ANVIL_BREAK, pos.centre, 0)))
+                changes.broken.filterKeys { it != pos }.forEach { (at, broken) -> dropFrom(at, broken) }
+                viewers().forEach { it.containerBroke(changes.broken.keys) }
+                return
+            }
+            world[pos] = worn
+            showAround(pos, UpdateBlock(pos, world.blockAt(pos)))
+        }
+        showAround(pos, LevelEvent(LevelEvent.SOUND_ANVIL_USE, pos.centre, 0))
     }
 
     private fun nextWindowId(): Int {
@@ -832,9 +1115,9 @@ class Session(
     private fun closeWindow(reply: Boolean, byServer: Boolean = false) {
         val open = window ?: return
         window = null
-        inventory.opened = null
-        inventory.craftingTable = false
         returnCraftingItems()
+        inventory.opened = null
+        inventory.workstation = null
         if (reply) send(ContainerClose(open.id, open.type, serverInitiated = byServer))
         if (open.storage != null && open.blocks.none(::seenByOthers)) showOpening(open, opening = false)
     }
@@ -875,13 +1158,13 @@ class Session(
     }
 
     /**
-     * Puts what the player left on the cursor and in the crafting grids
-     * back among their items, as closing the screen does, and drops what
-     * doesn't fit.
+     * Puts what the player left on the cursor, in the crafting grids and in
+     * the workstation they have open back among their items, as closing the
+     * screen does, and drops what doesn't fit.
      */
     private fun returnCraftingItems() {
         val changed = mutableListOf<ServerPacket>()
-        for (slot in listOf(CURSOR_SLOT) + SMALL_GRID + LARGE_GRID) {
+        for (slot in inventory.heldInScreen) {
             val there = inventory.ui[slot] ?: continue
             inventory.ui[slot] = null
             changed += InventorySlot(slot, null, 0, UI_WINDOW)
@@ -984,7 +1267,8 @@ class Session(
             clicked?.usable == true -> useBlock(use.position)
             // A chest, anvil or the like opens for the client, which Kore can't show yet. Either way, nothing's placed.
             clicked?.storage != null -> openStorage(use.position, clicked.storage!!)
-            clicked?.name == CRAFTING_TABLE -> openCraftingTable(use.position)
+            clicked?.name in WORKSTATIONS -> WORKSTATIONS.getValue(clicked!!.name).let { (workstation, type) -> openWorkstation(use.position, workstation, type) }
+            clicked?.furnaceKind != null || clicked?.name == BREWING_STAND -> openMachine(use.position)
             clicked?.opensOnClick == true -> log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
             else -> onPlace(use)
         }
@@ -1113,6 +1397,8 @@ class Session(
             val keepsItems = broken.state.storage == Storage.SHULKER_BOX
             if (harvested || (keepsItems && broken.contents.any { it != null })) dropFrom(at, broken)
             if (!keepsItems) world.dropFromBlock(at, broken.contents.filterNotNull())
+            // What a furnace had made earned experience nobody took.
+            wholeExperience(broken.experience).takeIf { it > 0 }?.let { world.dropExperience(at.centre, it) }
         }
         viewers().forEach { it.containerBroke(changes.broken.keys) }
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
@@ -1154,6 +1440,88 @@ class Session(
             if (left == 0) world.removeItem(item.id) else item.stack = item.stack.copy(count = left)
         }
     }
+
+    /**
+     * Picks up an experience orb that touches the player, if they're ready
+     * to: one at a time, a moment apart. They hear its chime, as does
+     * everyone with the chunk. Run once a tick.
+     */
+    fun collectOrbs() {
+        if (state != State.IN_GAME || gameMode == GameMode.SPECTATOR) return
+        if (orbPickupDelay > 0) {
+            orbPickupDelay--
+            return
+        }
+        val orb = world.orbs.firstOrNull(::touches) ?: return
+        world.removeOrb(orb.id)
+        orbPickupDelay = ORB_PICKUP_DELAY
+        showAround(position.toBlockPos(), LevelEvent(LevelEvent.SOUND_EXPERIENCE_ORB, position, 0))
+        addExperience(orb.value)
+    }
+
+    /** Whether [orb]'s box meets the player's. */
+    private fun touches(orb: ExperienceOrb): Boolean {
+        val feet = position.y - PLAYER_EYE_HEIGHT
+        val across = PLAYER_WIDTH / 2 + ITEM_HALF_WIDTH
+        return abs(orb.position.x - position.x) < across && abs(orb.position.z - position.z) < across &&
+            orb.position.y < feet + playerHeight() && orb.position.y + ITEM_HEIGHT > feet
+    }
+
+    /** Where experience orbs fly to this player from, their feet, if they're in the game and pick orbs up. */
+    internal val orbTarget: Vec3? get() = if (isInGame && gameMode != GameMode.SPECTATOR) feet else null
+
+    /**
+     * Shows the client the experience orbs in the chunks it has: those it
+     * hasn't seen appear, those that moved move, and those that are gone
+     * go. Run once a tick.
+     */
+    fun syncOrbs() {
+        if (state != State.IN_GAME) return
+        val inView = world.orbs.filter { it.position.toBlockPos().chunk in sentChunks }
+        val ids = inView.mapTo(HashSet()) { it.id }
+        val packets = shownOrbs.filter { it !in ids }.map(::RemoveActor).toMutableList<ServerPacket>()
+        for (orb in inView) {
+            val shown = Vec3(orb.position.x, orb.position.y + ITEM_NETWORK_OFFSET, orb.position.z)
+            if (orb.id !in shownOrbs) packets += AddExperienceOrb(orb.id, shown, orb.velocity, orb.value)
+            else if (orb.moved) packets += MoveActorAbsolute(orb.id, shown, orb.onGround)
+        }
+        shownOrbs.retainAll(ids)
+        shownOrbs += ids
+        if (packets.isNotEmpty()) send(*packets.toTypedArray())
+    }
+
+    /** The player's experience level, which anvils and enchanting cost. */
+    val experienceLevel get() = experience.level
+
+    /**
+     * Gives the player [points] of experience, which fills their bar and
+     * levels them up. Reaching a level that's a multiple of five sounds a
+     * fanfare.
+     */
+    fun addExperience(points: Int) {
+        val before = experience.level
+        experience.add(points)
+        sendExperience()
+        val level = experience.level
+        if (level > before && level / 5 > before / 5) {
+            showAround(position.toBlockPos(), LevelSoundEvent(LEVEL_UP, position, 0x10000000 * (minOf(level, 30) / 5)))
+        }
+    }
+
+    /** Gives the player [levels], or takes them away for fewer than none, though never below level 0. */
+    fun addLevels(levels: Int) {
+        experience.addLevels(levels)
+        sendExperience()
+    }
+
+    private fun sendExperience() {
+        if (isInGame) send(UpdateAttributes(entityId, experienceAttributes()))
+    }
+
+    private fun experienceAttributes() = listOf(
+        Attribute("minecraft:player.level", 0f, Int.MAX_VALUE.toFloat(), experience.level.toFloat(), default = 0f),
+        Attribute("minecraft:player.experience", 0f, 1f, experience.progress, default = 0f),
+    )
 
     /** Whether [item] is in the player's reach: its box, grown by [PICKUP_REACH] across and [PICKUP_REACH_UP] up and down, meets theirs. */
     private fun inPickupReach(item: ItemEntity): Boolean {
@@ -1484,6 +1852,17 @@ class Session(
         log.debug("{} was teleported to {}", name, feet)
     }
 
+    /** What the player holds, if anything. */
+    val heldStack: ItemStack? get() = inventory.items[heldSlot]?.stack
+
+    /** Puts [stack] in the player's hand in place of what they held, as the same stack, changed. */
+    fun replaceHeld(stack: ItemStack) {
+        val held = inventory.items[heldSlot] ?: return
+        inventory.items[heldSlot] = SlotStack(stack, inventory.newStackId())
+        send(slotOf(heldSlot))
+        log.debug("{}'s {} is now {}", name, held.stack.item.name, stack)
+    }
+
     /** Gives the player [stack]: as much as fits among their items, with the rest dropped at their feet. */
     fun give(stack: ItemStack) {
         val (slots, left) = inventory.add(stack)
@@ -1578,9 +1957,7 @@ class Session(
                 Attribute("minecraft:player.hunger", 0f, 20f, 20f),
                 Attribute("minecraft:player.saturation", 0f, 20f, 5f, default = 20f), // The 5 a new player starts with
                 Attribute("minecraft:player.exhaustion", 0f, 5f, 0f),
-                Attribute("minecraft:player.level", 0f, Int.MAX_VALUE.toFloat(), 0f),
-                Attribute("minecraft:player.experience", 0f, 1f, 0f),
-            ),
+            ) + experienceAttributes(),
         ),
         abilities(),
     )
@@ -1649,6 +2026,19 @@ internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) 
 }
 
 /**
+ * Works the furnaces and brewing stands in [game]'s world for a tick, for
+ * these players to see if they have the chunks: furnaces lighting up and
+ * going out, the bottles on brewing stands, and the sound of a brew
+ * finishing. Run once a tick.
+ */
+internal fun Collection<Session>.tickMachines(game: GameData) {
+    val world = game.world
+    val brewed = mutableListOf<BlockPos>()
+    val changed = world.tickMachines(game.recipes, game.fuel, brewed)
+    showAround(changed.map { it to UpdateBlock(it, world.blockAt(it)) } + brewed.map { it to LevelSoundEvent(BREWED, it.centre, -1) })
+}
+
+/**
  * What players see of [changes]: blocks going, with the particles and
  * sound of their breaking, blocks changing shape, with any data they keep,
  * and the sounds blocks made.
@@ -1701,9 +2091,14 @@ class Sessions(
 
     private fun tick() {
         sessions.values.tickBlocks(game, dropItems = config.gameMode != GameMode.CREATIVE)
+        sessions.values.tickMachines(game)
         game.world.tickItems()
+        game.world.tickOrbs(sessions.values.mapNotNull { it.orbTarget })
         sessions.values.forEach { it.collectItems() }
+        sessions.values.forEach { it.collectOrbs() }
         sessions.values.forEach { it.syncItems() }
+        sessions.values.forEach { it.syncOrbs() }
+        sessions.values.forEach { it.syncWindow() }
         sessions.values.forEach { it.syncPlayers() }
     }
 

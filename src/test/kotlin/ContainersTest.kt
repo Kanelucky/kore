@@ -15,16 +15,20 @@ import org.koremc.protocol.BlockEvent
 import org.koremc.protocol.ContainerClose
 import org.koremc.protocol.ContainerName
 import org.koremc.protocol.ContainerOpen
+import org.koremc.protocol.ContainerSetData
 import org.koremc.protocol.ContainerType
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.InventoryContent
 import org.koremc.protocol.InventorySlot
 import org.koremc.protocol.LevelSoundEvent
+import org.koremc.protocol.PlayerEnchantOptions
 import org.koremc.protocol.UI_WINDOW
+import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.clientDataToken
 import org.koremc.protocol.connectionRequest
 import org.koremc.protocol.encode
 import org.koremc.protocol.loginPacket
+import org.koremc.protocol.readVarUInt
 import org.koremc.protocol.tokenAuthentication
 import org.koremc.protocol.writeBlockPos
 import org.koremc.protocol.writeByteArray
@@ -39,22 +43,30 @@ import org.koremc.registry.CreativeCategory
 import org.koremc.registry.CreativeGroup
 import org.koremc.registry.CreativeInventory
 import org.koremc.registry.CreativeItem
+import org.koremc.registry.Cost
+import org.koremc.registry.Enchantment
+import org.koremc.registry.Enchantments
+import org.koremc.registry.Ingredient
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.ItemVersion
+import org.koremc.registry.Recipes
+import org.koremc.registry.ShapelessRecipe
 import org.koremc.world.BlockPos
 import org.koremc.world.Drops
 import org.koremc.world.FlatWorld
 import org.koremc.world.centre
 import org.koremc.world.pairChest
 import java.security.interfaces.ECPublicKey
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private const val PROTOCOL = 2193
+private const val PLAYER_ENCHANT_OPTIONS = 146
 
 class ContainersTest {
     private val authority = TestAuthority()
@@ -70,17 +82,33 @@ class ContainersTest {
     private val openBarrel = state("minecraft:barrel", "facing_direction" to 1, "open_bit" to 1.toByte())
     private val shulkerBox = state("minecraft:white_shulker_box")
     private val craftingTable = state("minecraft:crafting_table")
-    private val palette = BlockPalette(listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable))
+    private val furnace = state("minecraft:furnace", "minecraft:cardinal_direction" to "south")
+    private val litFurnace = state("minecraft:lit_furnace", "minecraft:cardinal_direction" to "south")
+    private val enchantingTable = state("minecraft:enchanting_table")
+    private val palette = BlockPalette(listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable))
     private val world = FlatWorld(palette, listOf(stone))
 
     private val stoneItem = ItemDefinition("minecraft:stone", 1, componentBased = false, ItemVersion.NONE)
     private val shulkerItem = ItemDefinition("minecraft:white_shulker_box", 218, componentBased = false, ItemVersion.NONE, maxStackSize = 1)
-    private val items = listOf(stoneItem, shulkerItem)
+    private val rawIron = ItemDefinition("minecraft:raw_iron", 2, componentBased = false, ItemVersion.NONE)
+    private val ironIngot = ItemDefinition("minecraft:iron_ingot", 3, componentBased = false, ItemVersion.NONE)
+    private val coal = ItemDefinition("minecraft:coal", 4, componentBased = false, ItemVersion.NONE)
+    private val sword = ItemDefinition("minecraft:diamond_sword", 5, componentBased = false, ItemVersion.NONE, maxStackSize = 1, enchantCategories = setOf("durability"), enchantability = 10)
+    private val items = listOf(stoneItem, shulkerItem, rawIron, ironIngot, coal, sword)
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
         listOf(CreativeItem(ItemStack(stoneItem, block = stone), group = 0), CreativeItem(ItemStack(shulkerItem, block = shulkerBox), group = 0)),
     )
-    private val game = GameData(world, emptyList(), BlockDefinitions(emptyList()), creative, emptyMap(), Drops(items, creative, palette), ItemStacks(items, creative, palette))
+    private val recipes = Recipes(
+        listOf(ShapelessRecipe("iron", listOf(Ingredient.Item(rawIron.name, null, 1)), listOf(ItemStack(ironIngot)), "furnace", 0, UUID(0, 1), keepsData = false, 1)),
+        emptyList(), emptyList(), emptyMap(),
+    )
+    // At any cost a table offers, so every offer has it.
+    private val unbreaking = Enchantment(17, "unbreaking", 1, Cost(0, 1), Cost(0, 100), 5, treasure = false, curse = false, emptySet(), { "durability" in it.enchantCategories })
+    private val game = GameData(
+        world, emptyList(), BlockDefinitions(emptyList()), creative, emptyMap(), Drops(items, creative, palette), ItemStacks(items, creative, palette),
+        recipes = recipes, enchantments = Enchantments(listOf(unbreaking)),
+    )
 
     private val clients = mutableListOf<Client>()
 
@@ -282,6 +310,69 @@ class ContainersTest {
         alex.clicks(here)
 
         assertTrue(alex.received().has(chestWith(1, null)))
+    }
+
+    @Test
+    fun `a furnace opens at work, shows how it's getting on, and gives back experience for what it made`() {
+        world[here] = furnace
+        val steve = Client(1, "Steve", "1111")
+        steve.session.give(ItemStack(rawIron, 2))
+        steve.session.give(ItemStack(coal))
+
+        steve.clicks(here)
+        val opened = steve.received()
+        assertTrue(opened.has(ContainerOpen(1, ContainerType.FURNACE, here, entityId = -1).encode()))
+        assertTrue(opened.has(InventoryContent(1, listOf(null, null, null)).encode()))
+        assertTrue(opened.has(ContainerSetData(1, ContainerSetData.FURNACE_COOK_TIME, 0).encode()))
+
+        // Only fuel goes under it.
+        steve.moves(2, from = Triple(ContainerName.HOTBAR, 0, 1), to = Triple(ContainerName.FURNACE_FUEL, 1, 0))
+        assertEquals(null, world.furnaceAt(here)!!.slots[1])
+        steve.moves(2, from = Triple(ContainerName.HOTBAR, 0, 1), to = Triple(ContainerName.FURNACE_INGREDIENT, 0, 0), requestId = -3)
+        steve.moves(1, from = Triple(ContainerName.HOTBAR, 1, 2), to = Triple(ContainerName.FURNACE_FUEL, 1, 0), requestId = -5)
+        steve.received()
+
+        fun tick() {
+            clients.map { it.session }.tickMachines(game)
+            clients.forEach { it.session.syncWindow() }
+        }
+        tick()
+        assertEquals(litFurnace, world.stateAt(here))
+        val lit = steve.received()
+        assertTrue(lit.has(UpdateBlock(here, litFurnace.networkId).encode()))
+        assertTrue(lit.has(ContainerSetData(1, ContainerSetData.FURNACE_LIT_DURATION, 1600).encode()))
+        assertTrue(lit.has(InventorySlot(1, null, 0, window = 1).encode()))
+
+        repeat(399) { tick() }
+        val made = world.furnaceAt(here)!!.slots[2]!!
+        assertEquals(ItemStack(ironIngot, 2), made.stack)
+        assertTrue(steve.received().has(InventorySlot(2, made.stack, made.id, window = 1).encode()))
+
+        steve.moves(2, from = Triple(ContainerName.FURNACE_RESULT, 2, made.id), to = Triple(ContainerName.HOTBAR, 5, 0), requestId = -7)
+        assertNull(world.furnaceAt(here)!!.slots[2])
+        // Two iron ingots earn 1.4 experience: one orb, or two.
+        assertTrue(world.orbs.sumOf { it.value } in 1..2)
+    }
+
+    @Test
+    fun `an enchanting table offers what it would enchant the item put in it with`() {
+        world[here] = enchantingTable
+        val steve = Client(1, "Steve", "1111")
+        steve.session.give(ItemStack(sword))
+        steve.clicks(here)
+        assertTrue(steve.received().has(ContainerOpen(1, ContainerType.ENCHANTMENT, here, entityId = -1).encode()))
+
+        steve.moves(1, from = Triple(ContainerName.HOTBAR, 0, 1), to = Triple(ContainerName.ENCHANTING_INPUT, 14, 0))
+        assertEquals(listOf(3), steve.received().mapNotNull(::offersIn))
+
+        steve.moves(1, from = Triple(ContainerName.ENCHANTING_INPUT, 14, 1), to = Triple(ContainerName.HOTBAR, 0, 0), requestId = -3)
+        assertTrue(steve.received().has(PlayerEnchantOptions(emptyList()).encode()))
+    }
+
+    /** How many offers [packet] makes, if it's a `PlayerEnchantOptions`, or null for another packet. */
+    private fun offersIn(packet: ByteArray): Int? {
+        val buffer = Unpooled.wrappedBuffer(packet)
+        return if (buffer.readVarUInt() == PLAYER_ENCHANT_OPTIONS) buffer.readVarUInt() else null
     }
 
     @Test

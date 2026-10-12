@@ -28,12 +28,13 @@ class Command(
     /** Whether players' clients hear of it. One the client has its own of, like `/help`, is left to the client. */
     val sentToClients: Boolean = true,
 ) {
-    /** How `/help` shows each way to write it, like `/gamemode <gameMode: GameMode> [player: target]`. */
+    /** How `/help` shows each way to write it, like `/gamemode <gameMode: GameMode> [player: target]`, or `/xp <amount: int>L`. */
     val usages: List<String>
         get() = overloads.map { overload ->
             (listOf("/$name") + overload.params.map { param ->
                 val inside = if (param.type is EnumType && param.type.values.size == 1) param.type.usage else "${param.name}: ${param.type.usage}"
-                if (param.optional) "[$inside]" else "<$inside>"
+                val suffix = (param.type as? SuffixedIntType)?.suffix.orEmpty()
+                if (param.optional) "[$inside]$suffix" else "<$inside>$suffix"
             }).joinToString(" ")
         }
 }

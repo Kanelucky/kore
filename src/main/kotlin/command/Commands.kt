@@ -9,6 +9,11 @@ import org.koremc.protocol.CommandPermission.GAME_DIRECTORS
 import org.koremc.protocol.CommandPermission.OWNER
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.Text
+import org.koremc.registry.BOOK
+import org.koremc.registry.Enchantment
+import org.koremc.registry.EnchantmentLevel
+import org.koremc.registry.enchantments
+import org.koremc.registry.withEnchantments
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
 import org.koremc.world.PLAYER_WIDTH
@@ -65,6 +70,10 @@ class Commands(
     private val booleans = EnumType("Boolean", listOf("true", "false"))
     private val facing = EnumType("TeleportFacing", listOf("facing"))
 
+    /** The enchantments, by the names the game's commands call them, which leave the curses' `_curse` off. */
+    private val enchantmentNames = game.enchantments.all.associateBy { it.name.removeSuffix("_curse") }
+    private val enchants = EnumType("Enchant", enchantmentNames.keys.sorted())
+
     /**
      * The items commands hand out: those in the creative inventory, and the
      * few only commands do. The rest of the item list is blocks' own items,
@@ -85,7 +94,7 @@ class Commands(
     fun run(source: CommandSource, line: String) = map.run(source, line)
 
     private fun vanilla(): List<Command> {
-        val commands = listOf(list(), me(), tell(), say(), gameMode(), give(), clear(), teleport(), kick(), op(), deop(), stop())
+        val commands = listOf(list(), me(), tell(), say(), gameMode(), give(), clear(), teleport(), xp(), enchant(), kick(), op(), deop(), stop())
         return commands + help(commands.flatMap { listOf(it.name) + it.aliases } + listOf("help", "?"))
     }
 
@@ -304,6 +313,70 @@ class Commands(
 
     /** Whether a player fits at [feet], or the command doesn't care. */
     private fun CommandCall.fits(feet: Vec3) = stringOrNull("checkForBlocks") != "true" || world.isClear(feet, PLAYER_WIDTH, PLAYER_HEIGHT)
+
+    /**
+     * Gives experience to the players the command names, or whoever ran it:
+     * points, which can't be fewer than none, or levels, written with an
+     * `L`, which can, to take levels away.
+     */
+    private fun xp() = command("xp", GAME_DIRECTORS, cheat = true) {
+        overload(required("amount", IntType), optional("player", TargetType)) {
+            val amount = int("amount")
+            if (amount < 0) fail("commands.xp.failure.widthdrawXp")
+            for (target in playersOrSelf("player")) {
+                target.addExperience(amount)
+                success("commands.xp.success", amount, target.name)
+            }
+        }
+        overload(required("amount", SuffixedIntType("L")), optional("player", TargetType)) {
+            val levels = int("amount")
+            for (target in playersOrSelf("player")) {
+                target.addLevels(levels)
+                if (levels < 0) success("commands.xp.success.negative.levels", -levels, target.name) else success("commands.xp.success.levels", levels, target.name)
+            }
+        }
+    }
+
+    /**
+     * Enchants what the players the command names hold, by the
+     * enchantment's number or name, at a level it goes to, 1 if the command
+     * doesn't say. It must go on the item, and with what's on it already,
+     * whose level of it it replaces.
+     */
+    private fun enchant() = command("enchant", GAME_DIRECTORS, cheat = true) {
+        overload(required("player", TargetType), required("enchantmentId", IntType), optional("level", IntType)) {
+            val id = int("enchantmentId")
+            enchant(game.enchantments[id] ?: fail("commands.enchant.notFound", id))
+        }
+        overload(required("player", TargetType), required("enchantmentName", enchants), optional("level", IntType)) {
+            enchant(enchantmentNames.getValue(string("enchantmentName")))
+        }
+    }
+
+    private fun CommandCall.enchant(enchantment: Enchantment) {
+        val level = intOr("level", 1)
+        val name = enchantment.name.removeSuffix("_curse")
+        if (level !in 1..enchantment.maxLevel) fail("commands.enchant.invalidLevel", name, level)
+        for (target in players("player")) {
+            val held = target.heldStack
+            if (held == null) {
+                error("commands.enchant.noItem", target.name)
+                continue
+            }
+            if (!enchantment.goesOn(held.item) || held.item.name == BOOK) {
+                error("commands.enchant.cantEnchant", held.item.displayName)
+                continue
+            }
+            val existing = held.enchantments
+            val clash = existing.mapNotNull { game.enchantments[it.id] }.find { !enchantment.compatibleWith(it) }
+            if (clash != null) {
+                error("commands.enchant.cantCombine", name, clash.name.removeSuffix("_curse"))
+                continue
+            }
+            target.replaceHeld(held.withEnchantments(existing.filter { it.id != enchantment.id } + EnchantmentLevel(enchantment.id, level)))
+            success("commands.enchant.success", target.name)
+        }
+    }
 
     private fun kick() = command("kick", GAME_DIRECTORS, cheat = false) {
         overload(required("name", TargetType), required("reason", MessageType)) {

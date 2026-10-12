@@ -120,7 +120,7 @@ class CraftingTest {
         for (slot in LARGE_GRID) if (slot != LARGE_GRID.first + 4) grid(slot, ItemStack(planks))
         assertFalse(craft(4, count = 1).accepted)
 
-        inventory.craftingTable = true
+        inventory.workstation = Workstation.CRAFTING_TABLE
         assertTrue(craft(4, count = 1, requestId = -3).accepted)
         assertEquals(ItemStack(chest), inventory.items[0]?.stack)
         assertTrue(LARGE_GRID.all { inventory.ui[it] == null })

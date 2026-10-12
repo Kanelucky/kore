@@ -31,6 +31,7 @@ private val DROPS_INSTEAD = buildMap {
     put("minecraft:nether_gold_ore", "minecraft:gold_nugget" to 2)
     put("minecraft:quartz_ore", "minecraft:quartz" to 1)
     put("minecraft:ender_chest", "minecraft:obsidian" to 8)
+    for (kind in FurnaceKind.entries) put(kind.litBlock, kind.block to 1)
 }
 
 /** Blocks that drop nothing, not even themselves, without Silk Touch, which nothing gives yet. */

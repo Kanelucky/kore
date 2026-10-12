@@ -105,12 +105,14 @@ class CommandMap(val commands: List<Command>, private val allowCheats: Boolean) 
         val described = commands.map { command ->
             // A command's other names go in an enum with its own, or the client stops showing the one it was given.
             val aliases = if (command.aliases.isEmpty()) -1 else enumIndex("${command.name.replaceFirstChar(Char::uppercaseChar)}Aliases", listOf(command.name) + command.aliases)
-            val overloads = command.overloads.map { overload ->
+            // The client can't take a number with a suffix, so the ways to write a command with one are left to Kore.
+            val overloads = command.overloads.filter { overload -> overload.params.none { it.type is SuffixedIntType } }.map { overload ->
                 overload.params.map { param ->
                     when (val type = param.type) {
                         is EnumType -> CommandParameter(param.name, CommandParameter.VALID or CommandParameter.ENUM or enumIndex(type.name, type.values), param.optional)
                         is SoftEnumType -> CommandParameter(param.name, CommandParameter.VALID or CommandParameter.SOFT_ENUM or softEnumIndex(type.name, type.values), param.optional)
                         is BasicType -> CommandParameter(param.name, CommandParameter.VALID or type.symbol, param.optional)
+                        is SuffixedIntType -> error("${command.name} goes to the client with a suffixed parameter")
                     }
                 }
             }

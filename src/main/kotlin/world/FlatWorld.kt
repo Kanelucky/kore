@@ -5,7 +5,9 @@ import org.koremc.inventory.Container
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
+import org.koremc.registry.Fuel
 import org.koremc.registry.ItemStack
+import org.koremc.registry.Recipes
 import java.util.TreeMap
 
 /**
@@ -52,10 +54,14 @@ class FlatWorld(
     private val blockEntities = HashMap<ChunkPos, HashMap<BlockPos, NbtMap>>()
 
     private val itemEntities = LinkedHashMap<Long, ItemEntity>()
+    private val orbEntities = LinkedHashMap<Long, ExperienceOrb>()
     private var nextEntityId = 1L
 
     /** The items lying in the world, oldest first. */
     val items: Collection<ItemEntity> get() = itemEntities.values
+
+    /** The experience orbs in the world, oldest first. */
+    val orbs: Collection<ExperienceOrb> get() = orbEntities.values
 
     init {
         require(layers.size < SUB_CHUNK_COUNT * 16) { "${layers.size} layers leave no room to stand in the overworld" }
@@ -96,6 +102,17 @@ class FlatWorld(
         itemEntities.remove(id)
     }
 
+    /** Puts an orb worth [value] experience in the world at [position], moving at [velocity]. */
+    fun spawnOrb(value: Int, position: Vec3, velocity: Vec3): ExperienceOrb =
+        ExperienceOrb(newEntityId(), value, position, velocity).also { orbEntities[it.id] = it }
+
+    /** The orb [id], or null if it's gone. */
+    fun orbWith(id: Long): ExperienceOrb? = orbEntities[id]
+
+    fun removeOrb(id: Long) {
+        orbEntities.remove(id)
+    }
+
     /**
      * Puts [state] at [pos], which must be within the overworld's height.
      * Putting a block of another kind there forgets the block entity the
@@ -103,21 +120,73 @@ class FlatWorld(
      */
     operator fun set(pos: BlockPos, state: BlockState) {
         require(pos.y in MIN_Y..MAX_Y) { "$pos is outside the overworld" }
-        if (stateAt(pos)?.name != state.name) {
+        // A furnace lighting up, or going out, is the same furnace.
+        if (stateAt(pos)?.let(::kindOf) != kindOf(state)) {
             blockEntities[pos.chunk]?.remove(pos)
             containers.remove(pos)
+            machines.remove(pos)
         }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
     }
 
+    /** What kind of block [state] is, which a furnace is whether lit or not. */
+    private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: state.name
+
     /** The items each chest, barrel and shulker box keeps, by where it is, once a player has opened it or put something in it. */
     private val containers = HashMap<BlockPos, Container>()
+
+    /** The furnaces and brewing stands, by where they are, once a player has opened them. */
+    private val machines = HashMap<BlockPos, Machine>()
 
     /** The items the chest, barrel or shulker box at [pos] keeps. */
     fun containerAt(pos: BlockPos): Container = containers.getOrPut(pos) { Container(STORAGE_SLOTS) }
 
+    /** The furnace at [pos], or null if there isn't one. */
+    fun furnaceAt(pos: BlockPos): Furnace? {
+        (machines[pos] as? Furnace)?.let { return it }
+        val kind = stateAt(pos)?.furnaceKind ?: return null
+        return Furnace(kind).also { machines[pos] = it }
+    }
+
+    /** The brewing stand at [pos], or null if there isn't one. */
+    fun brewingStandAt(pos: BlockPos): BrewingStand? {
+        (machines[pos] as? BrewingStand)?.let { return it }
+        if (stateAt(pos)?.name != BREWING_STAND) return null
+        return BrewingStand().also { machines[pos] = it }
+    }
+
     /** Takes out every item the block at [pos] kept, as it breaks, slot by slot. */
-    fun emptyContainer(pos: BlockPos): List<ItemStack?> = containers.remove(pos)?.empty().orEmpty()
+    fun emptyContainer(pos: BlockPos): List<ItemStack?> = (containers.remove(pos)?.empty() ?: (machines[pos])?.slots?.empty()).orEmpty()
+
+    /** Takes out the experience the furnace at [pos] has stored, as it breaks, and forgets the furnace. */
+    fun takeExperience(pos: BlockPos): Float = (machines.remove(pos) as? Furnace)?.takeExperience() ?: 0f
+
+    /**
+     * Works every furnace and brewing stand a tick, by [recipes], burning
+     * [fuel]. Returns where blocks changed how they look: a furnace lit or
+     * went out, or a brewing stand's bottles changed. Brewing stands that
+     * finished a brew are in [brewed].
+     */
+    fun tickMachines(recipes: Recipes, fuel: Fuel, brewed: MutableList<BlockPos> = mutableListOf()): List<BlockPos> {
+        val changed = mutableListOf<BlockPos>()
+        for ((pos, machine) in machines.toList()) {
+            val state = stateAt(pos) ?: continue
+            when (machine) {
+                is Furnace -> if (machine.tick(recipes, fuel, ::newStackId)) {
+                    val name = if (machine.lit) machine.kind.litBlock else machine.kind.block
+                    blocks.find(name, state.properties)?.let { set(pos, it); changed += pos }
+                }
+                is BrewingStand -> {
+                    if (machine.tick(recipes, ::newStackId)) brewed += pos
+                    val bits = BOTTLE_BITS.map { (slot, bit) -> bit to bit(slot in machine.bottlesShown) }.toMap()
+                    if (bits.any { (bit, value) -> state.properties[bit] != value }) {
+                        blocks.find(state.name, state.properties + bits)?.let { set(pos, it); changed += pos }
+                    }
+                }
+            }
+        }
+        return changed
+    }
 
     /** The data the block at [pos] keeps beyond its state, like a bed's colour, or null for none. */
     fun blockEntityAt(pos: BlockPos): NbtMap? = blockEntities[pos.chunk]?.get(pos)

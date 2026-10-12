@@ -4,6 +4,7 @@ import io.netty.buffer.ByteBuf
 import org.koremc.registry.ItemStack
 import org.koremc.world.Vec3
 
+private const val ADD_ACTOR = 13
 private const val REMOVE_ACTOR = 14
 private const val ADD_ITEM_ACTOR = 15
 private const val TAKE_ITEM_ACTOR = 17
@@ -45,6 +46,30 @@ data class AddItemActor(val entityId: Long, val stack: ItemStack, val position: 
         out.writeVec3(velocity)
         out.writeActorData(ITEM_DATA)
         out.writeBoolean(false) // Whether it came from fishing
+    }
+}
+
+/**
+ * An experience orb appearing to the client: the entity [entityId], worth
+ * [value], at [position] and moving at [velocity] blocks a tick.
+ */
+data class AddExperienceOrb(val entityId: Long, val position: Vec3, val velocity: Vec3, val value: Int) : ServerPacket {
+    override val id get() = ADD_ACTOR
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarLong(entityId)
+        out.writeVarULong(entityId)
+        out.writeString("minecraft:xp_orb")
+        out.writeVec3(position)
+        out.writeVec3(velocity)
+        out.writeFloatLE(0f).writeFloatLE(0f) // Pitch and yaw
+        out.writeFloatLE(0f) // Head yaw
+        out.writeFloatLE(0f) // Body yaw
+        out.writeVarUInt(0) // Attributes
+        out.writeActorData(listOf(flagsItem(setOf(ActorFlag.HAS_GRAVITY)), IntItem(ActorDataId.VALUE, value), FloatItem(ActorDataId.WIDTH, ITEM_SIZE), FloatItem(ActorDataId.HEIGHT, ITEM_SIZE)))
+        out.writeVarUInt(0) // Int properties
+        out.writeVarUInt(0) // Float properties
+        out.writeVarUInt(0) // Entities it rides or is ridden by
     }
 }
 

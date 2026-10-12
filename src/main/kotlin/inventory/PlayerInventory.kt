@@ -39,11 +39,55 @@ class PairedContainer(private val first: Container, private val second: Containe
 /** A slot in one of a player's containers. */
 data class Location(val container: Container, val slot: Int)
 
+/**
+ * A container open besides the inventory: its slots, and which of them
+ * each name the client gives them covers, like a furnace's fuel slot.
+ * Each slot holds at most what [limit] says of a stack, and nothing of a
+ * stack it doesn't take.
+ */
+class OpenContainer(
+    val container: Container,
+    private val names: Map<Int, IntRange>,
+    val limit: (slot: Int, stack: ItemStack) -> Int = { _, stack -> stack.item.maxStackSize },
+) {
+    /** The slot the client means by [slot] under [name], or null if the name doesn't cover it. */
+    fun slot(name: Int, slot: Int): Int? = names[name]?.takeIf { slot in it }?.let { slot }
+
+    companion object {
+        /** A container whose every slot goes by [name], like a chest's. */
+        fun named(name: Int, container: Container) = OpenContainer(container, mapOf(name to (0 until container.size)))
+    }
+}
+
+/**
+ * A block a player crafts at, whose screen uses slots of the player's own
+ * that the inventory screen doesn't: each name the client gives them, and
+ * the slot it is. The items left there go back among the player's when
+ * the screen closes.
+ */
+enum class Workstation(val slots: Map<Int, Int>) {
+    CRAFTING_TABLE(emptyMap()),
+    STONECUTTER(mapOf(ContainerName.STONECUTTER_INPUT to 3)),
+    SMITHING_TABLE(mapOf(ContainerName.SMITHING_TABLE_INPUT to 51, ContainerName.SMITHING_TABLE_MATERIAL to 52, ContainerName.SMITHING_TABLE_TEMPLATE to 53)),
+    ANVIL(mapOf(ContainerName.ANVIL_INPUT to 1, ContainerName.ANVIL_MATERIAL to 2)),
+    GRINDSTONE(mapOf(ContainerName.GRINDSTONE_INPUT to 16, ContainerName.GRINDSTONE_ADDITIONAL to 17)),
+    LOOM(mapOf(ContainerName.LOOM_INPUT to 9, ContainerName.LOOM_DYE to 10, ContainerName.LOOM_MATERIAL to 11)),
+    ENCHANTING_TABLE(mapOf(ContainerName.ENCHANTING_INPUT to ENCHANTING_INPUT_SLOT, ContainerName.ENCHANTING_MATERIAL to ENCHANTING_LAPIS_SLOT)),
+}
+
+/** The slots of an enchanting table's item, which holds one, and its lapis lazuli, which holds nothing else. */
+const val ENCHANTING_INPUT_SLOT = 14
+const val ENCHANTING_LAPIS_SLOT = 15
+private const val LAPIS_LAZULI = "minecraft:lapis_lazuli"
+
 /** How many slots the hotbar has: the first of the player's items. */
 const val HOTBAR_SIZE = 9
 
 /** Where the creative inventory and crafting put what they make, for the player to move from there. */
 const val CREATED_OUTPUT_SLOT = 50
+
+/** The highest of the slots the inventory screen and workstations use: a smithing table's template. */
+private const val LAST_UI_SLOT = 53
 
 /** The slots of the cursor, and of the crafting grids: the inventory's two by two, then a crafting table's three by three. */
 const val CURSOR_SLOT = 0
@@ -63,17 +107,24 @@ class PlayerInventory(private val newStackIds: () -> Int = LocalStackIds()) {
     val items = Container(36)
     val offhand = Container(1)
     val armour = Container(4)
-    /** The cursor is slot 0, the crafting grids sit from 28, and the created output is [CREATED_OUTPUT_SLOT]. */
-    val ui = Container(CREATED_OUTPUT_SLOT + 1)
+    /**
+     * The cursor is slot 0, the crafting grids sit from 28, and the created
+     * output is [CREATED_OUTPUT_SLOT]. Workstations use others, like a
+     * stonecutter's 3.
+     */
+    val ui = Container(LAST_UI_SLOT + 1)
 
-    /** The container open besides the inventory, if any, under the name the client gives its slots. */
-    var opened: Pair<Int, Container>? = null
+    /** The container open besides the inventory, if any. */
+    var opened: OpenContainer? = null
 
-    /** Whether a crafting table is open, which crafts on its three by three grid rather than the inventory's two by two. */
-    var craftingTable = false
+    /** The workstation open, if any. A crafting table crafts on its three by three grid rather than the inventory's two by two. */
+    var workstation: Workstation? = null
 
     /** The slots of the crafting grid in use. */
-    val craftingGrid: IntRange get() = if (craftingTable) LARGE_GRID else SMALL_GRID
+    val craftingGrid: IntRange get() = if (workstation == Workstation.CRAFTING_TABLE) LARGE_GRID else SMALL_GRID
+
+    /** The slots of the inventory screen and the open workstation that hold what the player put there, to give back when it closes. */
+    val heldInScreen: List<Int> get() = listOf(CURSOR_SLOT) + SMALL_GRID + LARGE_GRID + workstation?.slots?.values.orEmpty()
 
     /** An ID for a new stack, which the client names it by from then on. */
     fun newStackId() = newStackIds()
@@ -130,9 +181,27 @@ class PlayerInventory(private val newStackIds: () -> Int = LocalStackIds()) {
             ContainerName.ARMOR -> Location(armour, slot)
             ContainerName.CURSOR, ContainerName.CREATED_OUTPUT -> Location(ui, slot)
             ContainerName.CRAFTING_INPUT -> Location(ui, slot.takeIf { it in craftingGrid } ?: return null)
-            else -> Location(opened?.takeIf { it.first == container }?.second ?: return null, slot)
+            in workstation?.slots.orEmpty() -> Location(ui, slot.takeIf { it == workstation!!.slots[container] } ?: return null)
+            else -> opened?.let { open -> open.slot(container, slot)?.let { Location(open.container, it) } } ?: return null
         }
         return location.takeIf { it.slot in 0 until it.container.size }
+    }
+
+    /**
+     * The most of [stack] [location] can hold: a stack's worth, or less, or
+     * none, in the slots of a container or workstation that hold only some
+     * things. An enchanting table holds one item to enchant, and only lapis
+     * lazuli beside it.
+     */
+    fun limit(location: Location, stack: ItemStack): Int {
+        val open = opened
+        return when {
+            open != null && location.container === open.container -> open.limit(location.slot, stack)
+            location.container !== ui || workstation != Workstation.ENCHANTING_TABLE -> stack.item.maxStackSize
+            location.slot == ENCHANTING_INPUT_SLOT -> 1
+            location.slot == ENCHANTING_LAPIS_SLOT -> if (stack.item.name == LAPIS_LAZULI) stack.item.maxStackSize else 0
+            else -> stack.item.maxStackSize
+        }
     }
 }
 

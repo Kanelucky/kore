@@ -11,6 +11,8 @@ enum class ActorDataId(val id: Int) {
     /** The name above an actor's head. */
     NAME(4),
     AIR_SUPPLY(7),
+    /** How much experience an orb holds, which sets how big it looks. */
+    VALUE(15),
     SCALE(38),
     AIR_SUPPLY_MAX(42),
     WIDTH(53),
@@ -43,6 +45,8 @@ data class ByteItem(override val id: ActorDataId, val value: Byte) : DataItem
 
 data class ShortItem(override val id: ActorDataId, val value: Short) : DataItem
 
+data class IntItem(override val id: ActorDataId, val value: Int) : DataItem
+
 data class FloatItem(override val id: ActorDataId, val value: Float) : DataItem
 
 data class LongItem(override val id: ActorDataId, val value: Long) : DataItem
@@ -72,6 +76,7 @@ data class SetActorData(val runtimeId: Long, val items: List<DataItem>, val tick
 // Each value's type, as Mojang numbers them.
 private const val BYTE = 0
 private const val SHORT = 1
+private const val INT = 2
 private const val FLOAT = 3
 private const val STRING = 4
 private const val LONG = 7
@@ -85,6 +90,7 @@ internal fun ByteBuf.writeActorData(items: List<DataItem>): ByteBuf {
         when (item) {
             is ByteItem -> writeType(BYTE).writeByte(item.value.toInt())
             is ShortItem -> writeType(SHORT).writeShortLE(item.value.toInt())
+            is IntItem -> writeType(INT).writeVarInt(item.value)
             is FloatItem -> writeType(FLOAT).writeFloatLE(item.value)
             is LongItem -> writeType(LONG).writeVarLong(item.value)
             is StringItem -> writeType(STRING).writeString(item.value)

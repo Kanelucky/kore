@@ -140,7 +140,7 @@ Kore finds the authorization service through Minecraft's service discovery and k
 
 Players run commands from the chat, and you can type them into the console Kore runs in, without the slash. Kore writes each command the game's way, so the client completes it as it's typed, with the item names `/give` takes. It also lists each command in its own `/help`, and shows what came of it in the player's own language. Target selectors work as in the game: `@s`, `@p`, `@a`, `@r`, `@e` and `@n`, with `r`, `rm`, `c`, `m`, `name` and the rest. Coordinates can be offsets from the player (`~`) or along the way they face (`^`).
 
-Every player may run `/list`, `/me` and `/tell` (or `/w` and `/msg`), and `/help`, which is the client's own: it lists the commands Kore sends, along with the client's, like `/gametips`. Sending the client a `/help` of Kore's replaces it, and the client then loses track of its own commands, so the console alone runs Kore's. Operators may also run `/say`, `/kick`, `/op` and `/deop`, and with cheats on (`allowCheats`, on by default), `/gamemode`, `/give`, `/clear` and `/teleport` (or `/tp`). The console runs all of these, cheats or not, and `/stop`, which disconnects everyone and shuts the server down.
+Every player may run `/list`, `/me` and `/tell` (or `/w` and `/msg`), and `/help`, which is the client's own: it lists the commands Kore sends, along with the client's, like `/gametips`. Sending the client a `/help` of Kore's replaces it, and the client then loses track of its own commands, so the console alone runs Kore's. Operators may also run `/say`, `/kick`, `/op` and `/deop`, and with cheats on (`allowCheats`, on by default), `/gamemode`, `/give`, `/clear`, `/teleport` (or `/tp`), `/xp` and `/enchant`. `/xp` gives points, or levels written with an `L`, like `/xp 30L`, which can be fewer than none to take levels away. The client only completes the points: told of a number with a suffix, as other servers describe it, its grammar for the command breaks and it crashes as the command is typed, so Kore leaves that form out of the commands it sends and reads it when it comes. `/enchant` enchants what a player holds, by the enchantment's number or name, at a level it goes to. The console runs all of these, cheats or not, and `/stop`, which disconnects everyone and shuts the server down.
 
 No one is an operator to start with. Type `op` and your name in the console once you've joined:
 
@@ -150,7 +150,7 @@ op Steve
 
 Kore keeps its operators in `permissions.json` (`permissionsFile` in `ServerConfig`), as the game's dedicated server does, by XUID. Kore also writes the player's name, which is how it knows a player without an XUID, as only offline mode lets in. Under `./gradlew run`, Gradle passes what you type on to Kore. The console prints what a command came to in English.
 
-Each player has their own game mode, which starts as the world's (`gameMode`) and `/gamemode` changes. Kore doesn't save players yet, so a player who leaves comes back in the world's game mode.
+Each player has their own game mode, which starts as the world's (`gameMode`) and `/gamemode` changes, and their own experience. Kore doesn't save players yet, so a player who leaves comes back in the world's game mode, with none.
 
 ### 📦 Vanilla Data
 
@@ -164,7 +164,9 @@ For the same reason, Kore keeps each player's inventory itself. Every move the p
 - **Blocks defined in data**, rather than in the game's code, go in `StartGame`. Since 26.50 that includes the wool and concrete stairs and slabs and the shelf mushroom. Without their definitions, the client knows these blocks exist but not how they look, and shows them as placeholders.
 - **Block states** are named on the network by a hash, not by their place in a palette: the 32-bit FNV-1a hash of the state's name and properties, written as little-endian NBT. Mojang's protocol docs don't spell the rule out, so the tests check it against the network ID the game gave each of the 22,091 states in its palette.
 - **Recipes** go to every player in `CraftingData`, encoded once on start: all 4,768, for crafting, smelting, stonecutting and smithing, with brewing's mixes. The client shows them in its recipe book, and works out what the crafting grid makes from them. Since 1.26.40, each kind of recipe goes in a list of its own, and an ingredient names its kind as text. Recipes name some ingredients by item tag, like any planks, and the game's data has no list of which items each tag takes in. So Kore takes BedrockData's, adding the tags items with components name themselves, and gives the poplar wood newer than it spruce's tags.
-- **Stack sizes** come from minecraft-data's `items.json`: how many of each item one slot holds, so swords, beds and boats don't stack and ender pearls only to 16. Items whose components say how many stack go by those. Commands name items in English, from the same file, as Kore has no way to find the client's own name for each.
+- **Stack sizes** come from minecraft-data's `items.json`: how many of each item one slot holds, so swords, beds and boats don't stack and ender pearls only to 16. Items whose components say how many stack go by those. Commands name items in English, from the same file, as Kore has no way to find the client's own name for each. The same file says how many uses each tool and piece of armour has, what mends it on an anvil, and which kinds of enchantment it takes.
+- **Enchantments** come from minecraft-data's `enchantments.json`, by the numbers items keep them under: each one's levels, rarity, the costs an enchanting table offers each level at, and the enchantments it rules out. That list stops at Swift Sneak, so Kore adds the mace's Wind Burst, Density and Breach and the spear's Lunge, whose numbers the creative inventory's enchanted books show. How well an item takes to a table depends on what it's made of, which the game's data doesn't say, so Kore has the game's numbers for each material, and data-driven items like spears say for themselves.
+- **Fuel** isn't in the game's data either, outside data-driven items like the wooden spear. Kore has the game's own list: coal, lava, blaze rods and the like, and anything wooden from the Overworld, which item tags help find, down to wool and carpets. Smelting earns the experience the game gives for each thing made.
 - **Mining** takes each block's hardness, the tool that digs it quicker and whether it needs one to drop anything, from minecraft-data's `blocks.json`. Cloudburst's data only has these for the blocks defined in data, which use their own. minecraft-data's table is for 1.26.30, so the newer poplar wood borrows spruce's, and its leaves oak's. It names the tools that harvest a block by Java Edition item IDs, which Kore has no use for, but how many there are tells the tier: every tier, stone and up, iron and up, or diamond and up.
 
 The data must be for the same client release as `version` in `ServerConfig`, though minecraft-data trails a release or two behind.
@@ -210,7 +212,7 @@ Cloudburst's data has no block shapes, so Kore tells which blocks are whole cube
 
 Some blocks keep more than their state, in a block entity. Kore gives one to heads on the floor, for the way they turn, to beds, for their colour, and to banners, for their colour and patterns, and pairs chests placed side by side facing the same way. Copper chests pair however weathered or waxed, the one placed second taking the first one's look. The client makes a plain one for any other block that needs one. Block entities go to clients with their chunk, and whenever they change. A bed or banner drops in its colour. Writing on signs, and what goes in a chest, are for later.
 
-Clicking a lever, button, door, trapdoor, fence gate, daylight detector, repeater or comparator uses it instead, unless the player sneaks with something in hand. Clicking a block that opens a screen, like a chest, anvil or furnace, or does something else of its own, like a bed or a bell, places nothing beside it, though Kore can't open all of them yet. A daylight detector switches between sensing day and night, a repeater's delay goes up a tick, back to one after four, and a comparator switches between comparing and subtracting. A lever flips, a button presses in and pops back out a second or so later, and doors, trapdoors and fence gates open and shut: a door's two halves together, and a gate away from the player. Everyone with the chunk sees the change and hears it. Each sound names the block making it, so the client plays that block's own: a lever's click, or a bamboo button's. Iron doors and trapdoors only open with redstone, and Kore has no redstone yet, so nothing levers and buttons switch on is powered.
+Clicking a lever, button, door, trapdoor, fence gate, daylight detector, repeater or comparator uses it instead, unless the player sneaks with something in hand. Clicking a block that opens a screen, like a chest, anvil or furnace, or does something else of its own, like a bed or a bell, places nothing beside it, though Kore can't open all of them yet: beacons, hoppers, dispensers, droppers, crafters, cartography tables and lecterns wait for later. A daylight detector switches between sensing day and night, a repeater's delay goes up a tick, back to one after four, and a comparator switches between comparing and subtracting. A lever flips, a button presses in and pops back out a second or so later, and doors, trapdoors and fence gates open and shut: a door's two halves together, and a gate away from the player. Everyone with the chunk sees the change and hears it. Each sound names the block making it, so the client plays that block's own: a lever's click, or a bamboo button's. Iron doors and trapdoors only open with redstone, and Kore has no redstone yet, so nothing levers and buttons switch on is powered.
 
 In creative, the client breaks a block at once and says so with a `PlayerAction`. Outside creative, it reports a finished break in its input. With server-authoritative block breaking off, Mojang leaves the timing of a break to the client, so Kore takes its word for it. Either way, everyone with the chunk sees the block go, with the particles and sound of it breaking: the client leaves those to the server, even for its own breaks. Outside creative, bedrock and other blocks only creative players break stay put.
 
@@ -223,6 +225,12 @@ Items lie in the world as entities. The game ticks 20 times a second, on the sam
 Players open chests, barrels, shulker boxes and ender chests, as long as nothing blocks them: a solid block on a chest, or where a shulker box's lid would go. Two chests side by side open as one window, the left one's items first. A chest's, shulker box's or ender chest's lid opens for everyone with the chunk, with its sound, and stays open until the last player looking in closes it; a barrel opens by its state. Everyone looking into the same chest sees the items the others move in and out. An ender chest holds each player's own items, whichever one they open. A broken container drops what it held, even in creative, and closes for whoever had it open, except a shulker box, which keeps its items in its own item, and holds them again once it's placed. Kore keeps the items in the world for as long as the server runs.
 
 Players craft in the inventory's two by two grid, and a crafting table's three by three. A craft from the grid must have its recipe laid out there: a shaped recipe's pattern anywhere in the grid, mirrored if the recipe allows, with nothing else, and a shapeless recipe's ingredients in any slots. Kore then uses up what the recipe takes from each slot, as many times over as the player crafts, and puts what it makes in the output for the client to take. A craft from the recipe book takes its ingredients from wherever the client says, which must be what the recipe takes. Recipes that make two things, like a cake giving back its buckets, make each when the client asks, and dyeing a shulker box or a bundle keeps what it holds. Closing the screen puts what's left in the grid, or on the cursor, back among the player's items.
+
+Furnaces, blast furnaces and smokers cook by their own recipes, burning fuel, and work whether anyone's looking or not. A furnace takes ten seconds an item, and a blast furnace or smoker five, burning its fuel twice as fast; a lava bucket leaves its bucket. Everyone with the chunk sees a furnace light up and go out, and whoever has one open watches the flame burn down, the arrow fill and the items move, whoever put them there. Only fuel goes under the fire, and nothing into what it made. What it makes earns experience, which comes out as orbs when a player takes it, or the furnace breaks. Brewing stands brew too: a blaze powder fuels twenty brews, each taking twenty seconds, and the bottles show on the stand. A reagent brews every bottle it can into the next potion, or gunpowder and dragon's breath turn potions into splash and lingering ones.
+
+The other workstations work on what a player puts in them, which goes back among their items when they close one. A stonecutter cuts stone by its recipes. A smithing table upgrades diamond gear to netherite, keeping its enchantments and wear, and trims armour in the template's pattern and the material's colour. An anvil mends gear with its material, a quarter at a time, or with another of the same, and brings enchantments over from it or an enchanted book: those the item can take that go with what it has, two of the same level making the next. It names things too. Each costs levels as Bedrock reckons them, with more for each time the item's been worked before, and outside creative it can't cost forty levels or more, unless it's only a name. It clangs for everyone around, and wears from anvil to chipped to damaged to gone, a little over one use in ten. A grindstone takes every enchantment but curses off, for experience, and mends two of a kind into one. A loom weaves a pattern into banners in the dye's colour, up to six, and the patterns from banner patterns need theirs beside it. An enchanting table offers three enchantments for the item put in it, from bookshelves two blocks out with air between, up to fifteen, and costs a level and a lapis lazuli for the first, up to three of each for the third, which needs thirty levels with every bookshelf. What it offers changes each time the player enchants.
+
+Experience drops as orbs, which fly to the nearest player within eight blocks and fill their bar. Every fifth level comes with a fanfare. Kore takes levels for anvils and enchanting.
 
 Players see each other. Everyone in the game is on each player's list, which the pause screen shows, with the skin their client described when they logged in. Each tick, each player sees the others in the chunks they have appear, move, sneak and sprint, change what they hold and go, and sees their arms swing as they mine and build. A persona skin, made in the game's character creator, also comes with the pieces it's made of; Kore leaves those out, as Dragonfly does, since the skin's image already shows them.
 
@@ -265,12 +273,12 @@ src/main/kotlin/
 │   ├── ItemStackRequest.kt          # Inventory requests from the client, and the answers
 │   ├── CreativeContent.kt           # The creative inventory, and items on the wire
 │   ├── Blocks.kt                    # Using items on blocks, block updates, and the effects players see
-│   ├── Entities.kt                  # Item entities appearing, moving, going and being picked up, and inventory slots
+│   ├── Entities.kt                  # Item entities and experience orbs appearing, moving, going and being picked up, and inventory slots
 │   ├── Players.kt                   # Other players: the player list, appearing, moving, holding and swinging
 │   ├── Skins.kt                     # How players look, from their client data to the wire
 │   ├── Chat.kt                      # Chat messages, and the game's own messages in each client's language
 │   ├── Commands.kt                  # Commands the client may run, its requests, their output, and game modes
-│   ├── Containers.kt                # Windows' contents, and blocks like chests opening
+│   ├── Containers.kt                # Windows' contents and numbers, blocks like chests opening, and enchanting tables' offers
 │   ├── Crafting.kt                  # Every recipe, as the client wants them
 │   └── LoginRequest.kt              # Reading who a client claims to be
 ├── world/
@@ -293,13 +301,21 @@ src/main/kotlin/
 │   ├── Drops.kt                     # What each block drops
 │   ├── Items.kt                     # Items lying in the world, falling and sliding
 │   ├── Containers.kt                # Chests, barrels, shulker boxes and ender chests: which blocks keep items, and what keeps them shut
+│   ├── Furnaces.kt                  # Furnaces, blast furnaces and smokers burning fuel and cooking
+│   ├── Brewing.kt                   # Brewing stands brewing potions
+│   ├── Experience.kt                # Experience orbs, and players' levels
 │   └── Shapes.kt                    # Which blocks are whole cubes, and which faces can hold a torch or a button
 ├── inventory/
-│   ├── PlayerInventory.kt           # A player's slots: hotbar, inventory, offhand, armour, cursor and crafting grid, and an open container's
-│   └── StackRequests.kt             # Carrying out item stack requests, all or nothing, crafting included
+│   ├── PlayerInventory.kt           # A player's slots: hotbar, inventory, offhand, armour, cursor, crafting grid and workstations', and an open container's
+│   ├── StackRequests.kt             # Carrying out item stack requests, all or nothing, crafting included
+│   ├── Workstations.kt              # What anvils, grindstones, looms and smithing tables make
+│   └── Enchanting.kt                # What enchanting tables offer
 ├── registry/
-│   ├── VanillaData.kt               # Loads the game's items, block states, biomes and recipes on start
+│   ├── VanillaData.kt               # Loads the game's items, block states, biomes, recipes and enchantments on start
 │   ├── Items.kt                     # Items, as the client's item registry lists them
+│   ├── ItemData.kt                  # What an item keeps in its NBT: enchantments, wear, its name and anvils' work
+│   ├── Enchantments.kt              # The enchantments, and the items each goes on
+│   ├── Fuel.kt                      # What burns in a furnace, for how long, and the experience smelting earns
 │   ├── ItemStacks.kt                # Stacks of items by name, with the block each places, and items kept in NBT
 │   ├── Recipes.kt                   # Recipes and brewing mixes, and the items each tag takes in
 │   ├── Biomes.kt                    # Biomes, as the client's biome definitions describe them
@@ -372,7 +388,10 @@ Packages follow the Kotlin convention of omitting the common root, so `org.korem
 - [x] Moving items around the player's inventory, and taking them from the creative inventory
 - [x] Chests, barrels, shulker boxes and ender chests
 - [x] Crafting, in the inventory and at a crafting table
-- [ ] Furnaces, and the other blocks with screens
+- [x] Furnaces, blast furnaces, smokers and brewing stands
+- [x] Stonecutters, smithing tables, anvils, grindstones, looms and enchanting tables
+- [x] Experience: orbs, levels, and what workstations cost
+- [ ] Beacons, hoppers, dispensers, droppers, crafters, cartography tables and lecterns
 - [x] Players seeing each other
 - [x] Chat, and players joining and leaving
 - [ ] Mobs

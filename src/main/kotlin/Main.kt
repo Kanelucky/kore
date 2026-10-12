@@ -38,7 +38,10 @@ fun main() {
         log.error("Missing {}. Kore needs the game data for {} in {}: clone https://github.com/KoreMC/data there.", e.file, config.version, config.dataDirectory.toAbsolutePath())
         exitProcess(1)
     }
-    log.info("Loaded {} items, {} block states, {} biomes and {} recipes for {}", vanilla.items.size, vanilla.blocks.states.size, vanilla.biomes.size, vanilla.recipes.recipes.size, config.version)
+    log.info(
+        "Loaded {} items, {} block states, {} biomes, {} recipes and {} enchantments for {}",
+        vanilla.items.size, vanilla.blocks.states.size, vanilla.biomes.size, vanilla.recipes.recipes.size, vanilla.enchantments.all.size, config.version,
+    )
 
     val addresses = config.advertisedAddresses.map(InetAddress::getByName).ifEmpty { localAddresses() }
     val candidates = hostCandidates(config.port, addresses)

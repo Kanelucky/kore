@@ -40,10 +40,15 @@ import org.koremc.registry.CreativeCategory
 import org.koremc.registry.CreativeGroup
 import org.koremc.registry.CreativeInventory
 import org.koremc.registry.CreativeItem
+import org.koremc.registry.Cost
+import org.koremc.registry.Enchantment
+import org.koremc.registry.EnchantmentLevel
+import org.koremc.registry.Enchantments
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.ItemVersion
+import org.koremc.registry.enchantments
 import org.koremc.world.Drops
 import org.koremc.world.FlatWorld
 import org.koremc.world.Vec3
@@ -81,7 +86,7 @@ class CommandsTest {
     private val world = FlatWorld(palette, listOf(stone))
 
     private val diamond = ItemDefinition("minecraft:diamond", 304, componentBased = false, ItemVersion.NONE)
-    private val sword = ItemDefinition("minecraft:diamond_sword", 307, componentBased = false, ItemVersion.NONE, maxStackSize = 1)
+    private val sword = ItemDefinition("minecraft:diamond_sword", 307, componentBased = false, ItemVersion.NONE, maxStackSize = 1, enchantCategories = setOf("sharp_weapon"))
     private val stoneItem = ItemDefinition("minecraft:stone", 1, componentBased = false, ItemVersion.NONE)
     private val items = listOf(
         ItemDefinition(AIR, -158, componentBased = false, ItemVersion.NONE), diamond, sword, stoneItem,
@@ -92,8 +97,15 @@ class CommandsTest {
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
         listOf(CreativeItem(ItemStack(stoneItem, block = stone), group = 0), CreativeItem(ItemStack(diamond), group = 0), CreativeItem(ItemStack(sword), group = 0)),
     )
+    private val enchantments = Enchantments(
+        listOf(
+            Enchantment(9, "sharpness", 5, Cost(11, -10), Cost(11, 10), 10, treasure = false, curse = false, setOf("smite"), { "sharp_weapon" in it.enchantCategories }),
+            Enchantment(10, "smite", 5, Cost(8, -3), Cost(8, 17), 5, treasure = false, curse = false, setOf("sharpness"), { "sharp_weapon" in it.enchantCategories }),
+        ),
+    )
     private val game = GameData(
         world, emptyList(), BlockDefinitions(emptyList()), creative, emptyMap(), Drops(items, creative, palette), ItemStacks(items, creative, palette),
+        enchantments = enchantments,
     )
 
     private val permissions = createTempDirectory("kore-commands").resolve("permissions.json")
@@ -406,6 +418,46 @@ class CommandsTest {
         assertTrue(available.commands.none { it.name == "help" })
         val teleport = available.commands.single { it.name == "teleport" }
         assertEquals(listOf("teleport", "tp"), available.enums[teleport.aliases].values.map { available.enumValues[it] })
+    }
+
+    @Test
+    fun `xp gives points, which fill the bar, or levels written with an L, which can take levels away too`() {
+        val (steve, alex) = steveAndAlex()
+
+        steve.runs("/xp 10")
+        assertEquals(listOf(CommandMessage("commands.xp.success", true, listOf("10", "Steve"))), steve.output())
+        assertEquals(1, steve.session.experienceLevel)
+        steve.runs("/xp 5L Alex")
+        assertEquals(listOf(CommandMessage("commands.xp.success.levels", true, listOf("5", "Alex"))), steve.output())
+        steve.runs("/xp -2l Alex")
+        assertEquals(listOf(CommandMessage("commands.xp.success.negative.levels", true, listOf("2", "Alex"))), steve.output())
+        assertEquals(3, alex.session.experienceLevel)
+        steve.runs("/xp -1")
+        assertEquals(listOf(CommandMessage("commands.xp.failure.widthdrawXp", false)), steve.output())
+
+        // The client can't take the levels with their L, so it only hears of the points.
+        val available = commands.map.availableTo(steve.session.permission)
+        assertEquals(listOf(listOf(0x100001, 0x100008)), available.commands.single { it.name == "xp" }.overloads.map { overload -> overload.map { it.symbol } })
+    }
+
+    @Test
+    fun `enchant enchants what a player holds, at a level the enchantment goes to, alongside what's on it already`() {
+        val (steve, alex) = steveAndAlex()
+        steve.runs("/give @s diamond_sword")
+        steve.received()
+
+        steve.runs("/enchant @s sharpness 3")
+        assertEquals(listOf(CommandMessage("commands.enchant.success", true, listOf("Steve"))), steve.output())
+        assertEquals(listOf(EnchantmentLevel(9, 3)), steve.session.heldStack?.enchantments)
+        steve.runs("/enchant @s 10")
+        assertEquals(listOf(CommandMessage("commands.enchant.cantCombine", false, listOf("smite", "sharpness"))), steve.output())
+        steve.runs("/enchant @s sharpness 6")
+        assertEquals(listOf(CommandMessage("commands.enchant.invalidLevel", false, listOf("sharpness", "6"))), steve.output())
+        steve.runs("/enchant @s 99")
+        assertEquals(listOf(CommandMessage("commands.enchant.notFound", false, listOf("99"))), steve.output())
+        steve.runs("/enchant Alex sharpness")
+        assertEquals(listOf(CommandMessage("commands.enchant.noItem", false, listOf("Alex"))), steve.output())
+        assertEquals(null, alex.session.heldStack)
     }
 
     @Test

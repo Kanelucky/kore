@@ -24,11 +24,22 @@ data class ItemDefinition(
     val maxStackSize: Int = components.maxStackSize() ?: 64,
     /** What the item is called in English, like `Diamond Sword`. */
     val displayName: String = displayNameOf(name),
+    /** How many uses the item has in it, like a tool, or 0 for an item that doesn't wear out. */
+    val maxDurability: Int = components.maxDurability() ?: 0,
+    /** The items that mend it on an anvil, a quarter of its durability each, like diamonds a diamond sword. */
+    val repairItems: Set<String> = emptySet(),
+    /** The kinds of enchantment it takes, like `sharp_weapon` or `foot_armor`, as minecraft-data names them. */
+    val enchantCategories: Set<String> = emptySet(),
+    /** How well it takes to enchanting at a table: the higher, the more and better enchantments. 0 for an item a table can't enchant. */
+    val enchantability: Int = components.enchantability() ?: 0,
 )
 
 /** The most of an item one slot holds, if its [components][ItemDefinition.components] say. */
 internal fun NbtMap.maxStackSize(): Int? =
     getCompound("components", NbtMap.EMPTY).getCompound("item_properties", NbtMap.EMPTY).takeIf { it.containsKey("max_stack_size") }?.getInt("max_stack_size")
+
+/** The component called [name], if these components have it. */
+internal fun NbtMap.component(name: String): NbtMap? = getCompound("components", NbtMap.EMPTY).getCompound(name, null)
 
 /** A name for the item called [name] when the game's data has none: `minecraft:black_wool_slab` is `Black Wool Slab`. */
 internal fun displayNameOf(name: String) = name.substringAfter(':').split('_').joinToString(" ") { word -> word.replaceFirstChar(Char::uppercaseChar) }
@@ -48,3 +59,9 @@ data class ItemStack(
 
 /** Whether [other] is the same item, variant, block and NBT as this, so the two could share a slot. */
 fun ItemStack.sameKindAs(other: ItemStack) = item == other.item && aux == other.aux && block == other.block && nbt == other.nbt
+
+/** How many uses an item has in it, if its components say. */
+internal fun NbtMap.maxDurability(): Int? = (component("minecraft:durability")?.get("max_durability") as? Number)?.toInt()
+
+/** How well an item takes to enchanting, if its components say, which keep it as a byte. */
+internal fun NbtMap.enchantability(): Int? = (component("minecraft:enchantable")?.get("value") as? Number)?.toInt()

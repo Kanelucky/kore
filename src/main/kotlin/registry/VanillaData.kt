@@ -15,12 +15,12 @@ private val json = Json { ignoreUnknownKeys = true }
 
 /**
  * The game's own definitions, which clients expect the server to agree with:
- * every item, block state and biome, the creative inventory and recipes.
- * They're dumped from the game by CloudburstMC, with how blocks take to
- * mining, and how many of each item stack, from PrismarineJS's
- * minecraft-data, and which items each tag takes in from PocketMine's
- * BedrockData, kept apart from Kore's code in
- * https://github.com/KoreMC/data, and read once, on start.
+ * every item, block state and biome, the creative inventory, recipes and
+ * enchantments. They're dumped from the game by CloudburstMC, with how
+ * blocks take to mining, how many of each item stack, what items are made
+ * of and the enchantments, from PrismarineJS's minecraft-data, and which
+ * items each tag takes in from PocketMine's BedrockData, kept apart from
+ * Kore's code in https://github.com/KoreMC/data, and read once, on start.
  */
 data class VanillaData(
     val items: List<ItemDefinition>,
@@ -32,6 +32,7 @@ data class VanillaData(
     /** How each block takes to mining, by block name. */
     val mining: Map<String, Mining>,
     val recipes: Recipes = Recipes.NONE,
+    val enchantments: Enchantments = Enchantments.NONE,
 ) {
     companion object {
         /**
@@ -57,6 +58,7 @@ data class VanillaData(
                 blockDefinitions = blockDefinitions,
                 mining = withNewerBlocks(mining, blocks),
                 recipes = readRecipes(directory.resolve("recipes.json").readText(), ItemStacks(items, creative, blocks), blocks, tags),
+                enchantments = readEnchantments(directory.resolve("enchantments.json").readText(), items),
             )
         }
     }
@@ -68,21 +70,30 @@ private class ItemState(val name: String, val id: Int, val version: Int, val com
 
 /** An entry in minecraft-data's `items.json`, which names items without their namespace. */
 @Serializable
-private class ItemDetails(val name: String, val stackSize: Int, val displayName: String)
+private class ItemDetails(
+    val name: String,
+    val stackSize: Int,
+    val displayName: String,
+    val maxDurability: Int = 0,
+    val repairWith: List<String> = emptyList(),
+    val enchantCategories: List<String> = emptyList(),
+)
 
 /**
  * Reads the item list from `runtime_item_states.json`, giving each item its
  * entry from `item_components.nbt`, which is keyed by item name. How many
- * of an item a slot holds, and what it's called, come from the [details]
- * in minecraft-data's `items.json`, unless its components say how many.
- * Items newer than those details stack to 64, and get a name made from
- * their identifier.
+ * of an item a slot holds, what it's called, how long it lasts, what mends
+ * it and which enchantments it takes come from the [details] in
+ * minecraft-data's `items.json`, unless its components say. Items newer
+ * than those details stack to 64, and get a name made from their
+ * identifier.
  */
 fun readItems(itemStates: String, components: NbtMap, details: String = "[]"): List<ItemDefinition> {
     val byName = json.decodeFromString<List<ItemDetails>>(details).associateBy { "minecraft:${it.name}" }
     val items = json.decodeFromString<List<ItemState>>(itemStates).map { item ->
         val itemComponents = components.getCompound(item.name, NbtMap.EMPTY)
         val detail = byName[item.name]
+        val categories = detail?.enchantCategories.orEmpty().toSet()
         ItemDefinition(
             name = item.name,
             runtimeId = item.id,
@@ -91,6 +102,10 @@ fun readItems(itemStates: String, components: NbtMap, details: String = "[]"): L
             components = itemComponents,
             maxStackSize = itemComponents.maxStackSize() ?: detail?.stackSize ?: 64,
             displayName = detail?.displayName ?: displayNameOf(item.name),
+            maxDurability = itemComponents.maxDurability() ?: detail?.maxDurability ?: 0,
+            repairItems = detail?.repairWith.orEmpty().mapTo(HashSet()) { "minecraft:$it" },
+            enchantCategories = categories,
+            enchantability = itemComponents.enchantability() ?: enchantabilityOf(item.name, categories),
         )
     }
     items.find { it.runtimeId !in Short.MIN_VALUE..Short.MAX_VALUE }?.let { error("${it.name}'s runtime ID ${it.runtimeId} doesn't fit in 16 bits") }

@@ -182,15 +182,16 @@ fun FlatWorld.tickItems() {
     }
 }
 
-private enum class Axis { X, Y, Z }
+internal enum class Axis { X, Y, Z }
 
 /** A box in the world, from its lowest corner to its highest. */
-private class Box(val min: DoubleArray, val max: DoubleArray) {
+internal class Box(val min: DoubleArray, val max: DoubleArray) {
     fun shifted(axis: Axis, by: Double) = Box(min.copyOf().also { it[axis.ordinal] += by }, max.copyOf().also { it[axis.ordinal] += by })
 
     fun bottom() = Vec3(((min[0] + max[0]) / 2).toFloat(), min[1].toFloat(), ((min[2] + max[2]) / 2).toFloat())
 
     companion object {
+        /** The box of an item, or anything else a quarter of a block each way, standing at [bottom]. */
         fun around(bottom: Vec3) = Box(
             doubleArrayOf(bottom.x - HALF_WIDTH, bottom.y.toDouble(), bottom.z - HALF_WIDTH),
             doubleArrayOf(bottom.x + HALF_WIDTH, bottom.y + HEIGHT, bottom.z + HALF_WIDTH),
@@ -202,7 +203,7 @@ private class Box(val min: DoubleArray, val max: DoubleArray) {
  * How far [box] can move along [axis] of the distance it wants to, [by],
  * before it meets a block's solid part.
  */
-private fun FlatWorld.clip(box: Box, axis: Axis, by: Double): Double {
+internal fun FlatWorld.clip(box: Box, axis: Axis, by: Double): Double {
     if (by == 0.0) return 0.0
     val a = axis.ordinal
     val reach = Box(box.min.copyOf().also { it[a] += minOf(by, 0.0) }, box.max.copyOf().also { it[a] += maxOf(by, 0.0) })
