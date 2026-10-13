@@ -116,7 +116,7 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 - **World:** the vanilla flat world, streamed to players as they move. Changes last as long as the server runs.
 - **Building and mining:** placing blocks with the game's rules for slabs, stairs, doors, rails, fences, walls, scaffolding and the like; survival mining at the right pace, tool wear, and drops.
 - **Items and inventory:** dropped items, picking up and merging, the creative inventory, and server-authoritative inventories.
-- **Containers and workstations:** chests, barrels, shulker boxes and ender chests; crafting; furnaces and brewing stands; stonecutters, smithing tables, anvils, grindstones, looms and enchanting tables; hoppers, dispensers and droppers; experience.
+- **Containers and workstations:** chests, barrels, shulker boxes and ender chests; crafting; furnaces and brewing stands; stonecutters, smithing tables, anvils, grindstones, looms and enchanting tables; hoppers, dispensers, droppers and crafters; lecterns, and writing and signing books; experience.
 - **Redstone:** levers, buttons, pressure plates, redstone blocks, torches, dust, repeaters, comparators and observers, powering doors, trapdoors, fence gates, lamps, hoppers, dispensers and droppers.
 - **Pistons:** pushing and pulling blocks, slime and honey, flying machines, chests and furnaces with their contents, and the players, items and orbs in the way or on top.
 - **Players:** seeing each other, skins, chat, and joining and leaving messages in each player's language.
@@ -160,10 +160,11 @@ Packages leave out the common root, so `org.koremc.network` lives in `src/main/k
 - [x] Building, survival mining and tool wear
 - [x] Items, inventories and the creative inventory
 - [x] Containers, crafting, furnaces, brewing and workstations
-- [x] Hoppers, dispensers and droppers
+- [x] Hoppers, dispensers, droppers and crafters
+- [x] Lecterns, and writing and signing books
 - [x] Redstone, pistons, pressure plates and lamps
 - [x] Players seeing each other, chat and commands
-- [ ] Beacons, crafters, cartography tables and lecterns
+- [ ] Beacons and cartography tables
 - [ ] Mobs
 - [ ] The rest of the game's commands
 

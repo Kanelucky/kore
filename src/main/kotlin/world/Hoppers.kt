@@ -41,7 +41,9 @@ class Hopper : Machine(HOPPER_SLOTS) {
  * A block's slots as a hopper reaches them: those it puts items into, in
  * order, through the face it reaches them by, and those a hopper below
  * takes items out of, with what each slot holds the most of, which is none
- * of what it doesn't take. A hopper reaching another is [hopper].
+ * of what it doesn't take. A hopper reaching another is [hopper]. A block
+ * that fills its slots in an order of its own, by what goes in, has
+ * [order].
  */
 internal class HopperReach(
     val slots: Container,
@@ -50,6 +52,7 @@ internal class HopperReach(
     val limit: (slot: Int, stack: ItemStack) -> Int = { _, stack -> stack.item.maxStackSize },
     val canTake: (slot: Int, stack: ItemStack) -> Boolean = { _, _ -> true },
     val hopper: Hopper? = null,
+    val order: ((ItemStack) -> List<Int>)? = null,
 ) {
     /**
      * Puts up to [count] of [stack] in, a slot at a time in order: into an
@@ -58,7 +61,7 @@ internal class HopperReach(
      */
     fun put(stack: ItemStack, count: Int, newStackId: () -> Int): Int {
         var left = count
-        for (slot in into) {
+        for (slot in order?.invoke(stack) ?: into) {
             if (left == 0) break
             val most = minOf(limit(slot, stack), stack.item.maxStackSize)
             val there = slots[slot]
@@ -84,6 +87,8 @@ internal class HopperReach(
  * blaze powder from the sides, and takes the bottles from below. Shulker
  * boxes don't take shulker boxes. Chests, barrels, hoppers, dispensers and
  * droppers take anything, a double chest as the one window it opens as.
+ * A crafter takes anything in the slots that are on, filling an empty one
+ * first, and gives up what's in its grid from below.
  */
 internal fun FlatWorld.hopperReach(pos: BlockPos, face: Face, recipes: Recipes, fuel: Fuel): HopperReach? {
     val state = stateAt(pos) ?: return null
@@ -100,7 +105,7 @@ internal fun FlatWorld.hopperReach(pos: BlockPos, face: Face, recipes: Recipes, 
         Storage.ENDER_CHEST -> return null
         null -> {}
     }
-    val machine: Machine = furnaceAt(pos) ?: brewingStandAt(pos) ?: hopperAt(pos) ?: dispenserAt(pos) ?: return null
+    val machine: Machine = furnaceAt(pos) ?: brewingStandAt(pos) ?: hopperAt(pos) ?: dispenserAt(pos) ?: crafterAt(pos) ?: return null
     val limit = { slot: Int, stack: ItemStack -> machine.limit(slot, stack, recipes, fuel) }
     return when (machine) {
         is Furnace -> HopperReach(
@@ -119,6 +124,7 @@ internal fun FlatWorld.hopperReach(pos: BlockPos, face: Face, recipes: Recipes, 
         )
         is Hopper -> HopperReach(machine.slots, (0 until HOPPER_SLOTS).toList(), hopper = machine)
         is Dispenser -> HopperReach(machine.slots, (0 until DISPENSER_SLOTS).toList())
+        is Crafter -> HopperReach(machine.slots, (0 until CRAFTER_SLOTS).toList(), limit = limit, order = machine::fillOrder)
     }
 }
 

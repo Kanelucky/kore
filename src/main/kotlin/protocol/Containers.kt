@@ -5,6 +5,7 @@ import org.koremc.registry.ItemStack
 import org.koremc.world.BlockPos
 
 private const val BLOCK_EVENT = 26
+internal const val PLAYER_TOGGLE_CRAFTER_SLOT_REQUEST = 306
 private const val INVENTORY_CONTENT = 49
 private const val CONTAINER_SET_DATA = 51
 private const val PLAYER_ENCHANT_OPTIONS = 146
@@ -27,12 +28,22 @@ object ContainerType {
     const val DROPPER = 7
     const val HOPPER = 8
     const val LOOM = 24
+
+    /** A lectern's book, open to read, which has no window of its own. */
+    const val LECTERN = 25
     const val GRINDSTONE = 26
     const val BLAST_FURNACE = 27
     const val SMOKER = 28
     const val STONECUTTER = 29
     const val SMITHING_TABLE = 33
+    const val CRAFTER = 36
 }
+
+/** A player switching the empty [slot] of the crafter at [position] off, as [disabled], or back on. */
+data class ToggleCrafterSlot(val position: BlockPos, val slot: Int, val disabled: Boolean) : ClientPacket
+
+internal fun decodeToggleCrafterSlot(buffer: ByteBuf) =
+    ToggleCrafterSlot(BlockPos(buffer.readIntLE(), buffer.readIntLE(), buffer.readIntLE()), buffer.readUnsignedByte().toInt(), buffer.readBoolean())
 
 /**
  * What every slot of a window holds, with each stack's ID, or nothing.

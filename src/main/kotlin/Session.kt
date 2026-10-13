@@ -23,6 +23,7 @@ import org.koremc.inventory.StackRequestHandler
 import org.koremc.inventory.Workstation
 import org.koremc.inventory.offersFor
 import org.koremc.inventory.runes
+import org.koremc.inventory.writeInBook
 import org.koremc.network.DisconnectReason
 import org.koremc.network.NetherNetConnection
 import org.koremc.protocol.ARMOUR_WINDOW
@@ -39,6 +40,10 @@ import org.koremc.protocol.BlockAction
 import org.koremc.protocol.BlockEvent
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.BlockActorData
+import org.koremc.protocol.BookAction
+import org.koremc.protocol.BookEdit
+import org.koremc.protocol.LecternUpdate
+import org.koremc.protocol.ToggleCrafterSlot
 import org.koremc.protocol.ByteItem
 import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
@@ -163,14 +168,29 @@ import org.koremc.world.BREWING_REAGENT
 import org.koremc.world.BREWING_STAND
 import org.koremc.world.BREWS_PER_FUEL
 import org.koremc.world.BrewingStand
+import org.koremc.world.BlockSound
 import org.koremc.world.BrokenBlock
 import org.koremc.world.ExperienceOrb
 import org.koremc.world.FURNACE_FUEL
 import org.koremc.world.FURNACE_INPUT
 import org.koremc.world.FURNACE_OUTPUT
 import org.koremc.world.Furnace
+import org.koremc.world.BOOK_PUT
+import org.koremc.world.CRAFTER_SLOTS
+import org.koremc.world.Crafter as CrafterMachine
 import org.koremc.world.DISPENSER_SLOTS
 import org.koremc.world.Dispenser
+import org.koremc.world.WRITABLE_BOOK
+import org.koremc.world.WRITTEN_BOOK
+import org.koremc.world.isCrafter
+import org.koremc.world.isLectern
+import org.koremc.world.goesOnLectern
+import org.koremc.world.knockBookOff
+import org.koremc.world.lecternBook
+import org.koremc.world.less
+import org.koremc.world.putOnLectern
+import org.koremc.world.toggleCrafterSlot
+import org.koremc.world.turnPage
 import org.koremc.world.Fired
 import org.koremc.world.HOPPER
 import org.koremc.world.HOPPER_SLOTS
@@ -269,6 +289,9 @@ private const val INVENTORY_CONTAINER = 0xFF
 
 /** The window a client closes when chat opens over a container. It gets no reply. */
 private const val CHAT_WINDOW = 0xFF
+
+/** The window of a screen with none of its own, like a lectern's book, which the client closes as [CHAT_WINDOW]. */
+private const val NO_WINDOW = -1
 
 /** The highest window ID a container gets, after which they start from 1 again. */
 private const val LAST_WINDOW = 99
@@ -556,6 +579,9 @@ class Session(
     /** How the player last moved, as the client reported it. */
     private var delta = Vec3(0f, 0f, 0f)
 
+    /** Whether the player has a lectern's book open, which closes with no window of its own. */
+    private var reading = false
+
     /** How pistons last moved the player, until they're done with them. */
     private var pistonMotion: Vec3? = null
 
@@ -667,6 +693,9 @@ class Session(
                 is MobEquipment -> onEquip(packet)
                 is Animate -> if (packet.action == Animate.SWING_ARM) viewers().forEach { it.showSwing(entityId, packet.swingSource) }
                 is LevelSoundEvent -> onSound(packet)
+                is LecternUpdate -> onLecternUpdate(packet)
+                is BookEdit -> onBookEdit(packet)
+                is ToggleCrafterSlot -> onToggleCrafterSlot(packet)
                 is Text -> onChat(packet)
                 is CommandRequest -> onCommand(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
@@ -906,7 +935,8 @@ class Session(
     /**
      * Agrees to the client closing a window, except one closed by chat
      * opening, which needs no answer. What the player left on the cursor or
-     * in the crafting grid goes back among their items.
+     * in the crafting grid goes back among their items. A lectern's book
+     * closes with the same window as chat, and gets its answer.
      */
     private fun onContainerClose(packet: ContainerClose) {
         when (packet.windowId) {
@@ -915,7 +945,10 @@ class Session(
                 returnCraftingItems()
                 send(ContainerClose(INVENTORY_WINDOW, containerType = 0))
             }
-            CHAT_WINDOW -> {
+            CHAT_WINDOW -> if (reading) {
+                reading = false
+                send(ContainerClose(packet.windowId, packet.containerType))
+            } else {
                 inventoryOpen = false
                 closeWindow(reply = false)
             }
@@ -997,13 +1030,13 @@ class Session(
     }
 
     /**
-     * Opens the furnace, brewing stand, hopper, dispenser or dropper at
-     * [pos] for the player, which they see at work for as long as it's
-     * open, whoever else is looking.
+     * Opens the furnace, brewing stand, hopper, dispenser, dropper or
+     * crafter at [pos] for the player, which they see at work for as long
+     * as it's open, whoever else is looking.
      */
     private fun openMachine(pos: BlockPos) {
         if (gameMode == GameMode.SPECTATOR || !inReach(pos)) return
-        val machine: Machine = world.furnaceAt(pos) ?: world.brewingStandAt(pos) ?: world.hopperAt(pos) ?: world.dispenserAt(pos) ?: return
+        val machine: Machine = world.furnaceAt(pos) ?: world.brewingStandAt(pos) ?: world.hopperAt(pos) ?: world.dispenserAt(pos) ?: world.crafterAt(pos) ?: return
         closeWindow(reply = true)
         val (type, names) = when (machine) {
             is Furnace -> machine.kind.window to mapOf(
@@ -1018,6 +1051,7 @@ class Session(
             )
             is Hopper -> ContainerType.HOPPER to mapOf(ContainerName.LEVEL_ENTITY to (0 until HOPPER_SLOTS))
             is Dispenser -> machine.kind.window to mapOf(ContainerName.LEVEL_ENTITY to (0 until DISPENSER_SLOTS))
+            is CrafterMachine -> ContainerType.CRAFTER to mapOf(ContainerName.CRAFTER to (0 until CRAFTER_SLOTS), ContainerName.LEVEL_ENTITY to (0 until CRAFTER_SLOTS))
         }
         val opened = Window(nextWindowId(), type, pos, storage = null, blocks = listOf(pos), view = machine.slots, machine = machine)
         window = opened
@@ -1051,7 +1085,7 @@ class Session(
         val data = when (val machine = open.machine) {
             is Furnace -> listOf(machine.cookTime, machine.litTime, machine.litDuration)
             is BrewingStand -> listOf(machine.brewTime, machine.fuel, BREWS_PER_FUEL)
-            is Hopper, is Dispenser, null -> emptyList()
+            is Hopper, is Dispenser, is CrafterMachine, null -> emptyList()
         }
         data.forEachIndexed { property, value -> if (open.shownData.getOrNull(property) != value) packets += ContainerSetData(open.id, property, value) }
         open.shownData = data
@@ -1317,13 +1351,82 @@ class Session(
         when {
             sneaking && use.heldItem != 0 -> onPlace(use)
             clicked?.usable == true -> useBlock(use.position)
+            clicked?.isLectern == true && useLectern(use) -> {}
             // A chest, anvil or the like opens for the client, which Kore can't show yet. Either way, nothing's placed.
             clicked?.storage != null -> openStorage(use.position, clicked.storage!!)
             clicked?.name in WORKSTATIONS -> WORKSTATIONS.getValue(clicked!!.name).let { (workstation, type) -> openWorkstation(use.position, workstation, type) }
-            clicked?.furnaceKind != null || clicked?.name == BREWING_STAND || clicked?.name == HOPPER || clicked?.dispenserKind != null -> openMachine(use.position)
+            clicked?.furnaceKind != null || clicked?.name == BREWING_STAND || clicked?.name == HOPPER || clicked?.dispenserKind != null || clicked?.isCrafter == true ->
+                openMachine(use.position)
             clicked?.opensOnClick == true -> log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
             else -> onPlace(use)
         }
+    }
+
+    /**
+     * A click on a lectern. A lectern with a book opens it to read, which
+     * the client then reads from the lectern's block entity, without a
+     * window of its own. With a book and quill or a written book in hand,
+     * and none on the lectern, the book goes on it, open at the first page,
+     * out of the player's hand outside creative, and everyone with the
+     * chunk sees it and hears it. Returns whether the lectern took the
+     * click: with neither, the player places what they hold against it.
+     */
+    private fun useLectern(use: ItemUse): Boolean {
+        val pos = use.position
+        if (world.lecternBook(pos) != null) {
+            if (gameMode != GameMode.SPECTATOR && inReach(pos)) {
+                reading = true
+                send(ContainerOpen(NO_WINDOW, ContainerType.LECTERN, pos, entityId = -1))
+            }
+            return true
+        }
+        if (use.hotbarSlot in 0 until HOTBAR_SIZE) heldSlot = use.hotbarSlot
+        val held = inventory.items[heldSlot]?.takeIf { use.hotbarSlot == heldSlot && it.stack.item.runtimeId == use.heldItem }
+        if (held?.stack?.goesOnLectern != true) return false
+        if (gameMode == GameMode.SPECTATOR || !inReach(pos) || !world.putOnLectern(pos, held.stack)) return true
+        if (!creative) inventory.items[heldSlot] = held.less(1)
+        send(slotOf(heldSlot))
+        showAround(pos, BlockActorData(pos, world.blockEntityAt(pos)!!), LevelSoundEvent(BOOK_PUT, pos.centre, -1))
+        log.debug("{} put {} on the lectern at {}", player?.displayName, held.stack.item.name, pos)
+        return true
+    }
+
+    /**
+     * A player reading the book on a lectern turning a page, which
+     * everyone else with the chunk sees, and which pulses redstone from the
+     * lectern.
+     */
+    private fun onLecternUpdate(packet: LecternUpdate) {
+        val pos = packet.position
+        if (gameMode == GameMode.SPECTATOR || !inReach(pos) || !world.turnPage(pos, packet.page, packet.totalPages)) return
+        showAround(pos, UpdateBlock(pos, world.blockAt(pos)), BlockActorData(pos, world.blockEntityAt(pos)!!))
+    }
+
+    /**
+     * A player writing in the book and quill in one of their slots, or
+     * signing it, which makes it a written book in their name. The client
+     * shows what it wrote already, and hears of the book only once it's
+     * signed. What Bedrock's limits don't allow changes nothing.
+     */
+    private fun onBookEdit(packet: BookEdit) {
+        val there = inventory.items[packet.slot]?.takeIf { it.stack.item.name == WRITABLE_BOOK } ?: return
+        val written = game.items.of(WRITTEN_BOOK) ?: return
+        val edited = writeInBook(there.stack, packet.action, written, player?.xuid.orEmpty()) ?: return
+        inventory.items[packet.slot] = there.copy(stack = edited)
+        if (packet.action is BookAction.Sign) {
+            send(slotOf(packet.slot))
+            log.debug("{} signed a book, \"{}\"", player?.displayName, packet.action.title)
+        }
+    }
+
+    /**
+     * A player with a crafter open switching one of its empty slots off,
+     * or back on, which everyone with the chunk sees in the crafter's data.
+     */
+    private fun onToggleCrafterSlot(packet: ToggleCrafterSlot) {
+        val pos = packet.position
+        if (window?.pos != pos || !world.toggleCrafterSlot(pos, packet.slot, packet.disabled)) return
+        showAround(pos, BlockActorData(pos, world.blockEntityAt(pos)!!))
     }
 
     /**
@@ -1797,6 +1900,8 @@ class Session(
     private fun startBreaking(pos: BlockPos, tick: Long) {
         stopBreaking()
         val state = world.stateAt(pos)?.takeIf { it.name != AIR } ?: return
+        // In Bedrock, punching a lectern knocks its book off.
+        if (state.isLectern && world.knockBookOff(pos)) showAround(pos, BlockActorData(pos, world.blockEntityAt(pos)!!))
         val ticks = ticksToBreak(state.name)
         breaking = Breaking(pos, tick, ticks)
         if (ticks != null && ticks > 0) showAround(pos, LevelEvent(LevelEvent.START_BLOCK_CRACKING, pos.corner, CRACKED / ticks))
@@ -2214,9 +2319,11 @@ internal fun Collection<Session>.tickMachines(game: GameData) {
     val world = game.world
     val brewed = mutableListOf<BlockPos>()
     val fired = mutableListOf<Fired>()
-    val changed = world.tickMachines(game.recipes, game.fuel, brewed, fired)
+    val sounds = mutableListOf<BlockSound>()
+    val changed = world.tickMachines(game.recipes, game.fuel, brewed, fired, sounds)
     showAround(
-        changed.map { it to UpdateBlock(it, world.blockAt(it)) } + brewed.map { it to LevelSoundEvent(BREWED, it.centre, -1) } + fired.flatMap(::firing),
+        changed.map { it to UpdateBlock(it, world.blockAt(it)) } + brewed.map { it to LevelSoundEvent(BREWED, it.centre, -1) } + fired.flatMap(::firing) +
+            sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) },
     )
 }
 

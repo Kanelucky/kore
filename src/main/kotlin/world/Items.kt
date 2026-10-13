@@ -322,7 +322,7 @@ private fun BlockState.partialHeight(): Double? {
 private val PARTIAL_HEIGHTS = mapOf(
     "enchanting_table" to 12, "end_portal_frame" to 13, "stonecutter_block" to 9, "bed" to 9, "cake" to 8,
     "daylight_detector" to 6, "daylight_detector_inverted" to 6, "campfire" to 7, "soul_campfire" to 7,
-    "powered_repeater" to 2, "unpowered_repeater" to 2, "powered_comparator" to 2, "unpowered_comparator" to 2, "cauldron" to 4,
+    "powered_repeater" to 2, "unpowered_repeater" to 2, "powered_comparator" to 2, "unpowered_comparator" to 2, "cauldron" to 4, "lectern" to 15,
 ).mapValues { it.value / 16.0 }
 private val PARTIAL_HEIGHT_ENDINGS = listOf("chest" to 14, "carpet" to 1, "anvil" to 16, "piston_arm_collision" to 16).map { (ending, sixteenths) -> ending to sixteenths / 16.0 }
 

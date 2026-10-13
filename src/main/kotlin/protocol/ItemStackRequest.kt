@@ -44,6 +44,7 @@ object ContainerName {
     /** Where crafted and creative items appear, before the client moves them somewhere. */
     const val CREATED_OUTPUT = 60
     const val SMITHING_TABLE_TEMPLATE = 61
+    const val CRAFTER = 62
 }
 
 /** A slot a request names: its container, the slot there, and the ID of the stack the client expects in it. */

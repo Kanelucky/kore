@@ -30,7 +30,7 @@ enum class FurnaceKind(val block: String, val litBlock: String, val recipes: Str
 /** The kind of furnace this is, lit or not, or null if it isn't one. */
 val BlockState.furnaceKind: FurnaceKind? get() = FurnaceKind.entries.find { name == it.block || name == it.litBlock }
 
-/** Blocks that keep items and work on them by themselves: furnaces, brewing stands, hoppers, dispensers and droppers. */
+/** Blocks that keep items and work on them by themselves: furnaces, brewing stands, hoppers, dispensers, droppers and crafters. */
 sealed class Machine(size: Int) {
     val slots = Container(size)
 
@@ -40,7 +40,7 @@ sealed class Machine(size: Int) {
      * what a furnace made, and only fuel under it. A brewing stand's bottles
      * hold one potion or bottle each, its reagent slot only what brews, and
      * its fuel slot only blaze powder. Hoppers, dispensers and droppers
-     * take anything.
+     * take anything, and crafters anything but in the slots switched off.
      */
     fun limit(slot: Int, stack: ItemStack, recipes: Recipes, fuel: Fuel): Int {
         val most = stack.item.maxStackSize
@@ -56,6 +56,7 @@ sealed class Machine(size: Int) {
                 else -> if (stack.item.name == BLAZE_POWDER) most else 0
             }
             is Hopper, is Dispenser -> most
+            is Crafter -> if (isDisabled(slot)) 0 else most
         }
     }
 }

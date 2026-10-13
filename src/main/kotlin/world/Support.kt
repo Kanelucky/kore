@@ -62,6 +62,9 @@ enum class BlockUpdate {
 
     /** A pressed pressure plate looking again at what's on it. */
     PLATE,
+
+    /** A lectern's pulse ending, two ticks after a page turned. */
+    LECTERN,
 }
 
 /** Looks at the block at [pos] again for [update], [ticks] from now. */
@@ -281,6 +284,7 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.OBSERVER -> if (tickObserver(at, state)) reshaped += at
             BlockUpdate.LAMP -> if (tickLamp(at, state)) reshaped += at
             BlockUpdate.PLATE -> if (checkPlate(at, state, sounds)) reshaped += at
+            BlockUpdate.LECTERN -> if (endPagePulse(at, state)) reshaped += at
         }
     }
     reshaped += settle(changed).reshaped

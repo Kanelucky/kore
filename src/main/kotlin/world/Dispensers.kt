@@ -109,7 +109,7 @@ private fun FlatWorld.dropsAsIs(stack: ItemStack, front: BlockPos): Boolean {
  * fifth to three tenths of a block a tick, up at a fifth, and a little
  * off true each way.
  */
-private fun FlatWorld.dropOut(pos: BlockPos, facing: Face, stack: ItemStack) {
+internal fun FlatWorld.dropOut(pos: BlockPos, facing: Face, stack: ItemStack) {
     val position = Vec3(
         (pos.x + 0.5 + facing.dx * DISPENSE_OUT).toFloat(),
         (pos.y + 0.5 + facing.dy * DISPENSE_OUT - if (facing.dy != 0) 0.125 else 0.15625).toFloat(),

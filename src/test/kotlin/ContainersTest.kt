@@ -61,7 +61,9 @@ import org.koremc.registry.Recipes
 import org.koremc.registry.ShapelessRecipe
 import org.koremc.world.BlockPos
 import org.koremc.world.Drops
+import org.koremc.world.BOOK_PUT
 import org.koremc.world.FlatWorld
+import org.koremc.world.lecternBook
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.Vec3
 import org.koremc.world.centre
@@ -102,9 +104,11 @@ class ContainersTest {
     private val upPiston = state("minecraft:piston", "facing_direction" to 1)
     private val upPistonHead = state("minecraft:piston_arm_collision", "facing_direction" to 1)
     private val movingBlock = state("minecraft:moving_block")
+    private val lectern = state("minecraft:lectern", "minecraft:cardinal_direction" to "south", "powered_bit" to 0.toByte())
+    private val crafter = state("minecraft:crafter", "orientation" to "north_up", "crafting" to 0.toByte(), "triggered_bit" to 0.toByte())
     private val palette = BlockPalette(
         listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable, hopper) + dispensers + levers +
-            listOf(piston, pistonHead, upPiston, upPistonHead, movingBlock),
+            listOf(piston, pistonHead, upPiston, upPistonHead, movingBlock, lectern, crafter),
     )
     private val world = FlatWorld(palette, listOf(stone))
 
@@ -114,7 +118,8 @@ class ContainersTest {
     private val ironIngot = ItemDefinition("minecraft:iron_ingot", 3, componentBased = false, ItemVersion.NONE)
     private val coal = ItemDefinition("minecraft:coal", 4, componentBased = false, ItemVersion.NONE)
     private val sword = ItemDefinition("minecraft:diamond_sword", 5, componentBased = false, ItemVersion.NONE, maxStackSize = 1, enchantCategories = setOf("durability"), enchantability = 10)
-    private val items = listOf(stoneItem, shulkerItem, rawIron, ironIngot, coal, sword)
+    private val writtenBook = ItemDefinition("minecraft:written_book", 6, componentBased = false, ItemVersion.NONE, maxStackSize = 16)
+    private val items = listOf(stoneItem, shulkerItem, rawIron, ironIngot, coal, sword, writtenBook)
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
         listOf(CreativeItem(ItemStack(stoneItem, block = stone), group = 0), CreativeItem(ItemStack(shulkerItem, block = shulkerBox), group = 0)),
@@ -183,6 +188,13 @@ class ContainersTest {
         )
 
         fun closes(window: Int) = sends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(47).writeByte(window).writeByte(0).writeBoolean(false)))
+
+        /** Switches [slot] of the crafter at [pos] off, if [disabled], or back on, as clicking it empty in the crafter's window does. */
+        fun togglesCrafterSlot(pos: BlockPos, slot: Int, disabled: Boolean) = sends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(306).writeIntLE(pos.x).writeIntLE(pos.y).writeIntLE(pos.z).writeByte(slot).writeBoolean(disabled),
+            ),
+        )
 
         /** Stands the player with their feet at [feet], moving by [delta], as the client reports where they are each tick. */
         fun standsAt(feet: Vec3, delta: Vec3 = Vec3(0f, 0f, 0f)) = sends(
@@ -581,6 +593,44 @@ class ContainersTest {
         val dropped = world.items.single().stack
         assertEquals(shulkerItem.name, dropped.item.name)
         assertEquals(ItemStacks.holding(listOf(3 to held)), dropped.nbt)
+    }
+
+    @Test
+    fun `a player puts a book on a lectern, which everyone with the chunk sees and hears, and outside creative it goes from their hand, then opens it to read`() {
+        config = config.copy(gameMode = GameMode.SURVIVAL)
+        world[here] = lectern
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        steve.session.give(ItemStack(writtenBook))
+        steve.received()
+        alex.received()
+
+        steve.clicks(here, held = writtenBook.runtimeId)
+        assertEquals(writtenBook, world.lecternBook(here)?.item)
+        assertTrue(steve.received().has(InventorySlot(0, null, 0).encode()))
+        val shown = alex.received()
+        assertTrue(shown.any { it[0] == 0x38.toByte() && dataIn(it).getString("id") == "Lectern" && dataIn(it).getByte("hasBook") == 1.toByte() })
+        assertTrue(shown.has(LevelSoundEvent(BOOK_PUT, here.centre, -1).encode()))
+
+        // Clicked again, the book opens to read, with no window of its own, and closing it gets an answer.
+        steve.clicks(here)
+        assertTrue(steve.received().has(ContainerOpen(-1, ContainerType.LECTERN, here, entityId = -1).encode()))
+        steve.closes(0xFF)
+        assertTrue(steve.received().has(ContainerClose(0xFF, 0).encode()))
+    }
+
+    @Test
+    fun `a crafter opens with its grid, and a slot a player switches off shows for everyone with the chunk`() {
+        world[here] = crafter
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        steve.clicks(here)
+        assertTrue(steve.received().has(ContainerOpen(1, ContainerType.CRAFTER, here, entityId = -1).encode()))
+        alex.received()
+
+        steve.togglesCrafterSlot(here, 4, disabled = true)
+        assertEquals(1 shl 4, world.crafterAt(here)?.disabled)
+        assertTrue(alex.received().any { it[0] == 0x38.toByte() && dataIn(it).getShort("disabled_slots").toInt() == 1 shl 4 })
     }
 
     /** The data a BlockActorData packet gives a block. */

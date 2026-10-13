@@ -115,6 +115,10 @@ class Recipes(
 ) {
     private val byNetworkId = recipes.associateBy { it.networkId }
 
+    /** The crafting table's recipes, shaped or not, the first a crafter tries first. */
+    val crafting: List<Recipe> = recipes.filter { (it as? ShapedRecipe)?.block == CRAFTING_TABLE || (it as? ShapelessRecipe)?.block == CRAFTING_TABLE }
+        .sortedBy { (it as? ShapedRecipe)?.priority ?: (it as ShapelessRecipe).priority }
+
     /** A number past every recipe's, from which to number other things the client crafts, like an enchanting table's offers. */
     val nextNetworkId = (recipes.maxOfOrNull { it.networkId } ?: 0) + 1
 

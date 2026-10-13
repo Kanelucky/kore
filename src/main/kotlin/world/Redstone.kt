@@ -120,7 +120,7 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
     val state = stateAt(from) ?: return 0
     if (state.conductsPower) return strongestInto(from, withWire)
     return when {
-        state.givesPower || state.name == REDSTONE_BLOCK -> MAX_POWER
+        state.givesPower || state.name == REDSTONE_BLOCK || state.lecternPowered -> MAX_POWER
         state.isPressurePlate -> state.platePower
         state.name == REDSTONE_TORCH -> if (towards == state.torchHeldFrom) 0 else MAX_POWER
         state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
@@ -133,9 +133,10 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
 /**
  * The strongest power going straight into the block at [pos], which it
  * passes on to what's beside it: from a lever or button fixed to it, a
- * pressure plate pressed on it, a lit redstone torch under it, a powered
- * repeater, a comparator or a pulsing observer facing it, or, [withWire],
- * dust on it or pointing into it.
+ * pressure plate pressed on it, or a lectern on it a page just turned in,
+ * a lit redstone torch under it, a powered repeater, a comparator or a
+ * pulsing observer facing it, or, [withWire], dust on it or pointing into
+ * it.
  */
 private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Face.entries.maxOf { face ->
     val from = pos.side(face)
@@ -145,6 +146,7 @@ private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Fac
         state == null -> 0
         state.givesPower -> if (state.heldFrom == towards) MAX_POWER else 0
         state.isPressurePlate -> if (towards == Face.DOWN) state.platePower else 0
+        state.lecternPowered -> if (towards == Face.DOWN) MAX_POWER else 0
         state.name == REDSTONE_TORCH -> if (towards == Face.UP) MAX_POWER else 0
         state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
         state.isObserver -> observerGives(state, towards)
@@ -394,12 +396,13 @@ private fun FlatWorld.answerPower(pos: BlockPos, changed: MutableSet<BlockPos>, 
             }
             blocks.find(LIT_REDSTONE_LAMP, state.properties)?.let { set(pos, it); changed += pos }
         }
-        state.name == HOPPER || state.dispenserKind != null -> {
+        state.name == HOPPER || state.dispenserKind != null || state.isCrafter -> {
             val property = if (state.name == HOPPER) HOPPER_LOCKED else TRIGGERED
             val powered = isPowered(pos)
             if ((state.properties[property] == 1.toByte()) == powered) return
             blocks.find(state.name, state.properties + (property to bit(powered)))?.let { set(pos, it); changed += pos }
             if (powered) dispenserAt(pos)?.fireIn = DISPENSE_DELAY
+            if (powered) crafterAt(pos)?.craftIn = CRAFT_DELAY
         }
     }
 }
@@ -531,7 +534,9 @@ private fun FlatWorld.comparatorBack(pos: BlockPos, state: BlockState): Int {
  * 1 for anything in it at all, up to 15 with every slot full. A cake reads
  * more for each slice left, a composter for each level, a respawn anchor
  * for each charge, and a beehive or bee nest for its honey. An end portal
- * frame reads full with an eye in it.
+ * frame reads full with an eye in it, a lectern by how far through its
+ * book the reader is, and a crafter by how many of its slots are full or
+ * switched off.
  */
 internal fun FlatWorld.fullness(pos: BlockPos): Int? {
     val state = stateAt(pos) ?: return null
@@ -542,6 +547,8 @@ internal fun FlatWorld.fullness(pos: BlockPos): Int? {
         "minecraft:respawn_anchor" -> return (properties["respawn_anchor_charge"] as? Int ?: 0) * MAX_POWER / 4
         "minecraft:beehive", "minecraft:bee_nest" -> return properties["honey_level"] as? Int ?: 0
         "minecraft:end_portal_frame" -> return if (properties["end_portal_eye_bit"] == 1.toByte()) MAX_POWER else 0
+        LECTERN -> return lecternPower(pos)
+        CRAFTER -> return crafterAt(pos)?.taken ?: 0
     }
     val slots = when (state.storage) {
         Storage.CHEST -> chestHalves(pos).let { if (it.size == 2) PairedContainer(containerAt(it[0]), containerAt(it[1])) else containerAt(pos) }

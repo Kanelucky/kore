@@ -194,6 +194,9 @@ class FlatWorld(
     /** The items the chest, barrel or shulker box at [pos] keeps. */
     fun containerAt(pos: BlockPos): Container = containers.getOrPut(pos) { Container(STORAGE_SLOTS) }
 
+    /** The one slot the lectern at [pos] keeps its book in. */
+    internal fun lecternAt(pos: BlockPos): Container = containers.getOrPut(pos) { Container(1) }
+
     /** The furnace at [pos], or null if there isn't one. */
     fun furnaceAt(pos: BlockPos): Furnace? {
         (machines[pos] as? Furnace)?.let { return it }
@@ -241,6 +244,13 @@ class FlatWorld(
         kept.machine?.let { machines[pos] = it }
     }
 
+    /** The crafter at [pos], or null if there isn't one. */
+    fun crafterAt(pos: BlockPos): Crafter? {
+        (machines[pos] as? Crafter)?.let { return it }
+        if (stateAt(pos)?.isCrafter != true) return null
+        return Crafter().also { machines[pos] = it }
+    }
+
     /** Takes out every item the block at [pos] kept, as it breaks, slot by slot. */
     fun emptyContainer(pos: BlockPos): List<ItemStack?> = (containers.remove(pos)?.empty() ?: (machines[pos])?.slots?.empty()).orEmpty()
 
@@ -248,13 +258,20 @@ class FlatWorld(
     fun takeExperience(pos: BlockPos): Float = (machines.remove(pos) as? Furnace)?.takeExperience() ?: 0f
 
     /**
-     * Works every furnace, brewing stand, hopper, dispenser and dropper a
-     * tick, by [recipes], burning [fuel]. Returns where blocks changed how
-     * they look: a furnace lit or went out, or a brewing stand's bottles
-     * changed. Brewing stands that finished a brew are in [brewed], and the
-     * dispensers and droppers that fired in [fired].
+     * Works every furnace, brewing stand, hopper, dispenser, dropper and
+     * crafter a tick, by [recipes], burning [fuel]. Returns where blocks
+     * changed how they look: a furnace lit or went out, a brewing stand's
+     * bottles changed, or a crafter crafted. Brewing stands that finished a
+     * brew are in [brewed], the dispensers and droppers that fired in
+     * [fired], and the sounds crafters made in [sounds].
      */
-    fun tickMachines(recipes: Recipes, fuel: Fuel, brewed: MutableList<BlockPos> = mutableListOf(), fired: MutableList<Fired> = mutableListOf()): List<BlockPos> {
+    fun tickMachines(
+        recipes: Recipes,
+        fuel: Fuel,
+        brewed: MutableList<BlockPos> = mutableListOf(),
+        fired: MutableList<Fired> = mutableListOf(),
+        sounds: MutableList<BlockSound> = mutableListOf(),
+    ): List<BlockPos> {
         val changed = mutableListOf<BlockPos>()
         machineTicks++
         for ((pos, machine) in machines.toList()) {
@@ -273,6 +290,7 @@ class FlatWorld(
                 }
                 is Hopper -> tickHopper(pos, machine, machineTicks, recipes, fuel)
                 is Dispenser -> if (machine.fireIn > 0 && --machine.fireIn == 0) fire(pos, machine, recipes, fuel)?.let(fired::add)
+                is Crafter -> if (tickCrafter(pos, machine, state, recipes, fuel, sounds)) changed += pos
             }
         }
         return changed
