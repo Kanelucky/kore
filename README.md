@@ -120,6 +120,7 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 - **Containers and workstations:** chests, barrels, shulker boxes and ender chests; crafting; furnaces and brewing stands; stonecutters, smithing tables, anvils, grindstones, looms, enchanting tables and cartography tables; hoppers, dispensers, droppers and crafters; lecterns, and writing and signing books; beacons and their powers; experience.
 - **Maps:** drawn as players explore, locator maps, and zooming out, copying and locking them.
 - **Redstone:** levers, buttons, pressure plates, redstone blocks, torches, dust, repeaters, comparators and observers, powering doors, trapdoors, fence gates, lamps, hoppers, dispensers and droppers.
+- **Water and lava:** flowing as in the game, buckets, water inside blocks like fences and stairs, lava and water making obsidian, cobblestone and stone, and concrete powder hardening.
 - **Pistons:** pushing and pulling blocks, slime and honey, flying machines, chests and furnaces with their contents, and the players, items and orbs in the way or on top.
 - **Players:** seeing each other, skins, chat, and joining and leaving messages in each player's language.
 

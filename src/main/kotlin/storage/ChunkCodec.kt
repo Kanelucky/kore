@@ -31,30 +31,37 @@ private const val HEIGHT_MAP_BYTES = 16 * 16 * 2
 /** The height, in sub-chunks, of the sub-chunk at [index] up from the bottom of the overworld. */
 internal fun subChunkHeight(index: Int) = MIN_Y / 16 + index
 
+/** A sub-chunk's two layers: its [blocks], and the [liquid] inside them, or null for none. */
+internal data class SubChunkLayers(val blocks: PalettedStorage, val liquid: PalettedStorage? = null)
+
 /**
- * A sub-chunk's [blocks] as the game saves them: the format, one storage
- * layer, its [height] in sub-chunks, then the blocks' palette indices,
- * packed, and the palette, each state as little-endian NBT, by [palette].
+ * A sub-chunk's [blocks] as the game saves them: the format, how many
+ * storage layers, its [height] in sub-chunks, then for each layer, the
+ * blocks' palette indices, packed, and the palette, each state as
+ * little-endian NBT, by [palette]. The second layer is the [liquid]
+ * inside the blocks, if there's any.
  */
-internal fun encodeSubChunk(height: Int, blocks: PalettedStorage, palette: BlockPalette): ByteArray {
+internal fun encodeSubChunk(height: Int, blocks: PalettedStorage, palette: BlockPalette, liquid: PalettedStorage? = null): ByteArray {
     val out = Unpooled.buffer()
-    out.writeByte(SUB_CHUNK_FORMAT).writeByte(1).writeByte(height)
-    out.writeStorage(blocks) { networkId ->
-        val state = palette[networkId] ?: palette.stateOf(AIR)
-        val entry = NbtMap.builder().putString("name", state.name).putCompound("states", state.properties).putInt("version", state.version).build()
-        NbtUtils.createWriterLE(ByteBufOutputStream(this)).writeTag(entry)
+    out.writeByte(SUB_CHUNK_FORMAT).writeByte(if (liquid == null) 1 else 2).writeByte(height)
+    for (layer in listOfNotNull(blocks, liquid)) {
+        out.writeStorage(layer) { networkId ->
+            val state = palette[networkId] ?: palette.stateOf(AIR)
+            val entry = NbtMap.builder().putString("name", state.name).putCompound("states", state.properties).putInt("version", state.version).build()
+            NbtUtils.createWriterLE(ByteBufOutputStream(this)).writeTag(entry)
+        }
     }
     return ByteBufUtil.getBytes(out)
 }
 
 /**
- * The blocks of a sub-chunk the game saved as [bytes], its first storage
- * layer, which holds the blocks; a second holds the water inside them,
- * which Kore leaves out. A state [palette] doesn't know is its block's
- * default, or air for a block it doesn't know either. Null for a format
- * from before 1.2.13, which Kore can't read.
+ * A sub-chunk the game saved as [bytes]: its first storage layer, which
+ * holds the blocks, and its second, which holds the water inside them,
+ * if that has any. A state [palette] doesn't know is its block's default,
+ * or air for a block it doesn't know either. Null for a format from
+ * before 1.2.13, which Kore can't read.
  */
-internal fun decodeSubChunk(bytes: ByteArray, palette: BlockPalette): PalettedStorage? {
+internal fun decodeSubChunk(bytes: ByteArray, palette: BlockPalette): SubChunkLayers? {
     val input = Unpooled.wrappedBuffer(bytes)
     val format = input.readUnsignedByte().toInt()
     val layers = when (format) {
@@ -63,8 +70,11 @@ internal fun decodeSubChunk(bytes: ByteArray, palette: BlockPalette): PalettedSt
         SUB_CHUNK_FORMAT -> input.readUnsignedByte().toInt().also { input.readByte() } // Then its height, which its key gives too
         else -> return null
     }
-    if (layers == 0) return PalettedStorage.filled(AIR_NETWORK_ID)
-    return input.readStorage { blockFrom(NbtUtils.createReaderLE(ByteBufInputStream(this)).readTag() as NbtMap, palette) }
+    if (layers == 0) return SubChunkLayers(PalettedStorage.filled(AIR_NETWORK_ID))
+    fun layer() = input.readStorage { blockFrom(NbtUtils.createReaderLE(ByteBufInputStream(this)).readTag() as NbtMap, palette) }
+    val blocks = layer()
+    val liquid = if (layers > 1) layer().takeUnless { it.palette == listOf(AIR_NETWORK_ID) } else null
+    return SubChunkLayers(blocks, liquid)
 }
 
 /** The network ID of the state the game saved as [entry]: its name and properties, or its block's default, or air. */

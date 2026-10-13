@@ -76,7 +76,7 @@ fun main() {
         config.gameMode, config.difficulty, config.allowCheats, config.seed ?: Random.nextLong(), config.version, config.protocol, config.forceGameMode, config.levelType,
     )
     val storage = try {
-        WorldStorage.open(config.worldsDirectory.resolve(config.level), config.level, FlatLayers(FlatWorld.vanillaLayers(vanilla.blocks)), vanilla.blocks, items, settings)
+        WorldStorage.open(config.worldsDirectory.resolve(config.level), config.level, FlatLayers(FlatWorld.vanillaLayers(vanilla.blocks)), vanilla.blocks, items, settings, vanilla.traits)
     } catch (e: Exception) {
         log.error("Couldn't open the world in {}", config.worldsDirectory.resolve(config.level).toAbsolutePath(), e)
         exitProcess(1)

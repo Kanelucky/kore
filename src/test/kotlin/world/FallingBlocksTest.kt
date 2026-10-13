@@ -37,7 +37,7 @@ class FallingBlocksTest {
         val ticks = mutableListOf<Changes>()
         while (ticks.size < 200) {
             ticks += world.tickBlocks()
-            if (world.fallingBlocks.isEmpty() && !world.hasScheduledUpdates && world.fallChecks.isEmpty()) break
+            if (world.fallingBlocks.isEmpty() && !world.hasScheduledUpdates && world.blockChanges.isEmpty()) break
         }
         return ticks
     }
@@ -96,7 +96,7 @@ class FallingBlocksTest {
         world[up(1)] = anvils.getValue("anvil")
         var ticks = untilSettled()
         assertEquals(anvils.getValue("anvil"), world.stateAt(ground), "a block's fall never wears it")
-        assertEquals(listOf(BlockEvent(ground, LevelEvent.SOUND_ANVIL_LAND, 0)), ticks.flatMap { it.events })
+        assertEquals(listOf(WorldEvent(ground, LevelEvent.SOUND_ANVIL_LAND, 0)), ticks.flatMap { it.events })
 
         // Twenty blocks wears it for certain, at five in a hundred a block.
         world[ground] = air
@@ -108,7 +108,7 @@ class FallingBlocksTest {
         world[up(20)] = anvils.getValue("damaged_anvil")
         ticks = untilSettled()
         assertEquals(air, world.stateAt(ground))
-        assertEquals(listOf(BlockEvent(ground, LevelEvent.SOUND_ANVIL_BREAK, 0)), ticks.flatMap { it.events })
+        assertEquals(listOf(WorldEvent(ground, LevelEvent.SOUND_ANVIL_BREAK, 0)), ticks.flatMap { it.events })
         assertEquals(emptyList(), ticks.flatMap { it.dropped })
     }
 

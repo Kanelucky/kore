@@ -2,9 +2,11 @@ package org.koremc.world
 
 import org.cloudburstmc.nbt.NbtMap
 import org.koremc.inventory.Container
+import org.koremc.registry.AIR
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
+import org.koremc.registry.BlockTraits
 import org.koremc.registry.Fuel
 import org.koremc.registry.ItemStack
 import org.koremc.registry.Recipes
@@ -36,6 +38,8 @@ class FlatWorld(
     private val loader: ChunkLoader = ChunkLoader.NONE,
     /** Where players appear: by default standing on the top layer, in the corner of chunk 0, 0. */
     val spawn: BlockPos = BlockPos(0, MIN_Y + layers.size, 0),
+    /** What the game says of each block state, like what liquid does to it. */
+    val traits: BlockTraits = BlockTraits.NONE,
 ) {
 
     private val generated: Chunk
@@ -78,8 +82,18 @@ class FlatWorld(
     /** The blocks falling, oldest first. */
     val fallingBlocks: Collection<FallingBlock> get() = fallingEntities.values
 
-    /** Where blocks changed since falling blocks were last looked for, and the blocks above them, which may have nothing under them now. */
-    internal val fallChecks = LinkedHashSet<BlockPos>()
+    /**
+     * Where blocks, or the water inside them, changed since the blocks
+     * around them were last looked at: one above may have nothing under it
+     * now and fall, and liquid beside one may flow.
+     */
+    internal val blockChanges = LinkedHashSet<BlockPos>()
+
+    /** The liquid due to move, so that none is due twice at once. */
+    internal val flowDue = HashSet<BlockPos>()
+
+    /** Where the water inside blocks changed lately, which players are shown as well as the blocks. */
+    internal val liquidChanges = LinkedHashSet<BlockPos>()
 
     init {
         require(layers.size < SUB_CHUNK_COUNT * 16) { "${layers.size} layers leave no room to stand in the overworld" }
@@ -152,15 +166,40 @@ class FlatWorld(
         fallingEntities.remove(id)
     }
 
+    /** What's inside the block at [pos], in the second layer: the water in a fence, say, or null for nothing. */
+    fun liquidAt(pos: BlockPos): BlockState? = chunkAt(pos.chunk).liquidAt(pos).takeIf { it != AIR_NETWORK_ID }?.let { blocks[it] }
+
+    /** Puts [liquid] inside the block at [pos], or takes what's there out, for null. */
+    fun setLiquid(pos: BlockPos, liquid: BlockState?) {
+        require(pos.y in MIN_Y..MAX_Y) { "$pos is outside the overworld" }
+        changed[pos.chunk] = chunkAt(pos.chunk).withLiquid(pos, liquid?.networkId ?: AIR_NETWORK_ID)
+        unsaved += pos.chunk
+        blockChanges += pos
+        liquidChanges += pos
+    }
+
     /**
      * Puts [state] at [pos], which must be within the overworld's height.
      * Putting a block of another kind there forgets the block entity the
-     * old one had.
+     * old one had. Water inside the old block stays where it is: in the
+     * new one, if it can hold water, and as water by itself if the new one
+     * is air. A block that can hold water put in a water source takes the
+     * water in.
      */
     operator fun set(pos: BlockPos, state: BlockState) {
         require(pos.y in MIN_Y..MAX_Y) { "$pos is outside the overworld" }
+        val inside = liquidAt(pos)
+        if (inside != null && state.name == AIR) {
+            setLiquid(pos, null)
+            return set(pos, liquidState(inside.liquid ?: Liquid.WATER, inside.liquidDepth))
+        }
+        val replaced = stateAt(pos)
+        if (inside != null && !holdsWater(state)) setLiquid(pos, null)
+        if (inside == null && replaced?.liquid == Liquid.WATER && replaced.liquidDepth == 0 && holdsWater(state)) {
+            setLiquid(pos, liquidState(Liquid.WATER, 0, inside = true))
+        }
         // A furnace lighting up, or going out, is the same furnace.
-        if (stateAt(pos)?.let(::kindOf) != kindOf(state)) {
+        if (replaced?.let(::kindOf) != kindOf(state)) {
             blockEntities[pos.chunk]?.remove(pos)
             containers.remove(pos)
             machines.remove(pos)
@@ -178,8 +217,7 @@ class FlatWorld(
         if (state.isComparator) comparators += pos else comparators -= pos
         if (state.name == BEACON) beacons.putIfAbsent(pos, 0)
         powerChanges += pos
-        fallChecks += pos
-        fallChecks += pos.side(Face.UP)
+        blockChanges += pos
     }
 
     /** Where blocks changed since redstone last looked, which may have powered something, or stopped powering it. */

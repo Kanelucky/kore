@@ -147,6 +147,10 @@ import org.koremc.world.BlockPos
 import org.koremc.world.Changes
 import org.koremc.world.FALLING_BLOCK_SIZE
 import org.koremc.world.FlatWorld
+import org.koremc.world.Liquid
+import org.koremc.world.liquid
+import org.koremc.world.emptyBucket
+import org.koremc.world.fillBucket
 import org.koremc.world.ChunkPos
 import org.koremc.world.Face
 import org.koremc.world.ItemEntity
@@ -290,6 +294,12 @@ private const val FALLING_BLOCK_NETWORK_OFFSET = 0.49f
 
 /** What snow that falls where it can't land drops. */
 private const val SNOWBALL = "minecraft:snowball"
+
+/** Buckets: empty, and full of each liquid. */
+private const val BUCKET = "minecraft:bucket"
+private val BUCKET_LIQUIDS = mapOf("minecraft:water_bucket" to Liquid.WATER, "minecraft:lava_bucket" to Liquid.LAVA)
+private val LIQUID_BUCKETS = BUCKET_LIQUIDS.entries.associate { (bucket, liquid) -> liquid to bucket }
+private val BUCKETS = BUCKET_LIQUIDS.keys + BUCKET
 
 /** How far players reach to pick items up: a block either way of the item, and half a block up and down. */
 private const val PICKUP_REACH = 1f
@@ -1679,6 +1689,7 @@ class Session(
         if (use.hotbarSlot in 0 until HOTBAR_SIZE) heldSlot = use.hotbarSlot
         // The client's item must be the one Kore has in the slot.
         val stack = inventory.items[heldSlot]?.stack?.takeIf { use.hotbarSlot == heldSlot && it.item.runtimeId == use.heldItem }
+        if (stack?.item?.name in BUCKETS) return useBucket(use, face, stack!!)
         val block = stack?.let { it.block ?: world.blocks.blockPlacedBy(it.item.name) }
         val placer = Placer(facing(yaw), yaw, position, sneaking)
         val placed = if (block != null && canBuild() && inReach(use.position.side(face))) {
@@ -1705,6 +1716,59 @@ class Session(
     }
 
     private val creative get() = gameMode == GameMode.CREATIVE
+
+    /**
+     * The player using a bucket on the block they clicked, if they can
+     * build and reach it. An empty one takes in a water or lava source, or
+     * the water inside a block, and a full one empties as a source, into
+     * the block if it holds water, or the space beyond the face, as
+     * [emptyBucket] has it. Everyone with the chunk sees and hears it. In
+     * creative, the bucket stays as it was; otherwise it's filled or
+     * emptied, one of a stack of empty ones going among the player's items.
+     * What the client guessed and Kore refused is put right.
+     */
+    private fun useBucket(use: ItemUse, face: Face, held: ItemStack) {
+        val broken = linkedMapOf<BlockPos, BrokenBlock>()
+        val filling = held.item.name == BUCKET
+        val liquid = BUCKET_LIQUIDS[held.item.name]
+        val reach = if (filling) use.position else use.position.side(face)
+        val at: BlockPos?
+        var taken: Liquid? = null
+        if (!canBuild() || !inReach(reach)) {
+            at = null
+        } else if (filling) {
+            val filled = world.fillBucket(use.position, face)
+            taken = filled?.first
+            at = filled?.second
+        } else {
+            at = world.emptyBucket(liquid!!, use.position, face, broken)
+        }
+        if (at == null) {
+            log.debug("Refused {} using {} on {} {}", player?.displayName, held.item.name, use.position, face)
+            send(*listOf(use.position, use.position.side(face)).flatMap { listOf(UpdateBlock(it, world.blockAt(it)), UpdateBlock(it, world.liquidAt(it)?.networkId ?: AIR_NETWORK_ID, layer = 1)) }.toTypedArray())
+            send(slotOf(heldSlot))
+            return
+        }
+        val sound = if (filling) "bucket.fill.${taken!!.name.lowercase()}" else "bucket.empty.${liquid!!.name.lowercase()}"
+        val changes = world.settle(listOf(at))
+        showAround(world.packetsFor(Changes(broken + changes.broken, (listOf(at) + changes.reshaped).distinct())) + (at to LevelSoundEvent(sound, at.centre, -1)))
+        broken.forEach { (pos, block) -> game.dropBroken(pos, block, harvested = !creative) }
+        if (!creative) {
+            val swapped = if (filling) game.items.of(LIQUID_BUCKETS.getValue(taken!!)) else game.items.of(BUCKET)
+            if (swapped != null) {
+                if (held.count == 1) {
+                    inventory.items[heldSlot] = SlotStack(swapped, inventory.newStackId())
+                    send(slotOf(heldSlot))
+                } else {
+                    inventory.items[heldSlot] = inventory.items[heldSlot]!!.less(1)
+                    val (filled, left) = inventory.add(swapped)
+                    send(*(filled + heldSlot).distinct().map(::slotOf).toTypedArray())
+                    if (left > 0) throwItem(swapped)
+                }
+            }
+        }
+        log.debug("{} used {} at {}", player?.displayName, held.item.name, at)
+    }
 
     /** Puts the items the shulker box item [stack] held in the shulker box placed from it at [pos]. */
     private fun fillShulkerBox(pos: BlockPos, stack: ItemStack) {
@@ -1733,8 +1797,9 @@ class Session(
      */
     private fun onBreak(pos: BlockPos, creativeOnly: Boolean, tick: Long? = null) {
         val state = world.stateAt(pos)
-        // Air is what a break leaves, so it's a break the client has already reported another way.
-        if (state?.name == AIR) return
+        // Air is what a break leaves, so it's a break the client has already reported another way. Nor can anyone break
+        // water or lava, which a block holding water leaves when it breaks.
+        if (state?.name == AIR || state?.liquid != null) return
 
         val ticks = state?.let { ticksToBreak(it.name) }
         val unbreakable = state != null && game.mining[state.name]?.unbreakable == true
@@ -2699,20 +2764,30 @@ private fun firing(fired: Fired): List<Pair<BlockPos, ServerPacket>> {
 
 /**
  * What players see of [changes]: blocks going, with the particles and
- * sound of their breaking, blocks changing shape, with any data they keep,
- * the sounds blocks made, and the data blocks keep that changed by itself,
- * like a piston's arm moving out.
+ * sound of their breaking, and what took their place, like water, blocks
+ * changing shape, with any data they keep, the sounds blocks made, and
+ * the data blocks keep that changed by itself, like a piston's arm moving
+ * out.
  */
 private fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPacket>> =
     changes.broken.flatMap { (pos, broken) ->
-        listOf(pos to UpdateBlock(pos, AIR_NETWORK_ID), pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
+        withData(pos) + (pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
     } + changes.reshaped.flatMap(::withData) + changes.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) } +
         changes.events.map { it.pos to LevelEvent(it.event, it.pos.centre, it.data) } +
         changes.data.mapNotNull { pos -> blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) } }
 
-/** The block at [pos] as it is now, followed by the data it keeps, if any. */
-private fun FlatWorld.withData(pos: BlockPos): List<Pair<BlockPos, ServerPacket>> =
-    listOfNotNull(pos to UpdateBlock(pos, blockAt(pos)), blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) })
+/**
+ * The block at [pos] as it is now, with the water inside it, if there is
+ * any or was lately, followed by the data it keeps, if any.
+ */
+private fun FlatWorld.withData(pos: BlockPos): List<Pair<BlockPos, ServerPacket>> {
+    val inside = liquidAt(pos)?.networkId ?: AIR_NETWORK_ID
+    return listOfNotNull(
+        pos to UpdateBlock(pos, blockAt(pos)),
+        (pos to UpdateBlock(pos, inside, layer = 1)).takeIf { inside != AIR_NETWORK_ID || pos in liquidChanges },
+        blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) },
+    )
+}
 
 /** Packet names, with a run of the same packet counted rather than repeated: `LevelChunk x16`. */
 private fun names(packets: Array<out ServerPacket>): String {
@@ -2773,6 +2848,8 @@ class Sessions(
         sessions.values.forEach { it.syncPlayers() }
         sessions.values.forEach { it.drawHeldMaps() }
         sessions.values.syncMaps(game.world)
+        // Everyone's been shown where the water inside blocks changed.
+        game.world.liquidChanges.clear()
     }
 
     fun connect(connection: NetherNetConnection) {

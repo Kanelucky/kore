@@ -57,7 +57,9 @@ class WorldStorageTest {
     private val litFurnace = state("minecraft:lit_furnace", "minecraft:cardinal_direction" to "south")
     private val beacon = state("minecraft:beacon")
     private val buttons = (0..1).map { pressed -> state("minecraft:stone_button", "button_pressed_bit" to pressed.toByte(), "facing_direction" to 1) }
-    private val blocks = BlockPalette(listOf(state(AIR), bedrock, dirt, grass, stone, chest, furnace, litFurnace, beacon) + buttons)
+    private val fence = state("minecraft:oak_fence")
+    private val stillWater = state("minecraft:water", "liquid_depth" to 0)
+    private val blocks = BlockPalette(listOf(state(AIR), bedrock, dirt, grass, stone, chest, furnace, litFurnace, beacon, fence, stillWater) + buttons)
     private val layers = FlatLayers(listOf(bedrock, dirt, dirt, grass))
 
     private val coal = ItemDefinition("minecraft:coal", 1, componentBased = false, ItemVersion.NONE)
@@ -139,6 +141,19 @@ class WorldStorageTest {
             assertEquals(Effect.SPEED to 0, world.beaconPowers(beaconAt))
             assertTrue(beaconAt in world.beacons)
             assertNull(world.blockEntityAt(here)?.getList("Items", NbtType.COMPOUND, null), "the items are kept apart, not sent to clients")
+        }
+    }
+
+    @Test
+    fun `water inside a block saves, as the game's second layer, and comes back inside it`() {
+        session {
+            world[here] = fence
+            world.setLiquid(here, stillWater)
+        }
+        session {
+            assertEquals(fence, world.stateAt(here))
+            assertEquals(stillWater, world.liquidAt(here))
+            assertNull(world.liquidAt(there))
         }
     }
 

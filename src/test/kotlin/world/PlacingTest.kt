@@ -362,15 +362,14 @@ class PlacingTest {
         assertEquals("minecraft:dead_tube_coral_block", world.stateAt(above)?.name)
         assertEquals(listOf(BlockSound(above, "place", world.blockAt(above))), died.sounds)
 
-        // Placed in water, a fan lives, until the water beside it goes and something's placed by it.
+        // Placed in water, a fan lives, until the water beside it goes, and what flowed from it dries up.
         val fan = BlockPos(4, ground.y + 1, 0)
         world[fan.side(Face.EAST)] = blocks.defaultOf("minecraft:water")!!
         place("minecraft:fire_coral_fan", BlockPos(4, ground.y, 0), Face.UP)
         repeat(20) { world.tickBlocks() }
         assertEquals("minecraft:fire_coral_fan", world.stateAt(fan)?.name)
         world[fan.side(Face.EAST)] = blocks.defaultOf(AIR)!!
-        world.settle(place("minecraft:stone", BlockPos(3, ground.y, 0), Face.UP)) // Beside the fan
-        repeat(10) { world.tickBlocks() }
+        repeat(80) { world.tickBlocks() }
         assertEquals("minecraft:dead_fire_coral_fan", world.stateAt(fan)?.name)
     }
 

@@ -124,9 +124,10 @@ class ContainersTest {
     private val beacon = state("minecraft:beacon")
     private val ironBlock = state("minecraft:iron_block")
     private val cartographyTable = state("minecraft:cartography_table")
+    private val water = (0..15).map { state("minecraft:flowing_water", "liquid_depth" to it) }
     private val palette = BlockPalette(
         listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable, hopper) + dispensers + levers +
-            listOf(piston, pistonHead, upPiston, upPistonHead, movingBlock, lectern, crafter, beacon, ironBlock, cartographyTable),
+            listOf(piston, pistonHead, upPiston, upPistonHead, movingBlock, lectern, crafter, beacon, ironBlock, cartographyTable) + water,
     )
     private val world = FlatWorld(palette, listOf(stone))
 
@@ -140,7 +141,9 @@ class ContainersTest {
     private val emptyMap = ItemDefinition("minecraft:empty_map", 7, componentBased = false, ItemVersion.NONE)
     private val filledMap = ItemDefinition("minecraft:filled_map", 8, componentBased = false, ItemVersion.NONE)
     private val glassPane = ItemDefinition("minecraft:glass_pane", 9, componentBased = false, ItemVersion.NONE)
-    private val items = listOf(stoneItem, shulkerItem, rawIron, ironIngot, coal, sword, writtenBook, emptyMap, filledMap, glassPane)
+    private val bucket = ItemDefinition("minecraft:bucket", 10, componentBased = false, ItemVersion.NONE, maxStackSize = 16)
+    private val waterBucket = ItemDefinition("minecraft:water_bucket", 11, componentBased = false, ItemVersion.NONE, maxStackSize = 1)
+    private val items = listOf(stoneItem, shulkerItem, rawIron, ironIngot, coal, sword, writtenBook, emptyMap, filledMap, glassPane, bucket, waterBucket)
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
         listOf(CreativeItem(ItemStack(stoneItem, block = stone), group = 0), CreativeItem(ItemStack(shulkerItem, block = shulkerBox), group = 0)),
@@ -306,6 +309,26 @@ class ContainersTest {
 
     /** The window a chest's 27 slots show, with [stack] in the first. */
     private fun chestWith(window: Int, stack: Pair<ItemStack, Int>?, size: Int = 27) = InventoryContent(window, listOf(stack) + List(size - 1) { null }).encode()
+
+    @Test
+    fun `a bucket of water empties as a source, which an empty bucket takes back, swapping the bucket outside creative`() {
+        config = config.copy(gameMode = GameMode.SURVIVAL)
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        steve.session.give(ItemStack(waterBucket))
+        steve.received()
+        alex.received()
+
+        steve.clicks(here.copy(y = here.y - 1), held = waterBucket.runtimeId) // The floor under it
+        assertEquals(water[0], world.stateAt(here))
+        assertEquals(bucket, steve.session.heldStack?.item)
+        assertTrue(alex.received().has(LevelSoundEvent("bucket.empty.water", here.centre, -1).encode()), "everyone hears it")
+
+        steve.clicks(here, held = bucket.runtimeId)
+        assertEquals(AIR, world.stateAt(here)?.name)
+        assertEquals(waterBucket, steve.session.heldStack?.item)
+        assertTrue(alex.received().has(LevelSoundEvent("bucket.fill.water", here.centre, -1).encode()))
+    }
 
     @Test
     fun `a chest opens with what it holds, and its lid stays open until the last player looking in closes it`() {

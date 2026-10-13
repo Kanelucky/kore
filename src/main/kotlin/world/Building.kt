@@ -252,14 +252,15 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
 }
 
 /**
- * Breaks the block at [pos], leaving air, along with the other half of a
- * door, bed or tall plant. Blocks around it that join their neighbours
- * take their new shape, and anything that can no longer stand where it
- * is, like a torch on its side or a flower on its top, breaks next tick,
- * as [settle] explains. Returns what broke, and what changed shape.
+ * Breaks the block at [pos], leaving air, or the water it held, along with
+ * the other half of a door, bed or tall plant. Water and lava themselves
+ * don't break. Blocks around it that join their neighbours take their
+ * new shape, and anything that can no longer stand where it is, like a
+ * torch on its side or a flower on its top, breaks next tick, as [settle]
+ * explains. Returns what broke, and what changed shape.
  */
 fun FlatWorld.breakBlock(pos: BlockPos): Changes {
-    val state = stateAt(pos)?.takeIf { it.name != AIR } ?: return Changes(emptyMap(), emptyList())
+    val state = stateAt(pos)?.takeIf { it.name != AIR && it.liquid == null } ?: return Changes(emptyMap(), emptyList())
     val broken = linkedMapOf<BlockPos, BrokenBlock>()
     val partner = pistonPartner(pos, state)
     val unpaired = listOfNotNull(breakAt(pos, state, broken))

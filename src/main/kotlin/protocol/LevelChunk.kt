@@ -40,7 +40,7 @@ data class LevelChunk(val position: ChunkPos, val chunk: Chunk, val blockEntitie
         out.writeVarUInt(0) // Blob hashes, which only the cache uses
 
         val payload = Unpooled.buffer()
-        chunk.subChunks.forEachIndexed { i, blocks -> payload.writeSubChunk(MIN_Y / 16 + i, blocks) }
+        chunk.subChunks.forEachIndexed { i, blocks -> payload.writeSubChunk(MIN_Y / 16 + i, blocks, chunk.liquids.getOrNull(i)) }
         chunk.biomes.forEachIndexed { i, biomes -> payload.writePalettedStorage(biomes, previous = chunk.biomes.getOrNull(i - 1)) }
         payload.writeByte(0) // Border blocks, an Education Edition feature
         blockEntities.forEach(payload::writeNbt) // One after another, until the payload ends
@@ -64,11 +64,13 @@ data class NetworkChunkPublisherUpdate(val position: BlockPos, val radius: Int) 
     }
 }
 
-private fun ByteBuf.writeSubChunk(index: Int, blocks: PalettedStorage) {
+/** A sub-chunk: its [blocks], and the [liquid] inside them, if there's any, as a second layer. */
+private fun ByteBuf.writeSubChunk(index: Int, blocks: PalettedStorage, liquid: PalettedStorage?) {
     writeByte(SUB_CHUNK_VERSION)
-    writeByte(1) // Storage layers: just blocks, with no second layer for water inside them
+    writeByte(if (liquid == null) 1 else 2) // Storage layers: the blocks, then the water inside them, if any
     writeByte(index) // Its height, in sub-chunks, so the lowest overworld sub-chunk is -4
     writePalettedStorage(blocks, previous = null)
+    liquid?.let { writePalettedStorage(it, previous = null) }
 }
 
 /**

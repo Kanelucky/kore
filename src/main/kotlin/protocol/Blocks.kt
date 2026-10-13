@@ -127,15 +127,19 @@ data class BlockAction(val action: Int, val position: BlockPos, val face: Int)
 /** The player choosing the item they hold, by picking a hotbar slot. */
 data class MobEquipment(val runtimeId: Long, val heldItem: Int, val selectedSlot: Int, val windowId: Int) : ClientPacket
 
-/** A block that's now [networkId], which the client takes as it is, whatever it predicted. */
-data class UpdateBlock(val position: BlockPos, val networkId: Int) : ServerPacket {
+/**
+ * A block that's now [networkId], which the client takes as it is,
+ * whatever it predicted: the block itself, in [layer] 0, or the water
+ * inside it, in layer 1.
+ */
+data class UpdateBlock(val position: BlockPos, val networkId: Int, val layer: Int = 0) : ServerPacket {
     override val id get() = UPDATE_BLOCK
 
     override fun encodeBody(out: ByteBuf) {
         out.writeBlockPos(position)
         out.writeVarUInt(networkId)
         out.writeVarUInt(BLOCK_UPDATE_NETWORK)
-        out.writeVarUInt(0) // Layer: the block itself, rather than water inside it
+        out.writeVarUInt(layer)
     }
 
     private companion object {

@@ -149,7 +149,8 @@ class SessionTest {
         )
     }
     private val sand = BlockState("minecraft:sand", NbtMap.EMPTY, version = 18168865)
-    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand) + levers + buttons + doors + fences)
+    private val water = listOf("minecraft:water", "minecraft:flowing_water").map { BlockState(it, NbtMap.builder().putInt("liquid_depth", 0).build(), version = 18168865) }
+    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand) + levers + buttons + doors + fences + water)
     private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
@@ -546,6 +547,20 @@ class SessionTest {
         sent.clear()
         clientSends(playerAction(CREATIVE_DESTROY_BLOCK, BlockPos(1, -64, 0)))
         assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun `a block holding water leaves it when broken, which the client reporting the break twice doesn't break too`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        val pos = BlockPos(1, -63, 0)
+        world[pos] = planks
+        world.setLiquid(pos, water[0])
+
+        clientSends(playerAction(CREATIVE_DESTROY_BLOCK, pos))
+        assertEquals(water[1], world.stateAt(pos))
+        clientSends(playerAction(CREATIVE_DESTROY_BLOCK, pos))
+        assertEquals(water[1], world.stateAt(pos), "water doesn't break")
     }
 
     @Test

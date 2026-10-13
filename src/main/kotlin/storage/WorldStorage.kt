@@ -11,6 +11,7 @@ import org.koremc.protocol.Difficulty
 import org.koremc.protocol.GameMode
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
+import org.koremc.registry.BlockTraits
 import org.koremc.registry.ItemStacks
 import org.koremc.world.BlockPos
 import org.koremc.world.Chunk
@@ -154,17 +155,18 @@ class WorldStorage private constructor(
         }
     }
 
-    /** The blocks and biomes of the chunk at [pos] as they were saved. */
+    /** The blocks, the water inside them, and the biomes of the chunk at [pos] as they were saved. */
     private fun blocksOf(pos: ChunkPos): Chunk {
         val subChunks = MutableList(SUB_CHUNK_COUNT) { index ->
             db[chunkKey(pos, SUB_CHUNK, subChunkHeight(index))]?.let { bytes ->
                 runCatching { decodeSubChunk(bytes, blocks) }.onFailure { log.warn("Couldn't read a sub-chunk of chunk {}, {}: {}", pos.x, pos.z, it.message) }.getOrNull()
             }
         }
-        val top = subChunks.indexOfLast { it != null && it.palette != listOf(AIR_NETWORK_ID) }
-        val storages = (0..top).map { subChunks[it] ?: PalettedStorage.filled(AIR_NETWORK_ID) }
+        val top = subChunks.indexOfLast { it != null && it.blocks.palette != listOf(AIR_NETWORK_ID) }
+        val storages = (0..top).map { subChunks[it]?.blocks ?: PalettedStorage.filled(AIR_NETWORK_ID) }
+        val liquids = (0..top).map { subChunks[it]?.liquid }.dropLastWhile { it == null }
         val biomes = db[chunkKey(pos, DATA_3D)]?.let(::decodeBiomes) ?: List(SUB_CHUNK_COUNT) { PalettedStorage.filled(biome) }
-        return Chunk(storages, biomes)
+        return Chunk(storages, biomes, liquids)
     }
 
     /** The entities the game saved in the chunk at [pos]: each with a record of its own, or, from older worlds, one after another. */
@@ -206,7 +208,7 @@ class WorldStorage private constructor(
         for (index in 0 until SUB_CHUNK_COUNT) {
             val key = chunkKey(pos, SUB_CHUNK, subChunkHeight(index))
             val blocks = chunk.subChunks.getOrNull(index)
-            if (blocks == null) delete(key) else set(key, encodeSubChunk(subChunkHeight(index), blocks, this@WorldStorage.blocks))
+            if (blocks == null) delete(key) else set(key, encodeSubChunk(subChunkHeight(index), blocks, this@WorldStorage.blocks, chunk.liquids.getOrNull(index)))
         }
         set(chunkKey(pos, FINALISED), ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(FINISHED).array())
         delete(chunkKey(pos, CHECKSUMS))
@@ -303,10 +305,19 @@ class WorldStorage private constructor(
         /**
          * Opens the world in [directory], or makes a new flat world called
          * [name] there, of [defaultLayers], if there's none. Its blocks and
-         * items are [blocks] and [items], and Kore runs it with [settings],
-         * but for the game mode and seed a world made before keeps.
+         * items are [blocks] and [items], what the game says of the blocks,
+         * like what liquid does to them, [traits], and Kore runs it with
+         * [settings], but for the game mode and seed a world made before keeps.
          */
-        fun open(directory: Path, name: String, defaultLayers: FlatLayers, blocks: BlockPalette, items: ItemStacks, settings: WorldSettings): WorldStorage {
+        fun open(
+            directory: Path,
+            name: String,
+            defaultLayers: FlatLayers,
+            blocks: BlockPalette,
+            items: ItemStacks,
+            settings: WorldSettings,
+            traits: BlockTraits = BlockTraits.NONE,
+        ): WorldStorage {
             Files.createDirectories(directory)
             val levelDatFile = directory.resolve("level.dat")
             val existing = levelDatFile.exists()
@@ -330,7 +341,7 @@ class WorldStorage private constructor(
             val storage = WorldStorage(directory, WorldDatabase.open(directory.resolve("db")), levelDat, blocks, items, kept)
             storage.biome = layers.biome
             val spawn = levelDat.spawn ?: levelDat.groundSpawn.let { (x, z) -> BlockPos(x, MIN_Y + layers.layers.size, z) }
-            storage.world = FlatWorld(blocks, layers.layers, layers.biome, loader = storage, spawn = spawn)
+            storage.world = FlatWorld(blocks, layers.layers, layers.biome, loader = storage, spawn = spawn, traits = traits)
             for ((_, value) in storage.db.startingWith(MAP_PREFIX)) {
                 runCatching { mapFrom(readAll(value).first()) }.getOrNull()?.let(storage.world.maps::add)
             }

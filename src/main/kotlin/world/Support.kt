@@ -16,7 +16,7 @@ data class BrokenBlock(val state: BlockState, val blockEntity: NbtMap? = null, v
 data class BlockSound(val pos: BlockPos, val sound: String, val data: Int)
 
 /** Something happening at a block that the client shows, like an anvil clanging, by the game's number for it, with its data. */
-data class BlockEvent(val pos: BlockPos, val event: Int, val data: Int)
+data class WorldEvent(val pos: BlockPos, val event: Int, val data: Int)
 
 /**
  * What a change to the world did around it: the blocks that broke, where
@@ -31,7 +31,7 @@ class Changes(
     val sounds: List<BlockSound> = emptyList(),
     val data: List<BlockPos> = emptyList(),
     val moved: List<BlockPos> = emptyList(),
-    val events: List<BlockEvent> = emptyList(),
+    val events: List<WorldEvent> = emptyList(),
     val dropped: List<Pair<Vec3, BlockState>> = emptyList(),
 ) {
     val isEmpty get() = broken.isEmpty() && reshaped.isEmpty() && sounds.isEmpty() && data.isEmpty() && events.isEmpty()
@@ -75,6 +75,9 @@ enum class BlockUpdate {
     /** A pressed button popping back out. */
     BUTTON,
 
+    /** Water or lava moving on. */
+    FLOW,
+
     /** Whether sand and the like with nothing under it falls. */
     FALL,
 }
@@ -102,6 +105,7 @@ internal val BlockState.dueFor: List<BlockUpdate>
             name == BIG_DRIPLEAF -> BlockUpdate.TILT
             name.endsWith("button") -> BlockUpdate.BUTTON
             fallsFreely -> BlockUpdate.FALL
+            liquid != null -> BlockUpdate.FLOW
             else -> null
         }
         return listOfNotNull(BlockUpdate.SUPPORT.takeIf { held }, own)
@@ -292,16 +296,21 @@ fun FlatWorld.tickBlocks(): Changes {
     val data = LinkedHashSet<BlockPos>()
     // Arms already moving go on before any starts, which shows where it starts from first.
     movePistonArms(reshaped, data)
-    lookForFalls()
     val broken = linkedMapOf<BlockPos, BrokenBlock>()
     val sounds = mutableListOf<BlockSound>()
     val changed = mutableListOf<BlockPos>()
+    // What changed since the last tick may make blocks fall, liquid flow, or lava and concrete powder harden.
+    val since = blockChanges.toList().also { blockChanges.clear() }
+    lookForFalls(since)
+    changed += lookForFlows(since, sounds)
     val moved = mutableListOf<BlockPos>()
-    val events = mutableListOf<BlockEvent>()
+    val events = mutableListOf<WorldEvent>()
     val dropped = mutableListOf<Pair<Vec3, BlockState>>()
     // Those already falling go on before any more start.
     changed += moveFallingBlocks(sounds, events, dropped)
     for ((at, update) in scheduled.remove(blockTicks).orEmpty()) {
+        // Liquid due to move isn't any more, whatever's there now, so liquid there later can be.
+        if (update == BlockUpdate.FLOW) flowDue -= at
         val state = stateAt(at)?.takeIf { it.name != AIR } ?: continue
         when (update) {
             BlockUpdate.SUPPORT -> if (!survives(at, state) || remainingFaces(at, state)?.isEmpty() == true) {
@@ -337,6 +346,7 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.PLATE -> if (checkPlate(at, state, sounds)) reshaped += at
             BlockUpdate.LECTERN -> if (endPagePulse(at, state)) reshaped += at
             BlockUpdate.BUTTON -> if (releaseButton(at, sounds)) reshaped += at
+            BlockUpdate.FLOW -> changed += flow(at, broken, sounds)
             BlockUpdate.FALL -> if (canFall(at, state)) {
                 startFalling(at, state)
                 changed += at

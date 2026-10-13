@@ -13,9 +13,12 @@ const val MAX_Y = MIN_Y + SUB_CHUNK_COUNT * 16 - 1
  * A column of the world, 16 blocks square and as tall as the overworld.
  * [subChunks] hold block network IDs, which are block state hashes, from
  * the bottom up; any above the last one are air. [biomes] has a biome ID
- * for every block, one storage per sub-chunk, all the way up.
+ * for every block, one storage per sub-chunk, all the way up. [liquids]
+ * is the second layer of each sub-chunk, as the game keeps it: the water
+ * inside blocks, like a fence standing in water, or null for a sub-chunk
+ * with none.
  */
-class Chunk(val subChunks: List<PalettedStorage>, val biomes: List<PalettedStorage>) {
+class Chunk(val subChunks: List<PalettedStorage>, val biomes: List<PalettedStorage>, val liquids: List<PalettedStorage?> = emptyList()) {
     init {
         require(subChunks.size <= SUB_CHUNK_COUNT) { "${subChunks.size} sub-chunks don't fit in the overworld's $SUB_CHUNK_COUNT" }
         require(biomes.size == SUB_CHUNK_COUNT) { "Biomes cover all $SUB_CHUNK_COUNT sub-chunks, not ${biomes.size}" }
@@ -23,6 +26,9 @@ class Chunk(val subChunks: List<PalettedStorage>, val biomes: List<PalettedStora
 
     /** The network ID of the block at [pos], which must be in this column. Above and below the overworld, there's only air. */
     fun blockAt(pos: BlockPos): Int = subChunks.getOrNull(subChunkOf(pos))?.get(indexOf(pos)) ?: AIR_NETWORK_ID
+
+    /** The network ID of what's in the second layer at [pos]: the water inside the block there, or air. */
+    fun liquidAt(pos: BlockPos): Int = liquids.getOrNull(subChunkOf(pos))?.get(indexOf(pos)) ?: AIR_NETWORK_ID
 
     /**
      * This column with [networkId] at [pos]. Columns share sub-chunks, so
@@ -34,7 +40,17 @@ class Chunk(val subChunks: List<PalettedStorage>, val biomes: List<PalettedStora
         while (subChunks.size <= subChunkOf(pos)) subChunks += PalettedStorage.filled(AIR_NETWORK_ID)
         subChunks[subChunkOf(pos)] = subChunks[subChunkOf(pos)].with(indexOf(pos), networkId)
         while (subChunks.lastOrNull()?.palette == listOf(AIR_NETWORK_ID)) subChunks.removeAt(subChunks.lastIndex)
-        return Chunk(subChunks, biomes)
+        return Chunk(subChunks, biomes, liquids.take(subChunks.size))
+    }
+
+    /** This column with [networkId] in the second layer at [pos], inside the block there. A layer left with nothing but air goes. */
+    fun withLiquid(pos: BlockPos, networkId: Int): Chunk {
+        val liquids = liquids.toMutableList()
+        while (liquids.size <= subChunkOf(pos)) liquids += null
+        val layer = (liquids[subChunkOf(pos)] ?: PalettedStorage.filled(AIR_NETWORK_ID)).with(indexOf(pos), networkId)
+        liquids[subChunkOf(pos)] = layer.takeUnless { it.palette == listOf(AIR_NETWORK_ID) }
+        while (liquids.isNotEmpty() && liquids.last() == null) liquids.removeAt(liquids.lastIndex)
+        return Chunk(subChunks, biomes, liquids)
     }
 
     private fun subChunkOf(pos: BlockPos) = (pos.y - MIN_Y) shr 4

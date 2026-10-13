@@ -36,13 +36,13 @@ class ChunkCodecTest {
         assertEquals(listOf(9, 1, 0xFE), bytes.take(3).map { it.toInt() and 0xFF })
         assertEquals(2 shl 1, bytes[3].toInt(), "two bits for three values, the low bit clear for NBT")
 
-        assertEquals(values(blocks), values(decodeSubChunk(bytes, palette)!!))
+        assertEquals(values(blocks), values(decodeSubChunk(bytes, palette)!!.blocks))
         val filled = PalettedStorage.filled(stone.networkId)
-        assertEquals(values(filled), values(decodeSubChunk(encodeSubChunk(0, filled, palette), palette)!!))
+        assertEquals(values(filled), values(decodeSubChunk(encodeSubChunk(0, filled, palette), palette)!!.blocks))
     }
 
     @Test
-    fun `a state Kore doesn't know reads as its block's default, a block it doesn't know as air, and only the first storage layer counts`() {
+    fun `a state Kore doesn't know reads as its block's default, and a block it doesn't know as air, as does a second layer of it`() {
         val out = Unpooled.buffer().writeByte(8).writeByte(2) // Format 8, two layers
         out.writeByte(1 shl 1)
         repeat(SUB_CHUNK_VOLUME / 32) { out.writeIntLE(if (it == 0) 1 else 0) }
@@ -52,11 +52,28 @@ class ChunkCodecTest {
         out.writeByte(0) // The water layer, one value
         writeNbt(out, NbtMap.builder().putString("name", "minecraft:water").putCompound("states", NbtMap.EMPTY).build())
 
-        val blocks = decodeSubChunk(ByteBufUtil.getBytes(out), palette)!!
+        val read = decodeSubChunk(ByteBufUtil.getBytes(out), palette)!!
+        assertNull(read.liquid, "water it doesn't know, which is as good as none")
+        val blocks = read.blocks
         assertEquals(AIR_NETWORK_ID, blocks[blockIndex(0, 0, 0)], "a block Kore doesn't know")
         assertEquals(log.networkId, blocks[blockIndex(0, 1, 0)], "a state it doesn't know, its block's default")
         assertEquals(setOf(log.networkId, AIR_NETWORK_ID), (0 until SUB_CHUNK_VOLUME).map { blocks[it] }.toSet())
         assertNull(decodeSubChunk(byteArrayOf(4, 0), palette), "a format from before 1.2.13")
+    }
+
+    @Test
+    fun `the water inside blocks saves as a second layer, and reads back`() {
+        val water = state("minecraft:water", "liquid_depth" to 0)
+        val withWater = BlockPalette(listOf(state(AIR), stone, log, water))
+        val blocks = PalettedStorage.of(IntArray(SUB_CHUNK_VOLUME) { if (it < 10) log.networkId else AIR_NETWORK_ID })
+        val liquid = PalettedStorage.of(IntArray(SUB_CHUNK_VOLUME) { if (it < 5) water.networkId else AIR_NETWORK_ID })
+
+        val bytes = encodeSubChunk(-4, blocks, withWater, liquid)
+        assertEquals(2, bytes[1].toInt(), "two layers")
+        val read = decodeSubChunk(bytes, withWater)!!
+        assertEquals(values(blocks), values(read.blocks))
+        assertEquals(values(liquid), values(read.liquid!!))
+        assertNull(decodeSubChunk(encodeSubChunk(-4, blocks, withWater), withWater)!!.liquid, "none, without")
     }
 
     @Test

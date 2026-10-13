@@ -107,14 +107,12 @@ class FallingBlock(val id: Long, val state: BlockState, position: Vec3, internal
 }
 
 /**
- * Looks at the blocks that changed since it last did, and those above
- * them, for any that now have nothing under them and fall, and sets those
- * falling a moment later. Run once a tick, before blocks are ticked.
+ * Looks at the blocks that [changed], and those above them, for any that
+ * now have nothing under them and fall, and sets those falling a moment
+ * later. Run once a tick, before blocks are ticked.
  */
-internal fun FlatWorld.lookForFalls() {
-    val looking = fallChecks.toList()
-    fallChecks.clear()
-    for (pos in looking) {
+internal fun FlatWorld.lookForFalls(changed: Collection<BlockPos>) {
+    for (pos in changed.flatMap { listOf(it, it.side(Face.UP)) }.distinct()) {
         if (pos.y !in MIN_Y..MAX_Y) continue
         val state = stateAt(pos) ?: continue
         if (canFall(pos, state)) schedule(pos, FALL_DELAY, BlockUpdate.FALL)
@@ -154,13 +152,23 @@ internal fun FlatWorld.fallFrom(pos: BlockPos, state: BlockState): List<BlockPos
  * but for suspicious sand and gravel, which crumble wherever they land,
  * and pointed dripstone breaks with its sound. One that falls for long
  * enough without landing drops too, and one that falls out of the world
- * is gone. Their sounds go in [sounds] and [events]. Returns where blocks
- * landed.
+ * is gone. Concrete powder falling into water stops there, as concrete.
+ * Their sounds go in [sounds] and [events]. Returns where blocks landed.
  */
-internal fun FlatWorld.moveFallingBlocks(sounds: MutableList<BlockSound>, events: MutableList<BlockEvent>, dropped: MutableList<Pair<Vec3, BlockState>>): List<BlockPos> {
+internal fun FlatWorld.moveFallingBlocks(sounds: MutableList<BlockSound>, events: MutableList<WorldEvent>, dropped: MutableList<Pair<Vec3, BlockState>>): List<BlockPos> {
     val landed = mutableListOf<BlockPos>()
     for (falling in fallingBlocks.toList()) {
-        if (!falling.fall(this)) {
+        val fell = falling.fall(this)
+        // Concrete powder falling into water hardens there.
+        val wetAt = Vec3(falling.position.x, falling.position.y + FALLING_BLOCK_SIZE / 2, falling.position.z).toBlockPos()
+        val concrete = falling.state.name.takeIf { it.endsWith("_concrete_powder") && isWet(wetAt) }?.let { blocks.defaultOf(it.removeSuffix("_powder")) }
+        if (concrete != null && wetAt.y in MIN_Y..MAX_Y) {
+            removeFallingBlock(falling.id)
+            set(wetAt, concrete)
+            landed += wetAt
+            continue
+        }
+        if (!fell) {
             if (falling.position.y < MIN_Y - VOID_DEPTH) {
                 removeFallingBlock(falling.id)
             } else if (falling.age >= FALL_LIFETIME) {
@@ -185,13 +193,13 @@ internal fun FlatWorld.moveFallingBlocks(sounds: MutableList<BlockSound>, events
         val fallen = falling.fromY - at.y
         val worn = state.name in ANVIL_WEAR && fallen > 1 && Random.nextFloat() < ANVIL_WEAR_PER_BLOCK * fallen
         if (worn && ANVIL_WEAR[state.name] == null) {
-            events += BlockEvent(at, LevelEvent.SOUND_ANVIL_BREAK, 0)
+            events += WorldEvent(at, LevelEvent.SOUND_ANVIL_BREAK, 0)
             continue
         }
         val lands = if (worn) blocks.find(ANVIL_WEAR.getValue(state.name)!!, state.properties) ?: state else state
         set(at, lands)
         landed += at
-        if (state.name.endsWith("anvil")) events += BlockEvent(at, LevelEvent.SOUND_ANVIL_LAND, 0)
+        if (state.name.endsWith("anvil")) events += WorldEvent(at, LevelEvent.SOUND_ANVIL_LAND, 0)
     }
     return landed
 }
