@@ -48,6 +48,7 @@ import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.ItemVersion
+import org.koremc.registry.damage
 import org.koremc.registry.enchantments
 import org.koremc.world.Drops
 import org.koremc.world.FlatWorld
@@ -86,7 +87,7 @@ class CommandsTest {
     private val world = FlatWorld(palette, listOf(stone))
 
     private val diamond = ItemDefinition("minecraft:diamond", 304, componentBased = false, ItemVersion.NONE)
-    private val sword = ItemDefinition("minecraft:diamond_sword", 307, componentBased = false, ItemVersion.NONE, maxStackSize = 1, enchantCategories = setOf("sharp_weapon"))
+    private val sword = ItemDefinition("minecraft:diamond_sword", 307, componentBased = false, ItemVersion.NONE, maxStackSize = 1, maxDurability = 1561, enchantCategories = setOf("sharp_weapon"))
     private val stoneItem = ItemDefinition("minecraft:stone", 1, componentBased = false, ItemVersion.NONE)
     private val items = listOf(
         ItemDefinition(AIR, -158, componentBased = false, ItemVersion.NONE), diamond, sword, stoneItem,
@@ -252,6 +253,16 @@ class CommandsTest {
         val slots = steve.received().count { idOf(it) == INVENTORY_SLOT }
         assertEquals(33, slots) // The 33 slots the swords left fill with 2112 diamonds, and the other 188 drop
         assertEquals(listOf(60, 64, 64), world.items.map { it.stack.count }.sorted())
+    }
+
+    @Test
+    fun `give's data is how worn an item that wears is`() {
+        val (steve, _) = steveAndAlex()
+
+        steve.runs("/give @s diamond_sword 1 1500")
+        val given = steve.session.heldStack!!
+        assertEquals(1500, given.damage)
+        assertEquals(0, given.aux)
     }
 
     @Test

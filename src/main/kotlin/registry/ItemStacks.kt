@@ -24,9 +24,12 @@ class ItemStacks(items: List<ItemDefinition>, creative: CreativeInventory, priva
      * [count] of the item called [name], in the variant numbered [aux], like
      * a potion's. Null if there's no such item. A block's item places the
      * block state the creative inventory gives that variant, or its first.
+     * An item that wears has no variants, so [aux] is how worn it is, as
+     * `/give` has it.
      */
     fun of(name: String, count: Int = 1, aux: Int = 0): ItemStack? {
         val item = byName[name] ?: return null
+        if (item.maxDurability > 0) return ItemStack(item, count).withDamage(aux)
         val shown = inCreative[name].orEmpty()
         val block = (shown.find { it.aux == aux } ?: shown.find { it.block != null })?.block ?: blocks.defaultOf(name)
         return ItemStack(item, count, aux, block)

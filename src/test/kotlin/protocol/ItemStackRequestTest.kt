@@ -98,6 +98,14 @@ class ItemStackRequestTest {
         assertContentEquals(bytes(0x94, 0x01, 0x02) + accepted + bytes(0x01, 0x05, 0x00), responses.encode())
     }
 
+    @Test
+    fun `a slot in a response carries its stack's name and wear`() {
+        val response = ItemStackResponse(listOf(StackResponse(-1, accepted = true, listOf(ContainerChange(ContainerName.HOTBAR, listOf(SlotChange(4, 1, 5, "Edge", damage = 120)))))))
+
+        val slot = bytes(0x04, 0x04, 0x01, 0x01, 0x0A, 0x04) + "Edge".encodeToByteArray() + bytes(0x00, 0xF0, 0x01) // Named, nothing filtered, 120 uses gone
+        assertContentEquals(bytes(0x94, 0x01, 0x01, 0x00, 0x01, 0x01, 0x01, ContainerName.HOTBAR, 0x00, 0x01) + slot, response.encode())
+    }
+
     private fun request(id: Int, actions: RequestBuilder.() -> Unit): ByteArray {
         val builder = RequestBuilder().apply(actions)
         val buffer = Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(id).writeVarUInt(builder.count).writeBytes(builder.bytes)

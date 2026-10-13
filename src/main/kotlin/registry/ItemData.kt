@@ -3,6 +3,7 @@ package org.koremc.registry
 import org.cloudburstmc.nbt.NbtMap
 import org.cloudburstmc.nbt.NbtMapBuilder
 import org.cloudburstmc.nbt.NbtType
+import kotlin.random.Random
 
 // Where an item's NBT keeps what's been done to it, as the game names them.
 private const val ENCHANTMENTS = "ench"
@@ -33,6 +34,9 @@ fun ItemStack.withEnchantments(enchantments: List<EnchantmentLevel>): ItemStack 
     }
 }
 
+/** The level of the enchantment numbered [id] on this item, or 0 for none. */
+fun ItemStack.levelOf(id: Int): Int = enchantments.firstOrNull { it.id == id }?.level ?: 0
+
 /** How worn this item is: how many of its uses are gone. */
 val ItemStack.damage: Int get() = nbt.getInt(DAMAGE, 0)
 
@@ -41,6 +45,34 @@ fun ItemStack.withDamage(damage: Int): ItemStack = withNbt { if (damage <= 0) re
 
 /** How many uses this item has left. */
 val ItemStack.durability: Int get() = item.maxDurability - damage
+
+/**
+ * This item with [uses] more of its uses gone, or null if that wears it
+ * out: more gone than its durability, as the game has it, so it works one
+ * last time with none left. Unbreaking spares each use with a chance of
+ * its level in one more than that, three in four at level 3. An item
+ * without durability doesn't wear.
+ */
+fun ItemStack.worn(uses: Int, random: Random = Random): ItemStack? {
+    if (item.maxDurability <= 0 || uses <= 0) return this
+    val unbreaking = levelOf(UNBREAKING)
+    val lost = (1..uses).count { random.nextInt(unbreaking + 1) == 0 }
+    return when {
+        lost == 0 -> this
+        damage + lost > item.maxDurability -> null
+        else -> withDamage(damage + lost)
+    }
+}
+
+/**
+ * This item mended by experience [points], two uses for each, as Mending
+ * does with the orbs its player picks up, and how many of the points that
+ * took: no more than it takes to mend what's worn.
+ */
+fun ItemStack.mendedBy(points: Int): Pair<ItemStack, Int> {
+    val mended = minOf(damage, points * 2)
+    return withDamage(damage - mended) to (mended + 1) / 2
+}
 
 /**
  * The levels anvils add to the cost of working this item again, which

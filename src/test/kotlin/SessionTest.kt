@@ -53,11 +53,16 @@ import org.koremc.registry.CreativeCategory
 import org.koremc.registry.CreativeGroup
 import org.koremc.registry.CreativeInventory
 import org.koremc.registry.CreativeItem
+import org.koremc.registry.EnchantmentLevel
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemVersion
+import org.koremc.registry.MENDING
 import org.koremc.registry.Mining
 import org.koremc.registry.ToolKind
+import org.koremc.registry.damage
+import org.koremc.registry.withDamage
+import org.koremc.registry.withEnchantments
 import org.koremc.world.BlockPos
 import org.koremc.world.ChunkPos
 import org.koremc.world.Drops
@@ -84,10 +89,11 @@ private const val START_SPRINTING = 25
 private const val STOP_SPRINTING = 26
 private const val START_FLYING = 42
 
-/** The runtime IDs of the oak planks, oak door and oak fence items. */
+/** The runtime IDs of the oak planks, oak door, oak fence and wooden pickaxe items. */
 private const val PLANKS_ITEM = 5
 private const val DOOR_ITEM = 324
 private const val FENCE_ITEM = 85
+private const val PICKAXE_ITEM = 310
 
 /** The PlayerAction for breaking a block in creative. */
 private const val CREATIVE_DESTROY_BLOCK = 13
@@ -148,6 +154,8 @@ class SessionTest {
             CreativeItem(ItemStack(ItemDefinition("minecraft:oak_fence", FENCE_ITEM, componentBased = false, ItemVersion.NONE), block = fences[0]), group = 0),
         ),
     )
+
+    private val pickaxe = ItemDefinition("minecraft:wooden_pickaxe", PICKAXE_ITEM, componentBased = false, ItemVersion.NONE, maxDurability = 59)
 
     private val sent = mutableListOf<ByteArray>()
 
@@ -749,6 +757,81 @@ class SessionTest {
     }
 
     @Test
+    fun `breaking a block wears the tool it's broken with, which the client hears`() {
+        spawn()
+        val ground = BlockPos(1, -64, 0)
+        session.give(ItemStack(pickaxe))
+
+        // A wooden pickaxe takes 23 ticks over stone. The client didn't predict the wear here.
+        clientSends(breakingInput(tick = 200, START_DESTROY to ground))
+        sent.clear()
+        clientSends(breakingInput(tick = 223, STOP_DESTROY to ground, destroying = ground, held = PICKAXE_ITEM))
+
+        assertEquals(AIR_NETWORK_ID, world.blockAt(ground))
+        assertEquals(1, session.heldStack?.damage)
+        val slot = InventorySlot(0, ItemStack(pickaxe).withDamage(1), stackId = 1).encode()
+        assertEquals(1, receivedPackets().count { it.contentEquals(slot) })
+    }
+
+    @Test
+    fun `the tool a break wears goes by the break's legacy request ID until the client hears what it is now`() {
+        spawn()
+        val ground = BlockPos(1, -64, 0)
+        session.give(ItemStack(pickaxe))
+        clientSends(breakingInput(tick = 200, START_DESTROY to ground))
+        sent.clear()
+
+        clientSends(breakingInput(tick = 223, STOP_DESTROY to ground, destroying = ground, held = PICKAXE_ITEM, legacyRequestId = -5062))
+        val slot = InventorySlot(0, ItemStack(pickaxe).withDamage(1), stackId = 1).encode()
+        assertEquals(1, receivedPackets().count { it.contentEquals(slot) }) // Once, not again for the acknowledgement
+
+        // Request -9 drops the pickaxe the client still names -5062.
+        clientSends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(-9).writeVarUInt(1)
+                    .writeVarUInt(3).writeByte(3).writeByte(1).writeByte(28).writeBoolean(false).writeByte(0).writeIntLE(-5062).writeBoolean(false)
+                    .writeVarUInt(0).writeIntLE(0),
+            ),
+        )
+        assertEquals(0, receivedPacket()[3].toInt()) // The response's result: accepted
+        assertNull(session.heldStack)
+    }
+
+    @Test
+    fun `a tool worn out breaks, which everyone around hears`() {
+        spawn()
+        val ground = BlockPos(1, -64, 0)
+        session.give(ItemStack(pickaxe).withDamage(59))
+        clientSends(breakingInput(tick = 200, START_DESTROY to ground))
+        sent.clear()
+
+        clientSends(breakingInput(tick = 223, STOP_DESTROY to ground, destroying = ground, held = PICKAXE_ITEM))
+
+        assertNull(session.heldStack)
+        val packets = receivedPackets()
+        assertTrue(packets.any { it.contentEquals(LevelSoundEvent(LevelSoundEvent.BREAK, standing, -1).encode()) })
+        assertTrue(packets.any { it.contentEquals(InventorySlot(0, stack = null, stackId = 0).encode()) })
+    }
+
+    @Test
+    fun `an orb mends a worn item with Mending, rather than give the player experience`() {
+        spawn()
+        val mending = ItemStack(pickaxe).withDamage(10).withEnchantments(listOf(EnchantmentLevel(MENDING, 1)))
+        session.give(mending)
+        clientSends(playerAuthInput(standing))
+        world.spawnOrb(3, Vec3(standing.x, standing.y - 1.62f, standing.z), Vec3(0f, 0f, 0f))
+        sent.clear()
+
+        session.collectOrbs()
+
+        // Two uses a point, and none of the three left over.
+        val mended = mending.withDamage(4)
+        assertEquals(mended, session.heldStack)
+        val expected = listOf(LevelEvent(LevelEvent.SOUND_EXPERIENCE_ORB, standing, 0), InventorySlot(0, mended, stackId = 1))
+        assertEquals(expected.map { it.encode().toList() }, receivedPackets().map { it.toList() })
+    }
+
+    @Test
     fun `a dropped item is thrown from the player, out of their reach for two seconds`() {
         config = config.copy(gameMode = GameMode.CREATIVE)
         spawn()
@@ -977,7 +1060,7 @@ class SessionTest {
      * [tick], carrying the steps of breaking a block in [actions], each
      * against its upper face, and [destroying] a block, if it's set.
      */
-    private fun breakingInput(tick: Long, vararg actions: Pair<Int, BlockPos>, destroying: BlockPos? = null) = ByteBufUtil.getBytes(
+    private fun breakingInput(tick: Long, vararg actions: Pair<Int, BlockPos>, destroying: BlockPos? = null, held: Int = 0, legacyRequestId: Int = 0) = ByteBufUtil.getBytes(
         Unpooled.buffer()
             .writeVarUInt(144)
             .writeZero(8).writeFloatLE(standing.x).writeFloatLE(standing.y).writeFloatLE(standing.z)
@@ -987,9 +1070,11 @@ class SessionTest {
             .writeBoolean(destroying != null)
             .apply {
                 if (destroying != null) {
-                    writeVarInt(0).writeBoolean(false).writeVarUInt(0) // No legacy request or slot changes
-                    writeVarInt(2).writeByte(1).writeBlockPos(destroying).writeByte(1).writeVarInt(0).writeByte(0) // Destroy, with an empty hand
-                    heldItem(0)
+                    writeVarInt(legacyRequestId).writeBoolean(false)
+                    // A legacy request names the slot it changes, hotbar slot 0, wearing what's held there.
+                    if (legacyRequestId == 0) writeVarUInt(0) else writeVarUInt(1).writeVarUInt(0).writeBoolean(true).writeByte(0).writeBoolean(false).writeVarUInt(0).heldItem(held).heldItem(held)
+                    writeVarInt(2).writeByte(1).writeBlockPos(destroying).writeByte(1).writeVarInt(0).writeByte(0) // Destroy, from hotbar slot 0
+                    heldItem(held)
                     writeZero(24).writeVarUInt(stone.networkId).writeByte(1).writeByte(0)
                 }
             }

@@ -18,6 +18,8 @@ import org.koremc.registry.ShapedRecipe
 import org.koremc.registry.ShapelessRecipe
 import org.koremc.registry.SmithingTransformRecipe
 import org.koremc.registry.SmithingTrimRecipe
+import org.koremc.registry.customName
+import org.koremc.registry.damage
 import org.koremc.registry.sameKindAs
 import org.koremc.registry.withEnchantments
 import org.slf4j.LoggerFactory
@@ -443,7 +445,7 @@ class StackRequestHandler(
 
         fun changes(): List<ContainerChange> = named.entries.groupBy({ it.key.first }) { (key, location) ->
             val stack = location.content()
-            SlotChange(key.second, stack?.stack?.count ?: 0, stack?.id ?: 0)
+            SlotChange(key.second, stack?.stack?.count ?: 0, stack?.id ?: 0, stack?.stack?.customName.orEmpty(), stack?.stack?.damage ?: 0)
         }.map { (container, slots) -> ContainerChange(container, slots) }
 
         fun undo() = before.forEach { (location, stack) -> location.container[location.slot] = stack }

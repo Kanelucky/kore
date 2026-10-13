@@ -1,9 +1,11 @@
 package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
+import io.netty.buffer.ByteBufOutputStream
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
 import org.cloudburstmc.nbt.NbtMap
+import org.cloudburstmc.nbt.NbtUtils
 import org.koremc.world.BlockPos
 import org.koremc.world.Vec3
 import kotlin.test.Test
@@ -87,7 +89,10 @@ class BlocksTest {
     @Test
     fun `input carries breaking blocks along, each part behind a flag`() {
         val packet = input {
-            writeBoolean(true).writeVarInt(0).writeBoolean(false).writeVarUInt(0) // An item use, with no legacy request or slot changes
+            writeBoolean(true).writeVarInt(-5062).writeBoolean(false) // An item use, with a legacy request
+            writeVarUInt(1).writeVarUInt(0).writeBoolean(true).writeByte(0).writeBoolean(false).writeVarUInt(4) // Wearing the tool in hotbar slot 4
+            item(id = 5, stackId = 3)
+            wornItem(id = 5, damage = 1)
             itemUse(action = 2, face = 1)
             writeBoolean(false) // No item stack request
             writeBoolean(true).writeVarUInt(2) // Two block actions: starting to break, and cracking
@@ -96,7 +101,10 @@ class BlocksTest {
         }
 
         val input = decodeClientPacket(packet) as PlayerAuthInput
-        assertEquals(ItemUse(ItemUseAction.DESTROY, clicked, face = 1, hotbarSlot = 4, heldItem = 5, click, clickedBlock = GRASS, predictedToWork = true), input.itemUse)
+        val use = input.itemUse!!
+        assertEquals(ItemUse(ItemUseAction.DESTROY, clicked, face = 1, hotbarSlot = 4, heldItem = 5, click, clickedBlock = GRASS, predictedToWork = true), use.use)
+        assertEquals(-5062, use.legacyRequestId)
+        assertEquals(ClientItem(5, 1, stackId = null, damage = 1), use.actions.single().after)
         assertEquals(listOf(BlockAction(0, clicked, 1), BlockAction(18, clicked, 1)), input.blockActions)
         assertEquals(Vec3(0.5f, -58.38f, 0.5f), input.position)
     }
@@ -180,6 +188,13 @@ class BlocksTest {
         stackId?.let { writeVarInt(it) }
         writeVarUInt(0)
         writeByteArray(ByteArray(10)) // No NBT, nothing it may be placed on or break
+    }
+
+    /** An item as the client sends it, worn [damage] uses down, which its extras' NBT says. */
+    private fun ByteBuf.wornItem(id: Int, damage: Int) {
+        writeShortLE(id).writeShortLE(1).writeVarUInt(0).writeBoolean(false).writeVarUInt(0)
+        val nbt = Unpooled.buffer().also { NbtUtils.createWriterLE(ByteBufOutputStream(it)).writeTag(NbtMap.builder().putInt("Damage", damage).build()) }
+        writeByteArray(bytes(0xFF, 0xFF, 0x01) + ByteBufUtil.getBytes(nbt) + ByteArray(8)) // NBT, version 1, then nothing it may be placed on or break
     }
 
     private fun bytes(vararg values: Int) = ByteArray(values.size) { values[it].toByte() }

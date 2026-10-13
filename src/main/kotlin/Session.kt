@@ -120,8 +120,14 @@ import org.koremc.protocol.skinFrom
 import org.koremc.registry.AIR
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockState
+import org.koremc.registry.EFFICIENCY
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
+import org.koremc.registry.MENDING
+import org.koremc.registry.damage
+import org.koremc.registry.levelOf
+import org.koremc.registry.mendedBy
+import org.koremc.registry.worn
 import org.koremc.world.BlockPos
 import org.koremc.world.Changes
 import org.koremc.world.FlatWorld
@@ -145,6 +151,7 @@ import org.koremc.world.centre
 import org.koremc.world.chunksAround
 import org.koremc.world.facing
 import org.koremc.world.harvests
+import org.koremc.world.wearFromBreaking
 import org.koremc.world.opensOnClick
 import org.koremc.world.BARREL
 import org.koremc.world.BARREL_OPEN
@@ -613,7 +620,7 @@ class Session(
                     onMove(packet)
                     // The item use first: a block breaking this tick is checked against when the player
                     // started on it, before the step that ends the breaking clears that.
-                    packet.itemUse?.let { onItemUse(it, packet.tick) }
+                    packet.itemUse?.let { onTransaction(it, packet.tick) }
                     packet.stackRequest?.let { onStackRequests(listOf(it)) }
                     onBlockActions(packet.blockActions, packet.tick)
                 }
@@ -1186,13 +1193,21 @@ class Session(
         if (packet.windowId == INVENTORY_WINDOW && packet.selectedSlot in 0 until HOTBAR_SIZE) heldSlot = packet.selectedSlot
     }
 
-    /** A transaction from before item stack requests, which the client still sends for a few things. */
-    private fun onTransaction(packet: InventoryTransaction) {
+    /**
+     * A transaction from before item stack requests, which the client still
+     * sends for a few things, or the item use riding in the player's input
+     * at the client's [tick]. When a use changes what the player holds in a
+     * way the client didn't predict, like wearing out a tool it thought had
+     * a use left, the client hears what the slot holds now.
+     */
+    private fun onTransaction(packet: InventoryTransaction, tick: Long? = null) {
+        val held = inventory.items[heldSlot]
         when (packet.type) {
-            InventoryTransaction.USE_ITEM -> packet.use?.let(::onItemUse)
+            InventoryTransaction.USE_ITEM -> packet.use?.let { onItemUse(it, tick) }
             InventoryTransaction.NORMAL -> onDropFromSlot(packet.actions)
         }
-        if (packet.legacyRequestId != 0) acknowledge(packet)
+        val acknowledged = if (packet.legacyRequestId != 0) acknowledge(packet) else emptyList()
+        if (packet.type == InventoryTransaction.USE_ITEM && inventory.items[heldSlot] != held && heldSlot !in acknowledged) send(slotOf(heldSlot))
     }
 
     /**
@@ -1200,16 +1215,18 @@ class Session(
      * changed hold now, with their stacks' IDs. Until it hears, the client
      * names those stacks by the transaction's legacy request ID, which Kore
      * remembers for the item stack requests that do, like moving the items
-     * placing a candle on a candle left behind.
+     * placing a candle on a candle left behind, or the tool that just broke
+     * a block. Returns the slots the client heard about.
      */
-    private fun acknowledge(transaction: InventoryTransaction) {
+    private fun acknowledge(transaction: InventoryTransaction): List<Int> {
         val slots = transaction.actions
             .filter { it.source == InventoryAction.CONTAINER && it.windowId == INVENTORY_WINDOW && it.slot in 0 until inventory.items.size }
             .map { it.slot }
             .distinct()
-        if (slots.isEmpty()) return
+        if (slots.isEmpty()) return slots
         stackRequests.rememberLegacy(transaction.legacyRequestId, slots)
         send(*slots.map(::slotOf).toTypedArray())
+        return slots
     }
 
     /**
@@ -1409,10 +1426,11 @@ class Session(
         }
         val changes = world.breakBlock(pos)
         showAround(world.packetsFor(changes))
+        val held = heldItem()
         changes.broken.forEach { (at, broken) ->
             // What the player broke drops only if what they hold harvests it. What fell with it always drops.
             val byHand = at == pos || broken.state.otherHalf(at) == pos
-            val harvested = !creative && (!byHand || game.mining[broken.state.name]?.let { harvests(it, heldItem()) } != false)
+            val harvested = !creative && (!byHand || game.mining[broken.state.name]?.let { harvests(it, held) } != false)
             // What a container held drops too, even in creative. A shulker box keeps it inside itself.
             val keepsItems = broken.state.storage == Storage.SHULKER_BOX
             if (harvested || (keepsItems && broken.contents.any { it != null })) dropFrom(at, broken)
@@ -1422,6 +1440,24 @@ class Session(
         }
         viewers().forEach { it.containerBroke(changes.broken.keys) }
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
+        if (!creative) wearHeld(game.mining[state.name]?.let { wearFromBreaking(it, held) } ?: 0)
+    }
+
+    /**
+     * Wears the item the player holds [uses] down, as breaking a block with
+     * a tool does. One that wears out breaks, which everyone around hears.
+     * The client hears what the slot holds once the use that wore it is
+     * answered.
+     */
+    private fun wearHeld(uses: Int) {
+        val held = inventory.items[heldSlot] ?: return
+        val worn = held.stack.worn(uses)
+        if (worn == held.stack) return
+        inventory.items[heldSlot] = worn?.let { held.copy(stack = it) }
+        if (worn == null) {
+            showAround(position.toBlockPos(), LevelSoundEvent(LevelSoundEvent.BREAK, position, -1))
+            log.debug("{}'s {} broke", player?.displayName, held.stack.item.name)
+        }
     }
 
     /** Drops what the [broken] block at [pos] drops, given the data and items it kept. */
@@ -1476,7 +1512,26 @@ class Session(
         world.removeOrb(orb.id)
         orbPickupDelay = ORB_PICKUP_DELAY
         showAround(position.toBlockPos(), LevelEvent(LevelEvent.SOUND_EXPERIENCE_ORB, position, 0))
-        addExperience(orb.value)
+        mend(orb.value).takeIf { it > 0 }?.let(::addExperience)
+    }
+
+    /**
+     * Mends one of the worn items with Mending that the player holds or
+     * wears, picked at random, with experience [points]: two uses for each.
+     * Returns the points left over, which go to the player.
+     */
+    private fun mend(points: Int): Int {
+        val slots = listOf(Triple(inventory.items, heldSlot, INVENTORY_WINDOW), Triple(inventory.offhand, 0, OFFHAND_WINDOW)) +
+            (0 until inventory.armour.size).map { Triple(inventory.armour, it, ARMOUR_WINDOW) }
+        val (container, slot, window) = slots.filter { (container, slot) ->
+            container[slot]?.stack?.let { it.damage > 0 && it.levelOf(MENDING) > 0 } == true
+        }.randomOrNull() ?: return points
+        val there = container[slot]!!
+        val (mended, used) = there.stack.mendedBy(points)
+        container[slot] = there.copy(stack = mended)
+        send(InventorySlot(slot, mended, there.id, window))
+        log.debug("{}'s {} was mended to {} damage", player?.displayName, mended.item.name, mended.damage)
+        return points - used
     }
 
     /** Whether [orb]'s box meets the player's. */
@@ -1738,7 +1793,7 @@ class Session(
     }
 
     /** How many ticks the player takes to break the block called [name], with what they hold, if Kore knows. */
-    private fun ticksToBreak(name: String): Int? = game.mining[name]?.let { breakTicks(it, heldItem()) }
+    private fun ticksToBreak(name: String): Int? = game.mining[name]?.let { breakTicks(it, heldItem(), heldStack?.levelOf(EFFICIENCY) ?: 0) }
 
     private fun canBuild() = gameMode == GameMode.SURVIVAL || gameMode == GameMode.CREATIVE
 

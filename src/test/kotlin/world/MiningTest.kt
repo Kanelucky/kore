@@ -38,6 +38,28 @@ class MiningTest {
     }
 
     @Test
+    fun `Efficiency speeds up a tool that suits the block, and nothing else`() {
+        assertEquals(6, breakTicks(stone, "minecraft:diamond_pickaxe"))
+        assertEquals(5, breakTicks(stone, "minecraft:diamond_pickaxe", efficiency = 1)) // 8 + 2
+        assertEquals(2, breakTicks(stone, "minecraft:diamond_pickaxe", efficiency = 5)) // 8 + 26
+        assertEquals(150, breakTicks(stone, "minecraft:diamond_shovel", efficiency = 5))
+    }
+
+    @Test
+    fun `tools wear a use a block, weapons two, and nothing on a block that breaks at once`() {
+        assertEquals(1, wearFromBreaking(stone, "minecraft:wooden_pickaxe"))
+        assertEquals(1, wearFromBreaking(stone, "minecraft:diamond_shovel")) // Even the wrong tool
+        assertEquals(1, wearFromBreaking(Mining(0.2, ToolKind.HOE), "minecraft:shears"))
+        assertEquals(2, wearFromBreaking(dirt, "minecraft:iron_sword"))
+        assertEquals(2, wearFromBreaking(dirt, "minecraft:trident"))
+        assertEquals(2, wearFromBreaking(dirt, "minecraft:copper_spear"))
+        assertEquals(0, wearFromBreaking(Mining(0.0), "minecraft:diamond_pickaxe"))
+        assertEquals(0, wearFromBreaking(Mining(0.0), "minecraft:shears"))
+        assertEquals(0, wearFromBreaking(stone, "minecraft:bow"))
+        assertEquals(0, wearFromBreaking(stone, held = null))
+    }
+
+    @Test
     fun `hardness a hair over its value as a float doesn't round up a tick`() {
         // Concrete's 1.8, as data-driven blocks give it, is 1.7999999523 as a float. By hand, it takes 9 seconds.
         assertEquals(180, breakTicks(Mining(1.8f.toDouble(), ToolKind.PICKAXE, harvestTier = 0), held = null))

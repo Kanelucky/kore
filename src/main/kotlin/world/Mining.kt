@@ -17,21 +17,22 @@ private enum class Tier(val speed: Double, val level: Int) {
 
 /**
  * How many ticks a player holding the item called [held], or nothing,
- * takes to break a block that takes to [mining] as it does: 0 for a block
- * that breaks at once, and null for one only creative players break.
+ * takes to break a block that takes to [mining] as it does, with
+ * [efficiency] at that level, if any: 0 for a block that breaks at once,
+ * and null for one only creative players break.
  *
  * It's the game's own reckoning. A tool of the kind that suits the block
  * digs at its tier's speed, and anything else at 1. Each tick does that
  * speed over the block's hardness: a thirtieth of it when what the player
  * holds harvests the block, and a hundredth when it doesn't. The block
  * breaks once the ticks add up to a whole. Swords and shears dig what
- * suits them at one speed each, whatever they're made of.
+ * suits them at one speed each, whatever they're made of. Efficiency adds
+ * the square of its level, and one, to the speed of a tool that suits.
  *
  * Kore doesn't count what slows a player down, like digging off the
- * ground or under water, nor what speeds them up, like Efficiency or Haste,
- * which nothing gives them yet.
+ * ground or under water, nor Haste, which nothing gives them yet.
  */
-fun breakTicks(mining: Mining, held: String?): Int? {
+fun breakTicks(mining: Mining, held: String?, efficiency: Int = 0): Int? {
     if (mining.unbreakable) return null
     val (kind, tier) = toolOf(held)
     val suited = kind != null && kind == mining.tool
@@ -40,7 +41,7 @@ fun breakTicks(mining: Mining, held: String?): Int? {
         kind == ToolKind.SWORD -> 15.0
         kind == ToolKind.SHEARS -> 5.0
         else -> tier?.speed ?: 1.0
-    }
+    } + if (suited && efficiency > 0) efficiency * efficiency + 1 else 0
     val ticks = mining.hardness * (if (harvests(mining, held)) 30 else 100) / speed
     // Some hardness comes as a float, a hair over its true value, which mustn't round up to another tick.
     return if (ticks < 1) 0 else ceil(ticks - 1e-4).toInt()
@@ -57,6 +58,26 @@ fun harvests(mining: Mining, held: String?): Boolean {
     val (kind, tier) = toolOf(held)
     return kind != null && kind == mining.tool && (tier?.level ?: 0) >= needed
 }
+
+/**
+ * How many uses the item called [held] loses breaking a block that takes
+ * to [mining] as it does: one for a tool, and two for a weapon, which
+ * isn't made for it. Nothing wears on a block that breaks at once, and
+ * what's neither a tool nor a weapon doesn't wear at all.
+ */
+fun wearFromBreaking(mining: Mining, held: String?): Int {
+    if (mining.hardness == 0.0) return 0
+    val name = held?.removePrefix("minecraft:") ?: return 0
+    val kind = toolOf(held).first
+    return when {
+        kind == ToolKind.SWORD || name in WEAPONS || name.endsWith("_spear") -> 2
+        kind != null -> 1
+        else -> 0
+    }
+}
+
+/** The weapons, besides swords and spears, that aren't for digging. */
+private val WEAPONS = setOf("trident", "mace")
 
 /** The kind and tier of tool the item called [item] is, as its name has them, like `minecraft:stone_pickaxe`. */
 private fun toolOf(item: String?): Pair<ToolKind?, Tier?> {

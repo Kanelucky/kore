@@ -15,6 +15,8 @@ import org.koremc.registry.CreativeItem
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemVersion
+import org.koremc.registry.withCustomName
+import org.koremc.registry.withDamage
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -54,6 +56,16 @@ class StackRequestHandlerTest {
         )
         assertEquals(expected, response)
         assertEquals(SlotStack(ItemStack(stick, count = 64), 1), inventory.ui[0])
+    }
+
+    @Test
+    fun `a moved stack is reported with its name and wear, which the client takes from the response`() {
+        inventory.items[0] = SlotStack(ItemStack(sword).withDamage(120).withCustomName("Edge"), 5)
+
+        val response = handler.handle(StackRequest(-3, listOf(StackAction.Transfer(1, hotbar(0, stackId = 5), hotbar(4, stackId = 0)))))
+
+        val moved = response.containers.single().slots.single { it.slot == 4 }
+        assertEquals(SlotChange(4, 1, 5, customName = "Edge", damage = 120), moved)
     }
 
     @Test

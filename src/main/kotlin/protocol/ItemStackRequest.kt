@@ -111,8 +111,13 @@ data class StackRequest(val id: Int, val actions: List<StackAction>, val filterS
 /** The client's item stack requests, sent whenever the player moves items around their inventory. */
 data class ItemStackRequest(val requests: List<StackRequest>) : ClientPacket
 
-/** A changed slot, as a response reports it: how many items are now there, and the stack's ID (0 for none). */
-data class SlotChange(val slot: Int, val count: Int, val stackId: Int)
+/**
+ * A changed slot, as a response reports it: how many items are now there,
+ * the stack's ID (0 for none), and what the client can't tell from its own
+ * prediction, the stack's anvil name and wear, which it takes as they are
+ * here, even for a stack it only moved.
+ */
+data class SlotChange(val slot: Int, val count: Int, val stackId: Int, val customName: String = "", val damage: Int = 0)
 
 /** The changed slots in one container, under the name the client used for it. */
 data class ContainerChange(val container: Int, val slots: List<SlotChange>)
@@ -141,9 +146,9 @@ data class ItemStackResponse(val responses: List<StackResponse>) : ServerPacket 
                     out.writeByte(slot.count)
                     out.writeBoolean(slot.stackId > 0)
                     if (slot.stackId > 0) out.writeVarInt(slot.stackId)
-                    out.writeString("") // Custom name
+                    out.writeString(slot.customName)
                     out.writeBoolean(false) // Filtered custom name
-                    out.writeVarInt(0) // Durability correction
+                    out.writeVarInt(slot.damage) // Durability correction
                 }
             }
         }

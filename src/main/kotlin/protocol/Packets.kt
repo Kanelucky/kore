@@ -121,7 +121,8 @@ data class PlayerAuthInput(
     val tick: Long,
     /** The flags set this tick that Kore acts on. Any others are left out. */
     val inputs: Set<InputFlag> = emptySet(),
-    val itemUse: ItemUse? = null,
+    /** An item used on a block, as a transaction with the slot changes the client predicts, like the wear on a tool that broke a block. */
+    val itemUse: InventoryTransaction? = null,
     val stackRequest: StackRequest? = null,
     val blockActions: List<BlockAction> = emptyList(),
 ) : ClientPacket {

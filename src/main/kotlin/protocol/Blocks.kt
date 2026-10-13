@@ -1,9 +1,13 @@
 package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
+import io.netty.buffer.ByteBufInputStream
+import io.netty.buffer.Unpooled
 import org.cloudburstmc.nbt.NbtMap
+import org.cloudburstmc.nbt.NbtUtils
 import org.koremc.world.BlockPos
 import org.koremc.world.Vec3
+import java.io.IOException
 
 private const val UPDATE_BLOCK = 21
 private const val BLOCK_ACTOR_DATA = 56
@@ -12,6 +16,9 @@ internal const val INVENTORY_TRANSACTION = 30
 internal const val MOB_EQUIPMENT = 31
 internal const val PLAYER_ACTION = 36
 internal const val LEVEL_SOUND_EVENT = 123
+
+/** Where an item's NBT keeps how worn it is. */
+private const val DAMAGE = "Damage"
 
 /** The client's prediction for an item use that works. One that fails is 0. */
 private const val PREDICTED_SUCCESS = 1
@@ -86,10 +93,10 @@ data class InventoryAction(val source: Int, val windowId: Int?, val slot: Int, v
 
 /**
  * An item as the client sends it outside item stack requests: its runtime
- * ID, which is 0 for none, how many there are, and the ID of the stack it
- * comes from, when the client gives one.
+ * ID, which is 0 for none, how many there are, the ID of the stack it
+ * comes from, when the client gives one, and how many of its uses are gone.
  */
-data class ClientItem(val runtimeId: Int, val count: Int, val stackId: Int?)
+data class ClientItem(val runtimeId: Int, val count: Int, val stackId: Int?, val damage: Int = 0)
 
 /**
  * Something the player did that has no packet of its own, like breaking a
@@ -224,6 +231,9 @@ data class LevelSoundEvent(
 
         /** A button popping back out. The data is the button's network ID, for the click of what it's made of. */
         const val BUTTON_CLICK_OFF = "button.click_off"
+
+        /** An item wearing out and breaking. The data is -1, for no block. */
+        const val BREAK = "break"
     }
 }
 
@@ -263,10 +273,10 @@ internal fun decodeMobEquipment(buffer: ByteBuf): MobEquipment {
 }
 
 /** An item use as `PlayerAuthInput` carries it: a transaction without the type, which can only be this one. */
-internal fun ByteBuf.readPackedItemUse(): ItemUse {
-    readLegacyRequest()
-    readActions() // The slot changes the client predicts, which an item use has no need of
-    return readItemUse()
+internal fun ByteBuf.readPackedItemUse(): InventoryTransaction {
+    val legacyRequestId = readLegacyRequest()
+    val actions = readActions()
+    return InventoryTransaction(InventoryTransaction.USE_ITEM, actions, readItemUse(), legacyRequestId)
 }
 
 internal fun ByteBuf.readBlockAction() = BlockAction(readVarInt(), readBlockPos(), readVarInt())
@@ -308,7 +318,8 @@ private fun ByteBuf.readItemUse(): ItemUse {
 /**
  * Reads an item as the client sends it outside item stack requests. These
  * items have a fixed 16-bit ID and may carry a stack ID, unlike those the
- * server sends. The aux value, block and extras are read past.
+ * server sends. The aux value and block are read past, and of the extras,
+ * only how worn the item is is kept.
  */
 private fun ByteBuf.readClientItem(): ClientItem {
     val id = readShortLE().toInt()
@@ -316,6 +327,22 @@ private fun ByteBuf.readClientItem(): ClientItem {
     readVarUInt() // Aux value
     val stackId = if (readBoolean()) readVarInt() else null
     readVarUInt() // Block network ID
-    readByteArray() // Extras
-    return ClientItem(id, count, stackId)
+    return ClientItem(id, count, stackId, damage = damageIn(readByteArray()))
+}
+
+/**
+ * How worn an item is, by the NBT its [extras] start with, if they have
+ * any: a marker of -1 and the format's version come first. The blocks the
+ * item may be placed on and break come after, and are left.
+ */
+private fun damageIn(extras: ByteArray): Int {
+    val buffer = Unpooled.wrappedBuffer(extras)
+    if (buffer.readableBytes() < 3 || buffer.readShortLE().toInt() != -1) return 0
+    buffer.readByte()
+    val nbt = try {
+        NbtUtils.createReaderLE(ByteBufInputStream(buffer)).readTag() as? NbtMap
+    } catch (e: IOException) {
+        throw PacketException("an item's NBT is malformed")
+    }
+    return nbt?.getInt(DAMAGE, 0) ?: 0
 }

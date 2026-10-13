@@ -76,6 +76,11 @@ class Enchantments(val all: List<Enchantment>, val book: ItemDefinition? = null,
     }
 }
 
+// The enchantments that do something beyond what they cost, by the numbers items keep them under.
+const val EFFICIENCY = 15
+const val UNBREAKING = 17
+const val MENDING = 26
+
 internal const val BOOK = "minecraft:book"
 internal const val ENCHANTED_BOOK = "minecraft:enchanted_book"
 private val BOOKS = setOf(BOOK, ENCHANTED_BOOK)
