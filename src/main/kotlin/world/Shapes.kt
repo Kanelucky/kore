@@ -12,7 +12,7 @@ private val PARTIAL_ENDINGS = listOf(
     "carpet", "rail", "torch", "lantern", "chain", "candle", "cake", "_sign", "banner", "_bed", "_head", "_skull",
     "chest", "anvil", "_shelf", "golem_statue", "lightning_rod", "sapling", "_tulip", "_mushroom", "_fungus",
     "_vines", "_petals", "_bush", "_grass", "_plant", "dripleaf", "_dripleaf_block", "blossom", "_flower",
-    "_propagule", "_bud", "_cluster", "coral", "_fan", "_egg", "_spike", "_spawn", "detector",
+    "_propagule", "_bud", "_cluster", "coral", "_fan", "_egg", "_spike", "_spawn", "detector", "repeater", "comparator",
 )
 
 /** Blocks that aren't whole cubes and have names of their own. */
@@ -21,7 +21,7 @@ private val PARTIAL_NAMES = setOf(
     "conduit", "daylight_detector_inverted", "decorated_pot", "dried_ghast", "enchanting_table", "end_portal_frame",
     "end_rod", "flower_pot", "glow_lichen", "grindstone", "heavy_core", "hopper", "ladder", "lectern", "lever",
     "scaffolding", "sculk_sensor", "calibrated_sculk_sensor", "sculk_shrieker", "sculk_vein", "resin_clump",
-    "pointed_dripstone", "sea_pickle", "stonecutter_block", "tripwire_hook", "waterlily", "web",
+    "pointed_dripstone", "sea_pickle", "stonecutter_block", "tripwire_hook", "waterlily", "web", "redstone_wire",
     // Plants
     "large_fern", "leaf_litter", "pale_hanging_moss", "wildflowers", "allium", "azure_bluet", "blue_orchid",
     "cornflower", "dandelion", "golden_dandelion", "lily_of_the_valley", "oxeye_daisy", "poppy", "torchflower",

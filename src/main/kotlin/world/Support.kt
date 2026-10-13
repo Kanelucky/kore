@@ -30,6 +30,9 @@ enum class BlockUpdate {
 
     /** The next step of a big dripleaf tipping over under what stands on it, or righting itself. */
     TILT,
+
+    /** Whether a redstone torch lights or goes out, as the block it's on stops or starts being powered. */
+    TORCH,
 }
 
 /** Looks at the block at [pos] again for [update], [ticks] from now. */
@@ -124,7 +127,7 @@ internal fun FlatWorld.holdsUp(holderPos: BlockPos, face: Face, block: BlockStat
     val holder = stateAt(holderPos) ?: return false
     return when {
         TORCH_FACING in block.properties -> if (face == Face.UP) holder.holdsTorchOnTop else holder.hasFullFace(face)
-        block.name.endsWith("button") || block.name == "minecraft:lever" || block.name == "minecraft:ladder" -> holder.hasFullFace(face)
+        block.name.endsWith("button") || block.name == "minecraft:lever" || block.name == "minecraft:ladder" || block.isWire -> holder.hasFullFace(face)
         else -> !holder.replaceable
     }
 }
@@ -237,6 +240,7 @@ fun FlatWorld.tickBlocks(): Changes {
                 sounds += sound
                 reshaped += at
             }
+            BlockUpdate.TORCH -> if (tickTorch(at, state, sounds)) reshaped += at
         }
     }
     reshaped += settle(changed).reshaped

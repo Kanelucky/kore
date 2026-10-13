@@ -215,7 +215,8 @@ class BuildingTest {
         assertTrue(stone.isFullCube)
         assertTrue(state("minecraft:oak_double_slab", "minecraft:vertical_half" to "bottom").isFullCube)
         assertTrue(state("minecraft:sea_lantern").isFullCube)
-        for (partial in listOf(slab, stairs, torch, shortGrass, air, state("minecraft:oak_fence"), state("minecraft:poppy"), state("minecraft:chest"))) {
+        for (partial in listOf(slab, stairs, torch, shortGrass, air, state("minecraft:oak_fence"), state("minecraft:poppy"), state("minecraft:chest"),
+            state("minecraft:redstone_wire"), state("minecraft:unpowered_repeater"))) {
             assertTrue(!partial.isFullCube, "${partial.name} isn't a whole cube")
         }
 
