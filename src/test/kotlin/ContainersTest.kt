@@ -1,9 +1,11 @@
 package org.koremc
 
 import io.netty.buffer.ByteBuf
+import io.netty.buffer.ByteBufInputStream
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
 import org.cloudburstmc.nbt.NbtMap
+import org.cloudburstmc.nbt.NbtUtils
 import org.cloudburstmc.nbt.NbtType
 import org.koremc.auth.MultiplayerTokenVerifier
 import org.koremc.auth.TestAuthority
@@ -29,6 +31,7 @@ import org.koremc.protocol.clientDataToken
 import org.koremc.protocol.connectionRequest
 import org.koremc.protocol.encode
 import org.koremc.protocol.loginPacket
+import org.koremc.protocol.readBlockPos
 import org.koremc.protocol.readVarUInt
 import org.koremc.protocol.tokenAuthentication
 import org.koremc.protocol.writeBlockPos
@@ -89,8 +92,12 @@ class ContainersTest {
     private val hopper = state("minecraft:hopper", "facing_direction" to 0, "toggle_bit" to 0.toByte())
     private val dispensers = (0..1).map { on -> state("minecraft:dispenser", "facing_direction" to 5, "triggered_bit" to on.toByte()) }
     private val levers = (0..1).map { on -> state("minecraft:lever", "lever_direction" to "up_east_west", "open_bit" to on.toByte()) }
+    // Facing east, which pistons store as west.
+    private val piston = state("minecraft:piston", "facing_direction" to 4)
+    private val pistonHead = state("minecraft:piston_arm_collision", "facing_direction" to 4)
     private val palette = BlockPalette(
-        listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable, hopper) + dispensers + levers,
+        listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable, hopper) + dispensers + levers +
+            listOf(piston, pistonHead, state("minecraft:moving_block")),
     )
     private val world = FlatWorld(palette, listOf(stone))
 
@@ -410,6 +417,36 @@ class ContainersTest {
         assertTrue(seen.has(LevelEvent(LevelEvent.SOUND_CLICK, here.centre, 1000).encode()))
         assertTrue(seen.has(LevelEvent(LevelEvent.PARTICLES_SHOOT, here.centre, 5).encode())) // Out of its east side
         assertEquals(ItemStack(stoneItem, 1, block = stone), world.items.single().stack)
+    }
+
+    @Test
+    fun `everyone around sees a piston's arm move out a tick at a time`() {
+        world[here] = piston
+        world.setBlockEntity(here, world.pistonArm(here, piston).data())
+        val lever = BlockPos(here.x, here.y + 1, here.z)
+        world[lever] = levers[0]
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+
+        steve.clicks(lever)
+        alex.received()
+        val players = clients.map { it.session }
+        repeat(6) {
+            players.tickBlocks(game, dropItems = false)
+            players.tickPower(game)
+        }
+
+        val progress = alex.received().filter { it[0] == 0x38.toByte() }.map { dataIn(it).getFloat("Progress") }
+        assertEquals(listOf(0f, 0.5f, 1f, 1f), progress)
+        assertEquals(pistonHead, world.stateAt(BlockPos(here.x + 1, here.y, here.z)))
+    }
+
+    /** The data a BlockActorData packet gives a block. */
+    private fun dataIn(packet: ByteArray): NbtMap {
+        val buffer = Unpooled.wrappedBuffer(packet)
+        buffer.readVarUInt()
+        buffer.readBlockPos()
+        return NbtUtils.createNetworkReader(ByteBufInputStream(buffer)).readTag() as NbtMap
     }
 
     @Test

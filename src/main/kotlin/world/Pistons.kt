@@ -207,12 +207,16 @@ internal fun FlatWorld.movePistonArms(reshaped: MutableCollection<BlockPos>, dat
     }
 }
 
-/** Puts the blocks [arm] moved where they're going, unless something's taken a moving block's place. */
+/**
+ * Puts the blocks [arm] moved where they're going, unless something's
+ * taken a moving block's place. An observer moved pulses, as in Bedrock.
+ */
 private fun FlatWorld.land(arm: PistonArm, reshaped: MutableCollection<BlockPos>) {
     for ((at, state) in arm.landing) {
         if (stateAt(at)?.name != MOVING_BLOCK) continue
         set(at, state)
         if (state.isPiston) setBlockEntity(at, pistonArm(at, state).data())
+        if (state.isObserver) observe(at, state)
         reshaped += at
     }
     arm.landing.clear()

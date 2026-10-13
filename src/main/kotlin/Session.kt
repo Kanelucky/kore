@@ -2093,7 +2093,7 @@ internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) 
     val world = game.world
     val stood = world.stepOn(mapNotNull { it.standingAt } + world.items.filter { it.onGround }.map { it.position })
     val ticked = world.tickBlocks()
-    val changes = Changes(ticked.broken, (stood + ticked.reshaped).distinct(), ticked.sounds)
+    val changes = Changes(ticked.broken, (stood + ticked.reshaped).distinct(), ticked.sounds, ticked.data)
     if (changes.isEmpty) return
     showAround(world.packetsFor(changes))
     if (dropItems) changes.broken.forEach { (pos, broken) -> game.world.dropFromBlock(pos, game.drops.of(broken.state, broken.blockEntity)) }

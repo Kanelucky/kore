@@ -19,6 +19,7 @@ class PistonsTest {
     private val torch = state("minecraft:torch", TORCH_FACING to "top")
     private val movingBlock = state("minecraft:moving_block")
     private val levers = (0..1).map { on -> state("minecraft:lever", "lever_direction" to "up_east_west", "open_bit" to on.toByte()) }
+    private val observers = listOf(false, true).map { state(OBSERVER, "minecraft:facing_direction" to "up", "powered_bit" to bit(it)) }
 
     /** Facings as pistons store them, sideways the wrong way round. */
     private fun stored(facing: Face) = if (facing.horizontal) facing.opposite.ordinal else facing.ordinal
@@ -27,7 +28,7 @@ class PistonsTest {
         state(if (sticky) "minecraft:sticky_piston_arm_collision" else "minecraft:piston_arm_collision", FACING_DIRECTION to stored(facing))
 
     private val palette = BlockPalette(
-        listOf(air, stone, obsidian, slime, torch, movingBlock) + levers +
+        listOf(air, stone, obsidian, slime, torch, movingBlock) + levers + observers +
             Face.entries.flatMap { facing -> listOf(false, true).flatMap { sticky -> listOf(piston(facing, sticky), head(facing, sticky)) } },
     )
 
@@ -150,6 +151,16 @@ class PistonsTest {
         assertEquals(slime, world.stateAt(BlockPos(2, -62, 0)))
         assertEquals(stone, world.stateAt(BlockPos(2, -61, 0)))
         assertEquals(air, world.stateAt(BlockPos(1, -61, 0)))
+    }
+
+    @Test
+    fun `an observer a piston moves pulses once it lands, as in Bedrock`() {
+        placePiston()
+        world[east(1)] = observers[0]
+        switch(on = true)
+        assertEquals(observers[0], world.stateAt(east(2))) // Landed, and waiting to pulse
+        tick(2)
+        assertEquals(observers[1], world.stateAt(east(2)))
     }
 
     @Test

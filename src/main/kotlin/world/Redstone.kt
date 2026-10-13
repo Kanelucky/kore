@@ -19,6 +19,14 @@ internal const val POWERED_COMPARATOR = "minecraft:powered_comparator"
 /** A comparator's state for giving any power, which lights its torches. */
 private const val OUTPUT_LIT = "output_lit_bit"
 
+internal const val OBSERVER = "minecraft:observer"
+private const val OBSERVER_FACING = "minecraft:facing_direction"
+private const val OBSERVER_POWERED = "powered_bit"
+
+/** How long an observer waits to pulse once what it watches changes, and how long its pulse lasts, in ticks. */
+private const val OBSERVER_DELAY = 2
+private const val OBSERVER_PULSE = 2
+
 /** How long a comparator takes to pass a change on, in ticks. */
 private const val COMPARATOR_DELAY = 2
 
@@ -67,6 +75,13 @@ internal val BlockState.isComparator get() = name == UNPOWERED_COMPARATOR || nam
 
 private val BlockState.isDiode get() = isRepeater || isComparator
 
+internal val BlockState.isObserver get() = name == OBSERVER
+
+/** The side an observer watches, out of its face. It gives power out of its back, across from it. */
+private val BlockState.observerFace: Face get() = Face.entries.find { it.id == properties[OBSERVER_FACING] } ?: Face.UP
+
+private val BlockState.observerPowered get() = properties[OBSERVER_POWERED] == 1.toByte()
+
 /**
  * The side a repeater or comparator takes power in at, its back, which its
  * cardinal direction names. It gives power out of the side across.
@@ -78,10 +93,10 @@ private val BlockState.repeaterDelay: Int get() = ((properties[REPEATER_DELAY] a
 
 /**
  * Whether power passes through this block to what's around it: a whole
- * one, though not glass, leaves or ice, nor a redstone block, which gives
- * power of its own instead, nor a piston.
+ * one, though not glass, leaves or ice, nor a redstone block or an
+ * observer, which give power of their own instead, nor a piston.
  */
-internal val BlockState.conductsPower get() = isFullCube && !letsLightThrough && name != REDSTONE_BLOCK && !isPiston
+internal val BlockState.conductsPower get() = isFullCube && !letsLightThrough && name != REDSTONE_BLOCK && !isPiston && !isObserver
 
 /** Whether the block at [pos] is powered: something beside it gives it any power. */
 fun FlatWorld.isPowered(pos: BlockPos): Boolean = Face.entries.any { signal(pos.side(it), it.opposite) > 0 }
@@ -100,6 +115,7 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
         state.givesPower || state.name == REDSTONE_BLOCK -> MAX_POWER
         state.name == REDSTONE_TORCH -> if (towards == state.torchHeldFrom) 0 else MAX_POWER
         state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
+        state.isObserver -> observerGives(state, towards)
         state.isWire && withWire -> wireGives(from, state, towards)
         else -> 0
     }
@@ -108,8 +124,8 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
 /**
  * The strongest power going straight into the block at [pos], which it
  * passes on to what's beside it: from a lever or button fixed to it, a lit
- * redstone torch under it, a powered repeater or a comparator facing it,
- * or, [withWire], dust on it or pointing into it.
+ * redstone torch under it, a powered repeater, a comparator or a pulsing
+ * observer facing it, or, [withWire], dust on it or pointing into it.
  */
 private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Face.entries.maxOf { face ->
     val from = pos.side(face)
@@ -120,6 +136,7 @@ private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Fac
         state.givesPower -> if (state.heldFrom == towards) MAX_POWER else 0
         state.name == REDSTONE_TORCH -> if (towards == Face.UP) MAX_POWER else 0
         state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
+        state.isObserver -> observerGives(state, towards)
         state.isWire && withWire -> wireGives(from, state, towards)
         else -> 0
     }
@@ -177,6 +194,8 @@ private fun BlockState.joinsWire(side: Face): Boolean {
     return when {
         name in WIRE_JOINS || WIRE_JOIN_ENDINGS.any(name::endsWith) -> true
         name.endsWith("repeater") || name.endsWith("comparator") -> Face.entries.find { it.id == properties[CARDINAL] }?.axis == side.axis
+        // An observer's back, which it gives power out of, faces the dust.
+        name == "observer" -> observerFace == side
         else -> false
     }
 }
@@ -187,6 +206,9 @@ private fun FlatWorld.diodeGives(pos: BlockPos, state: BlockState): Int = when {
     state.isComparator -> comparatorPower[pos] ?: 0
     else -> 0
 }
+
+/** The power an observer gives the block on its [towards] side: all of it out of its back, while it pulses. */
+private fun observerGives(state: BlockState, towards: Face) = if (state.observerPowered && towards == state.observerFace.opposite) MAX_POWER else 0
 
 /** The side of a redstone torch the block it's on is: below it, unless it's on a wall. */
 private val BlockState.torchHeldFrom: Face get() = heldFrom ?: Face.DOWN
@@ -199,8 +221,10 @@ private val BlockState.torchHeldFrom: Face get() = heldFrom ?: Face.DOWN
  * stopped being powered, a repeater its delay later, once its back has,
  * unless it's locked, and a comparator two ticks after what it works out
  * from what reaches it changes; comparators look at what they read every
- * tick, since what's in a container changes by itself. A dispenser or
- * dropper that power has just
+ * tick, since what's in a container changes by itself. An observer
+ * pulses two ticks after the block it watches changes in any way, for two
+ * ticks, unless it's pulsing already. A dispenser or dropper that power
+ * has just
  * reached fires a moment later, and a hopper is locked for as long as
  * it's powered. A door, trapdoor or fence gate opens as power reaches it,
  * and shuts as the power goes, a door if either half is powered. Between
@@ -214,8 +238,10 @@ fun FlatWorld.updatePower(): Changes {
     for (pos in comparators.toList()) answerPower(pos, changed, sounds)
     var passes = 0
     while (powerChanges.isNotEmpty() && passes++ < MAX_PASSES) {
-        val near = powerChanges.flatMap { it.around(POWER_REACH) }.filterTo(LinkedHashSet()) { it.y in MIN_Y..MAX_Y }
+        val changedNow = powerChanges.toList()
         powerChanges.clear()
+        for (pos in changedNow) observedChange(pos)
+        val near = changedNow.flatMap { it.around(POWER_REACH) }.filterTo(LinkedHashSet()) { it.y in MIN_Y..MAX_Y }
         changed += updateWire(near)
         for (pos in near) answerPower(pos, changed, sounds)
     }
@@ -258,6 +284,34 @@ private fun FlatWorld.updateWire(around: Collection<BlockPos>): List<BlockPos> {
         blocks.find(state.name, state.properties + (REDSTONE_SIGNAL to level))?.let { set(pos, it); changed += pos }
     }
     return changed
+}
+
+/** Sets the observers watching the block at [pos], which has changed, to pulse, those not already. */
+private fun FlatWorld.observedChange(pos: BlockPos) {
+    for (face in Face.entries) {
+        val watcher = pos.side(face)
+        val state = stateAt(watcher)?.takeIf { it.isObserver && it.observerFace == face.opposite } ?: continue
+        observe(watcher, state)
+    }
+}
+
+/** Sets the observer [state] at [pos] to pulse in a moment, unless it's pulsing or about to. */
+internal fun FlatWorld.observe(pos: BlockPos, state: BlockState) {
+    if (state.observerPowered || !redstoneDue.add(pos)) return
+    schedule(pos, OBSERVER_DELAY, BlockUpdate.OBSERVER)
+}
+
+/**
+ * Turns the observer at [pos] on, for its pulse, or off again once the
+ * pulse is over. Returns whether it changed.
+ */
+internal fun FlatWorld.tickObserver(pos: BlockPos, state: BlockState): Boolean {
+    redstoneDue -= pos
+    if (!state.isObserver) return false
+    val powered = state.observerPowered
+    blocks.find(state.name, state.properties + (OBSERVER_POWERED to bit(!powered)))?.let { set(pos, it) } ?: return false
+    if (!powered && redstoneDue.add(pos)) schedule(pos, OBSERVER_PULSE, BlockUpdate.OBSERVER)
+    return true
 }
 
 /** Brings the block at [pos] in line with the power around it, if it answers power. */

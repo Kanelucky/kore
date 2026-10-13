@@ -38,6 +38,10 @@ class RedstoneTest {
     )
     private val comparators = AROUND.flatMap { back -> listOf(false, true).flatMap { subtracting -> listOf(false, true).map { comparator(back, subtracting, it) } } }
     private val chest = state("minecraft:chest", CARDINAL to "south")
+
+    /** An observer watching what's on its [face] side. */
+    private fun observer(face: Face, powered: Boolean = false) = state(OBSERVER, "minecraft:facing_direction" to face.id, "powered_bit" to bit(powered))
+    private val observers = Face.entries.flatMap { face -> listOf(false, true).map { observer(face, it) } }
     private val cobblestone = ItemDefinition("minecraft:cobblestone", 4, componentBased = false, ItemVersion.NONE)
 
     private fun door(name: String, upper: Int, open: Int) =
@@ -47,7 +51,7 @@ class RedstoneTest {
     private fun gate(open: Int) = state("minecraft:fence_gate", CARDINAL to "south", "in_wall_bit" to 0.toByte(), "open_bit" to open.toByte())
 
     private val palette = BlockPalette(
-        listOf(state(AIR), stone, glass, redstoneBlock, torch, unlitTorch, chest) + wallTorches + repeaters + comparators + levers + wallLevers + wire +
+        listOf(state(AIR), stone, glass, redstoneBlock, torch, unlitTorch, chest) + wallTorches + repeaters + comparators + observers + levers + wallLevers + wire +
             doors("minecraft:iron_door") + doors("minecraft:wooden_door") + (0..1).map(::trapdoor) + (0..1).map(::gate),
     )
 
@@ -387,6 +391,39 @@ class RedstoneTest {
         update()
         tick(4)
         assertEquals(repeater(Face.WEST), world.stateAt(at))
+    }
+
+    @Test
+    fun `an observer pulses out of its back two ticks after what it watches changes, for two ticks`() {
+        val at = BlockPos(1, -63, 0)
+        world[at] = observer(Face.WEST)
+        world[BlockPos(2, -63, 0)] = wire[0]
+        update()
+
+        world[BlockPos(0, -63, 0)] = stone
+        update()
+        tick()
+        assertEquals(observer(Face.WEST), world.stateAt(at))
+        tick()
+        assertEquals(observer(Face.WEST, powered = true), world.stateAt(at))
+        assertEquals(15, powerAt(BlockPos(2, -63, 0)))
+        tick(2)
+        assertEquals(observer(Face.WEST), world.stateAt(at))
+        assertEquals(0, powerAt(BlockPos(2, -63, 0)))
+    }
+
+    @Test
+    fun `two observers watching each other pulse on and on`() {
+        val west = BlockPos(0, -63, 0)
+        val east = BlockPos(1, -63, 0)
+        world[west] = observer(Face.EAST)
+        world[east] = observer(Face.WEST)
+        update()
+        world[west] = observer(Face.EAST, powered = true) // A nudge to start them
+        update()
+
+        val pulses = (1..40).count { tick(); world.stateAt(east) == observer(Face.WEST, powered = true) }
+        assertTrue(pulses >= 8)
     }
 
     @Test

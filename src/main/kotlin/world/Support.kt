@@ -51,6 +51,9 @@ enum class BlockUpdate {
 
     /** Whether a piston pushes out or pulls in, as power reaches it or goes. */
     PISTON,
+
+    /** An observer's pulse starting, or ending. */
+    OBSERVER,
 }
 
 /** Looks at the block at [pos] again for [update], [ticks] from now. */
@@ -266,6 +269,7 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.REPEATER -> if (tickRepeater(at, state)) reshaped += at
             BlockUpdate.COMPARATOR -> if (tickComparator(at, state)) reshaped += at
             BlockUpdate.PISTON -> movePiston(at, state, broken, reshaped, sounds)
+            BlockUpdate.OBSERVER -> if (tickObserver(at, state)) reshaped += at
         }
     }
     reshaped += settle(changed).reshaped
