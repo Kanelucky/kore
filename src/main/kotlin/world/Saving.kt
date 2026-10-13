@@ -5,6 +5,7 @@ import org.cloudburstmc.nbt.NbtMapBuilder
 import org.cloudburstmc.nbt.NbtType
 import org.koremc.inventory.Container
 import org.koremc.inventory.SlotStack
+import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStacks
 
@@ -100,7 +101,7 @@ private fun NbtMapBuilder.putItems(container: Container): NbtMapBuilder =
  */
 internal fun FlatWorld.restoreBlockEntity(data: NbtMap, items: ItemStacks) {
     val pos = BlockPos(data.getInt("x"), data.getInt("y"), data.getInt("z"))
-    val state = stateAt(pos) ?: return
+    val state = stateAt(pos)?.takeIf { it.name != AIR } ?: return
     when (data.getString("id")) {
         "MovingBlock" -> return landSaved(pos, data, items)
         "Comparator" -> {
@@ -146,6 +147,59 @@ private fun FlatWorld.landSaved(pos: BlockPos, data: NbtMap, items: ItemStacks) 
     data.getCompound("movingEntity", null)?.takeIf { !landed.isPiston }?.let {
         restoreBlockEntity(it.toBuilder().putInt("x", pos.x).putInt("y", pos.y).putInt("z", pos.z).build(), items)
     }
+}
+
+/** The updates that wait on the power reaching a block, which [FlatWorld.redstoneDue] keeps from being due twice at once. */
+private val POWER_UPDATES = setOf(
+    BlockUpdate.TORCH, BlockUpdate.REPEATER, BlockUpdate.COMPARATOR, BlockUpdate.PISTON, BlockUpdate.OBSERVER, BlockUpdate.LAMP, BlockUpdate.LECTERN,
+)
+
+/**
+ * The blocks due to be looked at again, as the game saves the ticks
+ * they're due, by chunk: where each is, the block, and the block tick it's
+ * due on. Those whose block has gone since are left out.
+ */
+internal fun FlatWorld.savedTicks(): Map<ChunkPos, List<NbtMap>> {
+    val ticks = LinkedHashMap<Pair<BlockPos, Long>, NbtMap>()
+    for ((tick, due) in scheduled) {
+        for ((pos, update) in due) {
+            val state = stateAt(pos)?.takeIf { update in it.dueFor } ?: continue
+            ticks.getOrPut(pos to tick) { pendingTick(pos, state, tick) }
+        }
+    }
+    return ticks.values.groupBy { BlockPos(it.getInt("x"), it.getInt("y"), it.getInt("z")).chunk }
+}
+
+/** The tick the block [state] at [pos] is due on [time], as the game saves one. */
+private fun pendingTick(pos: BlockPos, state: BlockState, time: Long) = NbtMap.builder()
+    .putInt("x", pos.x).putInt("y", pos.y).putInt("z", pos.z)
+    .putLong("time", time)
+    .putCompound("blockState", NbtMap.builder().putString("name", state.name).putCompound("states", state.properties).putInt("version", state.version).build())
+    .build()
+
+/**
+ * Sets the blocks due ticks in [saved], a chunk's ticks as the game saves
+ * them, to be looked at again as long after the chunk's back in the world
+ * as they had to go, for what Kore looks at each for. A tick for a block
+ * that's gone since goes too. Returns those for blocks Kore doesn't tick,
+ * each with how long it had to go.
+ */
+internal fun FlatWorld.restoreTicks(saved: NbtMap): List<Pair<NbtMap, Long>> {
+    val savedOn = saved.getInt("currentTick", 0).toLong()
+    val others = mutableListOf<Pair<NbtMap, Long>>()
+    for (tick in saved.getList("tickList", NbtType.COMPOUND, emptyList())) {
+        val pos = BlockPos(tick.getInt("x"), tick.getInt("y"), tick.getInt("z"))
+        val name = tick.getCompound("blockState", NbtMap.EMPTY).getString("name", "")
+        val state = stateAt(pos)?.takeIf { it.name == name } ?: continue
+        val wait = (tick.getLong("time", savedOn) - savedOn).coerceIn(1, Int.MAX_VALUE.toLong())
+        val updates = state.dueFor
+        if (updates.isEmpty()) others += tick to wait
+        for (update in updates) {
+            if (update in POWER_UPDATES) redstoneDue += pos
+            schedule(pos, wait.toInt(), update)
+        }
+    }
+    return others
 }
 
 // The game's names for the entities Kore keeps in the world.

@@ -218,7 +218,6 @@ import org.koremc.world.isBlockedOpen
 import org.koremc.world.storage
 import org.koremc.world.otherHalf
 import org.koremc.world.place
-import org.koremc.world.releaseButton
 import org.koremc.world.settle
 import org.koremc.world.side
 import org.koremc.world.movingFrom
@@ -482,7 +481,7 @@ class Session(
     private val authenticator: LoginAuthenticator,
     /** Every player's session, this one included, for showing them what this player changes in the world. */
     private val viewers: () -> Collection<Session>,
-    /** Runs a task a number of ticks from now, on the same thread as the sessions, like a button popping back out. */
+    /** Runs a task a number of ticks from now, on the same thread as the sessions, like telling everyone a player joined. */
     private val schedule: (ticks: Int, task: () -> Unit) -> Unit,
     /** The commands players run, which the whole server shares. */
     private val commands: Commands = Commands(config, game, viewers),
@@ -1625,7 +1624,6 @@ class Session(
             val sound = used.sound?.let { LevelSoundEvent(it, pos.centre, used.soundData) }
             showAround(pos, *(updates + listOfNotNull(sound)).toTypedArray())
         }
-        used.releaseIn?.let { ticks -> schedule(ticks) { releaseButton(pos) } }
         log.debug("{} used {} at {}", player?.displayName, world.stateAt(pos)?.name, pos)
     }
 
@@ -1641,12 +1639,6 @@ class Session(
             return
         }
         showAround(sound.position.toBlockPos(), sound)
-    }
-
-    /** Lets a button pop back out, for everyone with its chunk to see and hear, if it's still pressed in. */
-    private fun releaseButton(pos: BlockPos) {
-        if (!world.releaseButton(pos)) return
-        showAround(pos, UpdateBlock(pos, world.blockAt(pos)), LevelSoundEvent(LevelSoundEvent.BUTTON_CLICK_OFF, pos.centre, world.blockAt(pos)))
     }
 
     /**
@@ -2520,9 +2512,9 @@ private fun Collection<Session>.showAround(packets: List<Pair<BlockPos, ServerPa
  * have the chunks: blocks that lost what held them up a tick ago break,
  * scaffolding moves along, coral out of water dies, big dripleaves tip
  * under the players and items standing on them, pressure plates press
- * under the players, items and orbs on them, and pistons move, and push
- * or carry the players in the way of what they move, or on top of it.
- * Spectators press nothing. What breaks drops what it drops, if
+ * under the players, items and orbs on them, pressed buttons pop back
+ * out, and pistons move, and push or carry the players in the way of
+ * what they move, or on top of it. Spectators press nothing. What breaks drops what it drops, if
  * [dropItems], and what it held either way. Run once a tick.
  */
 internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) {

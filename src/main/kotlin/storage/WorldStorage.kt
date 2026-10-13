@@ -26,8 +26,10 @@ import org.koremc.world.PalettedStorage
 import org.koremc.world.SUB_CHUNK_COUNT
 import org.koremc.world.restoreActor
 import org.koremc.world.restoreBlockEntity
+import org.koremc.world.restoreTicks
 import org.koremc.world.savedActors
 import org.koremc.world.savedBlockEntities
+import org.koremc.world.savedTicks
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -75,15 +77,17 @@ interface PlayerSaves {
 /**
  * A world as the game saves one, in its own folder: its settings in
  * level.dat, its name in levelname.txt, and in a LevelDB database, its
- * chunks, with their block entities and entities, its maps and its
+ * chunks, with their block entities, entities and the ticks their blocks
+ * are due, so that redstone carries on where it was, its maps and its
  * players. A world Kore saves opens in the game, and a world the game
  * saves opens in Kore, as far as Kore has what's in it: chunks it hasn't
- * made yet are flat, as Kore has no other terrain, and entities it doesn't
- * have stay as they were.
+ * made yet are flat, as Kore has no other terrain, and entities and ticks
+ * it doesn't have stay as they were.
  *
  * Chunks load as the world first looks at them, and saving writes only
  * what changed since: the blocks of chunks that changed, the block
- * entities and entities of chunks where those did, and the maps drawn on.
+ * entities, entities and ticks of chunks where those did, and the maps
+ * drawn on.
  */
 class WorldStorage private constructor(
     private val directory: Path,
@@ -97,9 +101,13 @@ class WorldStorage private constructor(
     lateinit var world: FlatWorld
         private set
 
-    /** The block entities and entities each chunk was last saved with, by a hash of how they were written, to write them again only once they change. */
+    /** The block entities, entities and ticks each chunk was last saved with, by a hash of how they were written, to write them again only once they change. */
     private val savedBlockEntities = HashMap<ChunkPos, Int>()
     private val savedActors = HashMap<ChunkPos, Int>()
+    private val savedTicks = HashMap<ChunkPos, Int>()
+
+    /** The ticks the game saved in each chunk for blocks Kore doesn't tick, with how long each had to go, written back as they were. */
+    private val otherTicks = HashMap<ChunkPos, List<Pair<NbtMap, Long>>>()
 
     /** The unique IDs of the entities each chunk was last saved with, to remove those that went. */
     private val actorIds = HashMap<ChunkPos, List<Long>>()
@@ -120,14 +128,22 @@ class WorldStorage private constructor(
     private var closed = false
 
     override fun load(pos: ChunkPos): LoadedChunk? {
-        val blockEntities = db[chunkKey(pos, BLOCK_ENTITIES)]?.let(::readAll).orEmpty()
+        val blockEntityRecord = db[chunkKey(pos, BLOCK_ENTITIES)]
+        val blockEntities = blockEntityRecord?.let(::readAll).orEmpty()
         val actors = actorsIn(pos)
+        val ticks = db[chunkKey(pos, PENDING_TICKS)]
+        // What the chunk has saved, so that a record goes once all that's in it does.
+        blockEntityRecord?.let { savedBlockEntities[pos] = it.contentHashCode() }
         if (actors.isNotEmpty()) actorIds[pos] = actors.map { it.getLong("UniqueID", 0) }
+        ticks?.let { savedTicks[pos] = it.contentHashCode() }
         val saved = db[chunkKey(pos, VERSION)] != null || db[chunkKey(pos, OLD_VERSION)] != null
-        if (!saved && blockEntities.isEmpty() && actors.isEmpty()) return null
+        if (!saved && blockEntities.isEmpty() && actors.isEmpty() && ticks == null) return null
         return LoadedChunk(if (saved) blocksOf(pos) else null) {
             for (data in blockEntities) runCatching { restoreBlockEntity(data, itemStacks) }.onFailure { log.warn("Couldn't put back the block entity {}: {}", data, it.message) }
             otherActors[pos] = actors.filterNot { restoreActor(it, itemStacks) }
+            ticks?.let { bytes ->
+                runCatching { otherTicks[pos] = restoreTicks(readAll(bytes).first()) }.onFailure { log.warn("Couldn't put back the ticks of chunk {}, {}: {}", pos.x, pos.z, it.message) }
+            }
         }
     }
 
@@ -164,6 +180,7 @@ class WorldStorage private constructor(
             for (pos in world.unsaved) world.chunks[pos]?.let { saveBlocks(pos, it) }
             saveBlockEntities(world.savedBlockEntities())
             saveActors(world.savedActors { id -> run or id })
+            saveTicks(world.savedTicks(), world.blockTicks)
             for (map in world.maps.all) if (map.unsaved) {
                 set(mapKey(map.id), write(mapData(map)))
                 map.unsaved = false
@@ -229,6 +246,27 @@ class WorldStorage private constructor(
                 savedActors[pos] = hash
             }
             delete(chunkKey(pos, OLD_ENTITIES))
+        }
+    }
+
+    /**
+     * Writes the ticks the blocks of each chunk are due where they changed
+     * since they were last saved, [now] being Kore's, on block tick [tick],
+     * with those the game saved that Kore doesn't tick.
+     */
+    private fun WorldDatabase.Changes.saveTicks(now: Map<ChunkPos, List<NbtMap>>, tick: Long) {
+        for (pos in now.keys + otherTicks.keys + savedTicks.keys) {
+            val others = otherTicks[pos].orEmpty().map { (other, wait) -> other.toBuilder().putLong("time", tick + wait).build() }
+            val ticks = now[pos].orEmpty() + others
+            val written = ticks.takeIf { it.isNotEmpty() }?.let { write(NbtMap.builder().putInt("currentTick", tick.toInt()).putList("tickList", NbtType.COMPOUND, it).build()) }
+            if (written?.contentHashCode() == savedTicks[pos]) continue
+            if (written == null) {
+                delete(chunkKey(pos, PENDING_TICKS))
+                savedTicks -= pos
+            } else {
+                set(chunkKey(pos, PENDING_TICKS), written)
+                savedTicks[pos] = written.contentHashCode()
+            }
         }
     }
 

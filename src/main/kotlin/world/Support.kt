@@ -65,7 +65,37 @@ enum class BlockUpdate {
 
     /** A lectern's pulse ending, two ticks after a page turned. */
     LECTERN,
+
+    /** A pressed button popping back out. */
+    BUTTON,
 }
+
+/**
+ * What Kore looks at this block again for, once a tick it's due comes:
+ * whether it can still stay, for a block something holds up, and what it
+ * does by itself, for redstone and the like. The game saves only the
+ * block a tick is due to, so this is what a saved tick was for. Empty for
+ * a block Kore doesn't tick.
+ */
+internal val BlockState.dueFor: List<BlockUpdate>
+    get() {
+        val held = heldFrom != null || name == "minecraft:cactus" || name == SCAFFOLDING || MULTI_FACE in properties || VINE_FACES in properties
+        val own = when {
+            isRedstoneTorch -> BlockUpdate.TORCH
+            isRepeater -> BlockUpdate.REPEATER
+            isComparator -> BlockUpdate.COMPARATOR
+            isPiston -> BlockUpdate.PISTON
+            isObserver -> BlockUpdate.OBSERVER
+            isLamp -> BlockUpdate.LAMP
+            isPressurePlate -> BlockUpdate.PLATE
+            isLectern -> BlockUpdate.LECTERN
+            isLivingCoral -> BlockUpdate.CORAL
+            name == BIG_DRIPLEAF -> BlockUpdate.TILT
+            name.endsWith("button") -> BlockUpdate.BUTTON
+            else -> null
+        }
+        return listOfNotNull(BlockUpdate.SUPPORT.takeIf { held }, own)
+    }
 
 /** Looks at the block at [pos] again for [update], [ticks] from now. */
 internal fun FlatWorld.schedule(pos: BlockPos, ticks: Int, update: BlockUpdate) {
@@ -238,8 +268,8 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
  * Ticks the world's blocks: looks again at those whose time has come.
  * Blocks [settle] left that still can't stay break, with the other half of
  * a door, bed or tall plant, and scaffolding takes its new distance. Coral
- * out of water dies, and big dripleaves tip over or right themselves. The
- * world settles around what changed, which can leave more for later ticks.
+ * out of water dies, big dripleaves tip over or right themselves, and
+ * pressed buttons pop back out. The world settles around what changed, which can leave more for later ticks.
  * Run once a tick. Returns what broke, where blocks changed shape, and the
  * sounds they made.
  */
@@ -285,6 +315,7 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.LAMP -> if (tickLamp(at, state)) reshaped += at
             BlockUpdate.PLATE -> if (checkPlate(at, state, sounds)) reshaped += at
             BlockUpdate.LECTERN -> if (endPagePulse(at, state)) reshaped += at
+            BlockUpdate.BUTTON -> if (releaseButton(at, sounds)) reshaped += at
         }
     }
     reshaped += settle(changed).reshaped

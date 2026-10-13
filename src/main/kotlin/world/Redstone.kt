@@ -73,9 +73,9 @@ private val WIRE_JOIN_ENDINGS = listOf("button", "pressure_plate")
 
 internal val BlockState.isWire get() = name == REDSTONE_WIRE
 
-private val BlockState.isRedstoneTorch get() = name == REDSTONE_TORCH || name == UNLIT_REDSTONE_TORCH
+internal val BlockState.isRedstoneTorch get() = name == REDSTONE_TORCH || name == UNLIT_REDSTONE_TORCH
 
-private val BlockState.isRepeater get() = name == UNPOWERED_REPEATER || name == POWERED_REPEATER
+internal val BlockState.isRepeater get() = name == UNPOWERED_REPEATER || name == POWERED_REPEATER
 
 internal val BlockState.isComparator get() = name == UNPOWERED_COMPARATOR || name == POWERED_COMPARATOR
 
@@ -83,7 +83,7 @@ private val BlockState.isDiode get() = isRepeater || isComparator
 
 internal val BlockState.isObserver get() = name == OBSERVER
 
-private val BlockState.isLamp get() = name == REDSTONE_LAMP || name == LIT_REDSTONE_LAMP
+internal val BlockState.isLamp get() = name == REDSTONE_LAMP || name == LIT_REDSTONE_LAMP
 
 /** The side an observer watches, out of its face. It gives power out of its back, across from it. */
 private val BlockState.observerFace: Face get() = Face.entries.find { it.id == properties[OBSERVER_FACING] } ?: Face.UP

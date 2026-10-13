@@ -81,6 +81,9 @@ internal const val BLOCK_ENTITIES: Byte = 0x31
 /** The chunk's entities as the game kept them before each had a record of its own. */
 internal const val OLD_ENTITIES: Byte = 0x32
 
+/** The ticks the chunk's blocks are due, as NBT: the tick the chunk was saved on, and each block with the tick it's due on. */
+internal const val PENDING_TICKS: Byte = 0x33
+
 /** How far the chunk got being made, as a little-endian int: 2 for done. */
 internal const val FINALISED: Byte = 0x36
 

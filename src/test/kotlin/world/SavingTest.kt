@@ -116,6 +116,52 @@ class SavingTest {
     }
 
     @Test
+    fun `blocks due a tick save as the game's ticks, and are due again as long after they're back, those Kore doesn't tick kept aside`() {
+        val world = world()
+        world[at] = comparator
+        world.blockTicks = 100
+        world.redstoneDue += at
+        world.schedule(at, 2, BlockUpdate.COMPARATOR)
+        // Nothing holds up stone, so a tick to see if it can stay, left from something else there, isn't saved.
+        world.schedule(at.copy(x = 3), 1, BlockUpdate.SUPPORT)
+        world[at.copy(x = 3)] = stone
+
+        val tick = world.savedTicks().getValue(at.chunk).single()
+        assertEquals(listOf(at.x, at.y, at.z), listOf(tick.getInt("x"), tick.getInt("y"), tick.getInt("z")))
+        assertEquals(102L, tick.getLong("time"))
+        assertEquals(UNPOWERED_COMPARATOR, tick.getCompound("blockState").getString("name"))
+
+        fun gameTick(pos: BlockPos, name: String, time: Long) = NbtMap.builder()
+            .putInt("x", pos.x).putInt("y", pos.y).putInt("z", pos.z)
+            .putLong("time", time)
+            .putCompound("blockState", NbtMap.builder().putString("name", name).putCompound("states", NbtMap.EMPTY).build())
+            .build()
+        // The ground's stone, which Kore doesn't tick, and a shulker box that's gone.
+        val ground = gameTick(BlockPos(5, MIN_Y, 5), stone.name, 140)
+        val gone = gameTick(BlockPos(6, -63, 6), shulkerBox.name, 120)
+        val saved = NbtMap.builder().putInt("currentTick", 100).putList("tickList", org.cloudburstmc.nbt.NbtType.COMPOUND, listOf(tick, ground, gone)).build()
+
+        val loaded = world()
+        loaded[at] = comparator
+        loaded.blockTicks = 7
+        val others = loaded.restoreTicks(saved)
+
+        assertEquals(listOf(ground to 40L), others)
+        // A comparator stands on what's under it, so it's due to see if it can still stay too, which it can.
+        assertEquals(mapOf(9L to setOf(at to BlockUpdate.SUPPORT, at to BlockUpdate.COMPARATOR)), loaded.scheduled)
+        assertTrue(at in loaded.redstoneDue)
+    }
+
+    @Test
+    fun `a saved tick is for what the block does by itself, and for one something holds up, whether it can still stay`() {
+        val button = state("minecraft:stone_button", "button_pressed_bit" to 1.toByte(), "facing_direction" to 1)
+        assertEquals(listOf(BlockUpdate.SUPPORT, BlockUpdate.BUTTON), button.dueFor)
+        assertEquals(listOf(BlockUpdate.SUPPORT, BlockUpdate.COMPARATOR), comparator.dueFor)
+        assertEquals(listOf(BlockUpdate.LECTERN), lectern.dueFor)
+        assertEquals(emptyList(), stone.dueFor)
+    }
+
+    @Test
     fun `items and orbs save as the game's entities, under the unique IDs given them, and come back where they were`() {
         val world = world()
         world.spawnItem(ItemStack(coal, 4), Vec3(20.5f, -63f, 3.5f), Vec3(0f, 0f, 0f), pickupDelay = 5).age = 100

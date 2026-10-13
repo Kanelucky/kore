@@ -1,5 +1,6 @@
 package org.koremc.world
 
+import org.koremc.protocol.LevelSoundEvent
 import org.koremc.registry.BlockState
 
 private const val LEVER = "minecraft:lever"
@@ -16,8 +17,7 @@ private val OPENED_BY_REDSTONE = setOf("minecraft:iron_door", "minecraft:iron_tr
 
 /**
  * What using a block did: where blocks changed, and the sound it made, by
- * the game's name for it. A pressed button also says how many ticks until
- * it pops back out.
+ * the game's name for it.
  *
  * The client plays a sound as the block it names makes it, from the
  * block's sound set: a lever's clicks are its own, a wooden button's are
@@ -28,7 +28,6 @@ data class Used(
     val sound: String? = null,
     /** The sound's data: the network ID of the block making it, or -1 for none. */
     val soundData: Int = -1,
-    val releaseIn: Int? = null,
 )
 
 /** Daylight detectors, which a click switches between sensing day and night. */
@@ -97,8 +96,8 @@ fun FlatWorld.use(pos: BlockPos, facing: Face): Used? {
         name.endsWith("button") -> {
             if (state.properties[PRESSED] == 1.toByte()) return Used(emptyList())
             change(pos, state, PRESSED to bit(true))
-            val releaseIn = if (name.endsWith("stone_button")) STONE_BUTTON_TICKS else WOODEN_BUTTON_TICKS
-            Used(listOf(pos), "button.click_on", blockAt(pos), releaseIn)
+            schedule(pos, if (name.endsWith("stone_button")) STONE_BUTTON_TICKS else WOODEN_BUTTON_TICKS, BlockUpdate.BUTTON)
+            Used(listOf(pos), "button.click_on", blockAt(pos))
         }
         name.endsWith("fence_gate") -> {
             val opening = state.properties[OPEN] == 0.toByte()
@@ -140,10 +139,11 @@ private fun FlatWorld.swing(pos: BlockPos, state: BlockState, opening: Boolean):
 internal val BlockState.givesPower: Boolean
     get() = (name == LEVER && properties[OPEN] == 1.toByte()) || (name.endsWith("button") && properties[PRESSED] == 1.toByte())
 
-/** Lets the button at [pos] pop back out, if it's still pressed in. Returns whether it was. */
-fun FlatWorld.releaseButton(pos: BlockPos): Boolean {
+/** Lets the button at [pos] pop back out, with its click, which goes in [sounds], if it's still pressed in. Returns whether it was. */
+internal fun FlatWorld.releaseButton(pos: BlockPos, sounds: MutableList<BlockSound>): Boolean {
     val button = stateAt(pos)?.takeIf { it.name.endsWith("button") && it.properties[PRESSED] == 1.toByte() } ?: return false
     change(pos, button, PRESSED to bit(false))
+    sounds += BlockSound(pos, LevelSoundEvent.BUTTON_CLICK_OFF, blockAt(pos))
     return true
 }
 

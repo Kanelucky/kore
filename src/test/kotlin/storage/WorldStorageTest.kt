@@ -25,9 +25,13 @@ import org.koremc.world.ChunkPos
 import org.koremc.world.Effect
 import org.koremc.world.FURNACE_FUEL
 import org.koremc.world.FURNACE_INPUT
+import org.koremc.world.Face
 import org.koremc.world.Vec3
 import org.koremc.world.beaconPowers
 import org.koremc.world.setBeaconPowers
+import org.koremc.world.tickBlocks
+import org.koremc.world.use
+import java.io.ByteArrayInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.UUID
@@ -52,7 +56,8 @@ class WorldStorageTest {
     private val furnace = state("minecraft:furnace", "minecraft:cardinal_direction" to "south")
     private val litFurnace = state("minecraft:lit_furnace", "minecraft:cardinal_direction" to "south")
     private val beacon = state("minecraft:beacon")
-    private val blocks = BlockPalette(listOf(state(AIR), bedrock, dirt, grass, stone, chest, furnace, litFurnace, beacon))
+    private val buttons = (0..1).map { pressed -> state("minecraft:stone_button", "button_pressed_bit" to pressed.toByte(), "facing_direction" to 1) }
+    private val blocks = BlockPalette(listOf(state(AIR), bedrock, dirt, grass, stone, chest, furnace, litFurnace, beacon) + buttons)
     private val layers = FlatLayers(listOf(bedrock, dirt, dirt, grass))
 
     private val coal = ItemDefinition("minecraft:coal", 1, componentBased = false, ItemVersion.NONE)
@@ -121,6 +126,49 @@ class WorldStorageTest {
             assertEquals(Effect.SPEED to 0, world.beaconPowers(beaconAt))
             assertTrue(beaconAt in world.beacons)
             assertNull(world.blockEntityAt(here)?.getList("Items", NbtType.COMPOUND, null), "the items are kept apart, not sent to clients")
+        }
+    }
+
+    @Test
+    fun `a chest broken after the world opens again goes from the saved chunk too`() {
+        session {
+            world[here] = chest
+            world.containerAt(here)[0] = SlotStack(ItemStack(coal), world.newStackId())
+        }
+        session { world[here] = blocks.stateOf(AIR) }
+        WorldDatabase.open(directory.resolve("db")).use { db -> assertNull(db[chunkKey(ChunkPos(0, 0), BLOCK_ENTITIES)]) }
+    }
+
+    @Test
+    fun `a button pressed as the world's saved pops back out when it would have, once the world's open again, and the game's own ticks are kept`() {
+        session {
+            world[here] = buttons[0]
+            world.use(here, Face.NORTH)
+            repeat(5) { world.tickBlocks() }
+        }
+        // The game left a tick for the ground in the same chunk, which Kore doesn't tick.
+        val ground = NbtMap.builder()
+            .putInt("x", 1).putInt("y", -61).putInt("z", 1).putLong("time", 50)
+            .putCompound("blockState", NbtMap.builder().putString("name", grass.name).putCompound("states", NbtMap.EMPTY).build())
+            .build()
+        WorldDatabase.open(directory.resolve("db")).use { db ->
+            val saved = ticksIn(db)
+            assertEquals(1, saved.getList("tickList", NbtType.COMPOUND).size)
+            db.write { set(chunkKey(ChunkPos(0, 0), PENDING_TICKS), nbt(saved.toBuilder().putList("tickList", NbtType.COMPOUND, saved.getList("tickList", NbtType.COMPOUND) + ground).build())) }
+        }
+
+        session {
+            assertEquals(buttons[1], world.stateAt(here))
+            repeat(14) { world.tickBlocks() }
+            assertEquals(buttons[1], world.stateAt(here), "a stone button stays in for 20 ticks")
+            world.tickBlocks()
+            assertEquals(buttons[0], world.stateAt(here))
+        }
+        WorldDatabase.open(directory.resolve("db")).use { db ->
+            val saved = ticksIn(db)
+            val kept = saved.getList("tickList", NbtType.COMPOUND).single()
+            assertEquals(grass.name, kept.getCompound("blockState").getString("name"))
+            assertEquals(45L, kept.getLong("time") - saved.getInt("currentTick"), "as long to go as it had")
         }
     }
 
@@ -200,6 +248,9 @@ class WorldStorageTest {
             close()
         }
     }
+
+    /** The ticks saved for chunk 0, 0. */
+    private fun ticksIn(db: WorldDatabase) = NbtUtils.createReaderLE(ByteArrayInputStream(db[chunkKey(ChunkPos(0, 0), PENDING_TICKS)]!!)).readTag() as NbtMap
 
     private fun nbt(tag: NbtMap): ByteArray {
         val out = Unpooled.buffer()

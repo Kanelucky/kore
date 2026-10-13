@@ -638,9 +638,10 @@ class SessionTest {
         sent.clear()
 
         // A wooden button stays in for 30 ticks.
-        val (ticks, release) = scheduled.single()
-        assertEquals(30, ticks)
-        release()
+        repeat(29) { listOf(session).tickBlocks(game, dropItems = false) }
+        assertEquals(buttons[1], world.stateAt(button))
+        assertTrue(sent.isEmpty())
+        listOf(session).tickBlocks(game, dropItems = false)
 
         val (update, sound) = batches.decode(sent.single())
         assertContentEquals(UpdateBlock(button, buttons[0].networkId).encode(), update)

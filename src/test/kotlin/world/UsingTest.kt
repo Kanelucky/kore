@@ -50,14 +50,21 @@ class UsingTest {
     fun `buttons press in, stay in, and pop back out later`() {
         world[spot] = button("minecraft:wooden_button", Face.UP.ordinal, 0)
 
-        assertEquals(Used(listOf(spot), "button.click_on", button("minecraft:wooden_button", Face.UP.ordinal, 1).networkId, releaseIn = 30), world.use(spot, Face.NORTH))
+        assertEquals(Used(listOf(spot), "button.click_on", button("minecraft:wooden_button", Face.UP.ordinal, 1).networkId), world.use(spot, Face.NORTH))
         assertEquals(Used(emptyList()), world.use(spot, Face.NORTH)) // Already in
-        assertTrue(world.releaseButton(spot))
+        repeat(29) { world.tickBlocks() }
+        assertEquals(button("minecraft:wooden_button", Face.UP.ordinal, 1), world.stateAt(spot))
+        val released = world.tickBlocks()
         assertEquals(button("minecraft:wooden_button", Face.UP.ordinal, 0), world.stateAt(spot))
-        assertFalse(world.releaseButton(spot))
+        assertEquals(listOf(spot), released.reshaped)
+        assertEquals(listOf(BlockSound(spot, "button.click_off", button("minecraft:wooden_button", Face.UP.ordinal, 0).networkId)), released.sounds)
+        assertFalse(world.releaseButton(spot, mutableListOf()))
 
+        // Stone buttons are quicker.
         world[spot] = button("minecraft:stone_button", Face.UP.ordinal, 0)
-        assertEquals(20, world.use(spot, Face.NORTH)?.releaseIn) // Stone buttons are quicker
+        world.use(spot, Face.NORTH)
+        repeat(20) { world.tickBlocks() }
+        assertEquals(button("minecraft:stone_button", Face.UP.ordinal, 0), world.stateAt(spot))
     }
 
     @Test
