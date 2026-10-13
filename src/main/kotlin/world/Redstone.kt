@@ -1,5 +1,6 @@
 package org.koremc.world
 
+import org.koremc.inventory.PairedContainer
 import org.koremc.registry.BlockState
 
 /** The strongest redstone power, which a source gives, and dust carries a step less of each block from it. */
@@ -12,6 +13,14 @@ internal const val UNLIT_REDSTONE_TORCH = "minecraft:unlit_redstone_torch"
 private const val REDSTONE_BLOCK = "minecraft:redstone_block"
 internal const val UNPOWERED_REPEATER = "minecraft:unpowered_repeater"
 internal const val POWERED_REPEATER = "minecraft:powered_repeater"
+internal const val UNPOWERED_COMPARATOR = "minecraft:unpowered_comparator"
+internal const val POWERED_COMPARATOR = "minecraft:powered_comparator"
+
+/** A comparator's state for giving any power, which lights its torches. */
+private const val OUTPUT_LIT = "output_lit_bit"
+
+/** How long a comparator takes to pass a change on, in ticks. */
+private const val COMPARATOR_DELAY = 2
 
 /** How long a redstone torch takes to answer the block it's on being powered, or not any more, in ticks. */
 private const val TORCH_DELAY = 2
@@ -54,8 +63,15 @@ private val BlockState.isRedstoneTorch get() = name == REDSTONE_TORCH || name ==
 
 private val BlockState.isRepeater get() = name == UNPOWERED_REPEATER || name == POWERED_REPEATER
 
-/** The side a repeater takes power in at, its back, which its cardinal direction names. It gives power out of the side across. */
-private val BlockState.repeaterBack: Face get() = Face.entries.find { it.id == properties[CARDINAL] } ?: Face.SOUTH
+internal val BlockState.isComparator get() = name == UNPOWERED_COMPARATOR || name == POWERED_COMPARATOR
+
+private val BlockState.isDiode get() = isRepeater || isComparator
+
+/**
+ * The side a repeater or comparator takes power in at, its back, which its
+ * cardinal direction names. It gives power out of the side across.
+ */
+private val BlockState.diodeBack: Face get() = Face.entries.find { it.id == properties[CARDINAL] } ?: Face.SOUTH
 
 /** How long a repeater waits to pass a change on, in ticks: two for each step its delay is set to. */
 private val BlockState.repeaterDelay: Int get() = ((properties[REPEATER_DELAY] as? Int ?: 0) + 1) * 2
@@ -83,7 +99,7 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
     return when {
         state.givesPower || state.name == REDSTONE_BLOCK -> MAX_POWER
         state.name == REDSTONE_TORCH -> if (towards == state.torchHeldFrom) 0 else MAX_POWER
-        state.name == POWERED_REPEATER -> if (towards == state.repeaterBack.opposite) MAX_POWER else 0
+        state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
         state.isWire && withWire -> wireGives(from, state, towards)
         else -> 0
     }
@@ -92,8 +108,8 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
 /**
  * The strongest power going straight into the block at [pos], which it
  * passes on to what's beside it: from a lever or button fixed to it, a lit
- * redstone torch under it, a powered repeater facing it, or, [withWire],
- * dust on it or pointing into it.
+ * redstone torch under it, a powered repeater or a comparator facing it,
+ * or, [withWire], dust on it or pointing into it.
  */
 private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Face.entries.maxOf { face ->
     val from = pos.side(face)
@@ -103,7 +119,7 @@ private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Fac
         state == null -> 0
         state.givesPower -> if (state.heldFrom == towards) MAX_POWER else 0
         state.name == REDSTONE_TORCH -> if (towards == Face.UP) MAX_POWER else 0
-        state.name == POWERED_REPEATER -> if (towards == state.repeaterBack.opposite) MAX_POWER else 0
+        state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
         state.isWire && withWire -> wireGives(from, state, towards)
         else -> 0
     }
@@ -165,6 +181,13 @@ private fun BlockState.joinsWire(side: Face): Boolean {
     }
 }
 
+/** The power a repeater or comparator at [pos] gives out of its front: a powered repeater all of it, and a comparator what it works out. */
+private fun FlatWorld.diodeGives(pos: BlockPos, state: BlockState): Int = when {
+    state.name == POWERED_REPEATER -> MAX_POWER
+    state.isComparator -> comparatorPower[pos] ?: 0
+    else -> 0
+}
+
 /** The side of a redstone torch the block it's on is: below it, unless it's on a wall. */
 private val BlockState.torchHeldFrom: Face get() = heldFrom ?: Face.DOWN
 
@@ -173,8 +196,11 @@ private val BlockState.torchHeldFrom: Face get() = heldFrom ?: Face.DOWN
  * it last looked, and those around them, then with what that changed, and
  * so on. Dust takes the power that reaches it first. A redstone torch
  * looks again two ticks later, once the block it's on has started or
- * stopped being powered, and a repeater its delay later, once its back
- * has, unless it's locked. A dispenser or dropper that power has just
+ * stopped being powered, a repeater its delay later, once its back has,
+ * unless it's locked, and a comparator two ticks after what it works out
+ * from what reaches it changes; comparators look at what they read every
+ * tick, since what's in a container changes by itself. A dispenser or
+ * dropper that power has just
  * reached fires a moment later, and a hopper is locked for as long as
  * it's powered. A door, trapdoor or fence gate opens as power reaches it,
  * and shuts as the power goes, a door if either half is powered. Between
@@ -185,6 +211,7 @@ private val BlockState.torchHeldFrom: Face get() = heldFrom ?: Face.DOWN
 fun FlatWorld.updatePower(): Changes {
     val changed = LinkedHashSet<BlockPos>()
     val sounds = mutableListOf<BlockSound>()
+    for (pos in comparators.toList()) answerPower(pos, changed, sounds)
     var passes = 0
     while (powerChanges.isNotEmpty() && passes++ < MAX_PASSES) {
         val near = powerChanges.flatMap { it.around(POWER_REACH) }.filterTo(LinkedHashSet()) { it.y in MIN_Y..MAX_Y }
@@ -253,8 +280,14 @@ private fun FlatWorld.answerPower(pos: BlockPos, changed: MutableSet<BlockPos>, 
         }
         state.isRepeater -> {
             val powered = state.name == POWERED_REPEATER
-            if (repeaterLocked(pos, state) || powered == repeaterInput(pos, state) > 0 || !redstoneDue.add(pos)) return
+            if (repeaterLocked(pos, state) || powered == diodeInput(pos, state) > 0 || !redstoneDue.add(pos)) return
             schedule(pos, state.repeaterDelay, BlockUpdate.REPEATER)
+        }
+        state.isComparator -> {
+            val works = comparatorWorks(pos, state)
+            val settled = works == (comparatorPower[pos] ?: 0) && (works > 0) == (state.name == POWERED_COMPARATOR)
+            if (settled || !redstoneDue.add(pos)) return
+            schedule(pos, COMPARATOR_DELAY, BlockUpdate.COMPARATOR)
         }
         state.name == HOPPER || state.dispenserKind != null -> {
             val property = if (state.name == HOPPER) HOPPER_LOCKED else TRIGGERED
@@ -299,23 +332,40 @@ internal fun FlatWorld.tickTorch(pos: BlockPos, state: BlockState, sounds: Mutab
 }
 
 /**
- * The power going into the back of the repeater at [pos]: what the block
- * behind gives it, or what dust there has, whichever way the dust points.
+ * The power going into the back of the repeater or comparator at [pos]:
+ * what the block behind gives it, or what dust there has, whichever way
+ * the dust points.
  */
-private fun FlatWorld.repeaterInput(pos: BlockPos, state: BlockState): Int {
-    val back = state.repeaterBack
+private fun FlatWorld.diodeInput(pos: BlockPos, state: BlockState): Int {
+    val back = state.diodeBack
     val behind = pos.side(back)
     val wire = stateAt(behind)?.takeIf { it.isWire }?.properties?.get(REDSTONE_SIGNAL) as? Int ?: 0
     return maxOf(signal(behind, back.opposite), wire)
 }
 
-/** Whether the repeater at [pos] is locked, by a powered repeater facing into its side, so that it keeps as it is. */
-private fun FlatWorld.repeaterLocked(pos: BlockPos, state: BlockState): Boolean {
-    val back = state.repeaterBack
-    return listOf(back.clockwise, back.counterClockwise).any { side ->
-        stateAt(pos.side(side))?.let { it.name == POWERED_REPEATER && it.repeaterBack == side } == true
+/**
+ * The strongest power the repeaters and comparators beside the one at
+ * [pos], at its sides, give it, facing into them, and for a comparator,
+ * dust and redstone blocks there too.
+ */
+private fun FlatWorld.diodeSides(pos: BlockPos, state: BlockState): Int {
+    val back = state.diodeBack
+    return listOf(back.clockwise, back.counterClockwise).maxOf { side ->
+        val at = pos.side(side)
+        val beside = stateAt(at)
+        when {
+            beside == null -> 0
+            beside.isDiode && beside.diodeBack == side -> diodeGives(at, beside)
+            !state.isComparator -> 0
+            beside.isWire -> beside.properties[REDSTONE_SIGNAL] as? Int ?: 0
+            beside.name == REDSTONE_BLOCK -> MAX_POWER
+            else -> 0
+        }
     }
 }
+
+/** Whether the repeater at [pos] is locked, by a repeater or comparator powering its side, so that it keeps as it is. */
+private fun FlatWorld.repeaterLocked(pos: BlockPos, state: BlockState): Boolean = diodeSides(pos, state) > 0
 
 /**
  * Passes on the change at the back of the repeater at [pos], its delay
@@ -326,7 +376,7 @@ private fun FlatWorld.repeaterLocked(pos: BlockPos, state: BlockState): Boolean 
 internal fun FlatWorld.tickRepeater(pos: BlockPos, state: BlockState): Boolean {
     redstoneDue -= pos
     if (!state.isRepeater || repeaterLocked(pos, state)) return false
-    val input = repeaterInput(pos, state) > 0
+    val input = diodeInput(pos, state) > 0
     if (state.name == POWERED_REPEATER) {
         if (input) return false
         return blocks.find(UNPOWERED_REPEATER, state.properties)?.also { set(pos, it) } != null
@@ -334,6 +384,88 @@ internal fun FlatWorld.tickRepeater(pos: BlockPos, state: BlockState): Boolean {
     blocks.find(POWERED_REPEATER, state.properties)?.let { set(pos, it) } ?: return false
     if (!input && redstoneDue.add(pos)) schedule(pos, state.repeaterDelay, BlockUpdate.REPEATER)
     return true
+}
+
+/**
+ * What the comparator at [pos] gives out of its front, from what reaches
+ * it. Comparing, it passes on the power at its back, unless that at its
+ * sides is stronger; subtracting, it takes the power at its sides from
+ * that at its back.
+ */
+private fun FlatWorld.comparatorWorks(pos: BlockPos, state: BlockState): Int {
+    val back = comparatorBack(pos, state)
+    if (back == 0) return 0
+    val sides = diodeSides(pos, state)
+    return when {
+        sides > back -> 0
+        state.properties[SUBTRACTING] == 1.toByte() -> back - sides
+        else -> back
+    }
+}
+
+/**
+ * The power at the back of the comparator at [pos]: how full the block
+ * behind it is, if it's one a comparator reads, or else the power going
+ * in as into a repeater's. Short of full power, it reads through a block
+ * power passes through, what's behind that.
+ */
+private fun FlatWorld.comparatorBack(pos: BlockPos, state: BlockState): Int {
+    val back = state.diodeBack
+    val behind = pos.side(back)
+    fullness(behind)?.let { return it }
+    val input = diodeInput(pos, state)
+    if (input >= MAX_POWER || stateAt(behind)?.conductsPower != true) return input
+    return fullness(behind.side(back)) ?: input
+}
+
+/**
+ * How full the block at [pos] is, from 0 to 15, as a comparator reads it,
+ * or null for a block it reads nothing of. A container is as full as its
+ * slots are, each of the most it holds of a stack, a double chest as one:
+ * 1 for anything in it at all, up to 15 with every slot full. A cake reads
+ * more for each slice left, a composter for each level, a respawn anchor
+ * for each charge, and a beehive or bee nest for its honey. An end portal
+ * frame reads full with an eye in it.
+ */
+internal fun FlatWorld.fullness(pos: BlockPos): Int? {
+    val state = stateAt(pos) ?: return null
+    val properties = state.properties
+    when (state.name) {
+        "minecraft:cake" -> return (7 - (properties["bite_counter"] as? Int ?: 0)) * 2
+        "minecraft:composter" -> return properties["composter_fill_level"] as? Int ?: 0
+        "minecraft:respawn_anchor" -> return (properties["respawn_anchor_charge"] as? Int ?: 0) * MAX_POWER / 4
+        "minecraft:beehive", "minecraft:bee_nest" -> return properties["honey_level"] as? Int ?: 0
+        "minecraft:end_portal_frame" -> return if (properties["end_portal_eye_bit"] == 1.toByte()) MAX_POWER else 0
+    }
+    val slots = when (state.storage) {
+        Storage.CHEST -> chestHalves(pos).let { if (it.size == 2) PairedContainer(containerAt(it[0]), containerAt(it[1])) else containerAt(pos) }
+        Storage.BARREL, Storage.SHULKER_BOX -> containerAt(pos)
+        Storage.ENDER_CHEST -> return null
+        null -> (furnaceAt(pos) ?: brewingStandAt(pos) ?: hopperAt(pos) ?: dispenserAt(pos))?.slots ?: return null
+    }
+    var full = 0f
+    for (slot in slots.contents()) slot?.let { full += it.stack.count.toFloat() / it.stack.item.maxStackSize }
+    full /= slots.size
+    return if (full == 0f) 0 else 1 + (full * 14).toInt()
+}
+
+/**
+ * Sets what the comparator at [pos] gives out of its front to what it
+ * works out now, two ticks after what reaches it changed, its torches lit
+ * while that's anything. Returns whether its state changed.
+ */
+internal fun FlatWorld.tickComparator(pos: BlockPos, state: BlockState): Boolean {
+    redstoneDue -= pos
+    if (!state.isComparator) return false
+    val works = comparatorWorks(pos, state)
+    if (works != (comparatorPower[pos] ?: 0)) {
+        if (works == 0) comparatorPower -= pos else comparatorPower[pos] = works
+        powerChanges += pos
+    }
+    val powered = works > 0
+    if (powered == (state.name == POWERED_COMPARATOR)) return false
+    val name = if (powered) POWERED_COMPARATOR else UNPOWERED_COMPARATOR
+    return blocks.find(name, state.properties + (OUTPUT_LIT to bit(powered)))?.also { set(pos, it) } != null
 }
 
 /** The blocks no more than [reach] steps from this one, along the axes, this one among them. */

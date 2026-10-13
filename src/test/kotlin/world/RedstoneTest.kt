@@ -1,9 +1,13 @@
 package org.koremc.world
 
 import org.cloudburstmc.nbt.NbtMap
+import org.koremc.inventory.SlotStack
 import org.koremc.registry.AIR
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
+import org.koremc.registry.ItemDefinition
+import org.koremc.registry.ItemStack
+import org.koremc.registry.ItemVersion
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -27,6 +31,15 @@ class RedstoneTest {
         state(if (powered) POWERED_REPEATER else UNPOWERED_REPEATER, CARDINAL to back.id, REPEATER_DELAY to delay)
     private val repeaters = AROUND.flatMap { back -> (0..3).flatMap { delay -> listOf(false, true).map { repeater(back, delay, it) } } }
 
+    /** A comparator taking power in at its [back], comparing or [subtracting]. */
+    private fun comparator(back: Face, subtracting: Boolean = false, powered: Boolean = false) = state(
+        if (powered) POWERED_COMPARATOR else UNPOWERED_COMPARATOR,
+        CARDINAL to back.id, "output_lit_bit" to bit(powered), SUBTRACTING to bit(subtracting),
+    )
+    private val comparators = AROUND.flatMap { back -> listOf(false, true).flatMap { subtracting -> listOf(false, true).map { comparator(back, subtracting, it) } } }
+    private val chest = state("minecraft:chest", CARDINAL to "south")
+    private val cobblestone = ItemDefinition("minecraft:cobblestone", 4, componentBased = false, ItemVersion.NONE)
+
     private fun door(name: String, upper: Int, open: Int) =
         state(name, CARDINAL to "south", "door_hinge_bit" to 0.toByte(), "open_bit" to open.toByte(), UPPER_BLOCK to upper.toByte())
     private fun doors(name: String) = (0..1).flatMap { upper -> (0..1).map { open -> door(name, upper, open) } }
@@ -34,7 +47,7 @@ class RedstoneTest {
     private fun gate(open: Int) = state("minecraft:fence_gate", CARDINAL to "south", "in_wall_bit" to 0.toByte(), "open_bit" to open.toByte())
 
     private val palette = BlockPalette(
-        listOf(state(AIR), stone, glass, redstoneBlock, torch, unlitTorch) + wallTorches + repeaters + levers + wallLevers + wire +
+        listOf(state(AIR), stone, glass, redstoneBlock, torch, unlitTorch, chest) + wallTorches + repeaters + comparators + levers + wallLevers + wire +
             doors("minecraft:iron_door") + doors("minecraft:wooden_door") + (0..1).map(::trapdoor) + (0..1).map(::gate),
     )
 
@@ -290,6 +303,90 @@ class RedstoneTest {
         val states = (1..80).map { tick(); world.stateAt(at) }
         assertEquals(4, states.zipWithNext().count { (before, after) -> before == wallTorches[0] && after == wallTorches[1] })
         assertTrue(states.takeLast(20).contains(wallTorches[0])) // Not burnt out
+    }
+
+    @Test
+    fun `a comparator passes on the power at its back as it is, two ticks later, unless its side is stronger`() {
+        // Dust from a lever reaches the comparator at 12.
+        world[BlockPos(0, -63, 0)] = levers[1]
+        for (x in 1..4) world[BlockPos(x, -63, 0)] = wire[0]
+        val at = BlockPos(5, -63, 0)
+        world[at] = comparator(Face.WEST)
+        for (x in 6..7) world[BlockPos(x, -63, 0)] = wire[0]
+        update()
+        tick()
+        assertEquals(comparator(Face.WEST), world.stateAt(at))
+        tick()
+        assertEquals(comparator(Face.WEST, powered = true), world.stateAt(at))
+        assertEquals(listOf(12, 11), (6..7).map { powerAt(BlockPos(it, -63, 0)) })
+
+        // Dust at its side at 15 is stronger, which turns it off.
+        world[BlockPos(5, -63, 2)] = levers[1]
+        world[BlockPos(5, -63, 1)] = wire[0]
+        update()
+        tick(2)
+        assertEquals(comparator(Face.WEST), world.stateAt(at))
+        assertEquals(0, powerAt(BlockPos(6, -63, 0)))
+    }
+
+    @Test
+    fun `a subtracting comparator takes the power at its side from that at its back`() {
+        val at = BlockPos(0, -63, 0)
+        world[at] = comparator(Face.WEST, subtracting = true)
+        world[BlockPos(-1, -63, 0)] = redstoneBlock
+        // A line of dust along its side, from a lever ten blocks away, reaching it at 6.
+        world[BlockPos(0, -63, 11)] = levers[1]
+        for (z in 1..10) world[BlockPos(0, -63, z)] = wire[0]
+        world[BlockPos(1, -63, 0)] = wire[0]
+        update()
+        tick(2)
+
+        assertEquals(6, powerAt(BlockPos(0, -63, 1)))
+        assertEquals(9, powerAt(BlockPos(1, -63, 0)))
+    }
+
+    @Test
+    fun `a comparator reads how full a container behind it is, through a block too`() {
+        val at = BlockPos(0, -63, 0)
+        world[at] = comparator(Face.WEST)
+        world[BlockPos(1, -63, 0)] = wire[0]
+        val behind = BlockPos(-1, -63, 0)
+        world[behind] = chest
+        update()
+        tick(2)
+        assertEquals(0, powerAt(BlockPos(1, -63, 0)))
+
+        // Fourteen stacks in 27 slots is a little over half full.
+        val slots = world.containerAt(behind)
+        for (slot in 0 until 14) slots[slot] = SlotStack(ItemStack(cobblestone, 64), world.newStackId())
+        update()
+        tick(2)
+        assertEquals(8, powerAt(BlockPos(1, -63, 0)))
+
+        // One item alone reads 1, and through a block, the chest behind that.
+        for (slot in 0 until 14) slots[slot] = null
+        slots[0] = SlotStack(ItemStack(cobblestone), world.newStackId())
+        world[BlockPos(-2, -63, 0)] = chest
+        world.containerAt(BlockPos(-2, -63, 0))[0] = SlotStack(ItemStack(cobblestone), world.newStackId())
+        world[behind] = stone
+        update()
+        tick(2)
+        assertEquals(1, powerAt(BlockPos(1, -63, 0)))
+    }
+
+    @Test
+    fun `a comparator facing into a repeater's side locks it`() {
+        val at = BlockPos(1, -63, 0)
+        world[at] = repeater(Face.WEST)
+        world[BlockPos(1, -63, 1)] = comparator(Face.SOUTH) // Facing north, into its side
+        world[BlockPos(1, -63, 2)] = redstoneBlock
+        update()
+        tick(2)
+
+        world[BlockPos(0, -63, 0)] = levers[1]
+        update()
+        tick(4)
+        assertEquals(repeater(Face.WEST), world.stateAt(at))
     }
 
     @Test

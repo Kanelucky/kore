@@ -36,6 +36,9 @@ enum class BlockUpdate {
 
     /** Whether a repeater passes on power, or stops, as its back starts or stops being powered. */
     REPEATER,
+
+    /** What a comparator gives out of its front, as what reaches it changes. */
+    COMPARATOR,
 }
 
 /** Looks at the block at [pos] again for [update], [ticks] from now. */
@@ -246,6 +249,7 @@ fun FlatWorld.tickBlocks(): Changes {
             }
             BlockUpdate.TORCH -> if (tickTorch(at, state, sounds)) reshaped += at
             BlockUpdate.REPEATER -> if (tickRepeater(at, state)) reshaped += at
+            BlockUpdate.COMPARATOR -> if (tickComparator(at, state)) reshaped += at
         }
     }
     reshaped += settle(changed).reshaped

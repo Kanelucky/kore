@@ -35,7 +35,7 @@ data class Used(
 private val DAYLIGHT_DETECTORS = listOf("minecraft:daylight_detector", "minecraft:daylight_detector_inverted")
 
 internal const val REPEATER_DELAY = "repeater_delay"
-private const val SUBTRACTING = "output_subtract_bit"
+internal const val SUBTRACTING = "output_subtract_bit"
 
 /** Whether clicking this block uses it, rather than placing the held item against it. */
 val BlockState.usable: Boolean

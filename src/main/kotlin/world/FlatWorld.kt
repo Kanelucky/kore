@@ -128,10 +128,12 @@ class FlatWorld(
             poweredOpen.remove(pos)
             torchToggles.remove(pos)
             redstoneDue.remove(pos)
+            comparatorPower.remove(pos)
         }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
         // A hopper works from the moment it's there, whether anyone opens it or not.
         if (state.name == HOPPER) machines.getOrPut(pos) { Hopper() }
+        if (state.isComparator) comparators += pos else comparators -= pos
         powerChanges += pos
     }
 
@@ -148,13 +150,20 @@ class FlatWorld(
     /** When each redstone torch went out lately, by the block ticks, which burn it out if it's too often. */
     internal val torchToggles = HashMap<BlockPos, MutableList<Long>>()
 
-    /** The redstone torches and repeaters due to look again at the power they take, so that none is due twice at once. */
+    /** The redstone torches, repeaters and comparators due to look again at the power they take, so that none is due twice at once. */
     internal val redstoneDue = HashSet<BlockPos>()
 
-    /** What kind of block [state] is, which a furnace or redstone torch is whether lit or not, and a repeater whether powered or not. */
+    /** Every comparator, which redstone looks at every tick, since what it reads changes by itself. */
+    internal val comparators = HashSet<BlockPos>()
+
+    /** What each comparator that gives any power gives out of its front, by where it is. */
+    internal val comparatorPower = HashMap<BlockPos, Int>()
+
+    /** What kind of block [state] is, which a furnace or redstone torch is whether lit or not, and a repeater or comparator whether powered or not. */
     private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: when (state.name) {
         UNLIT_REDSTONE_TORCH -> REDSTONE_TORCH
         POWERED_REPEATER -> UNPOWERED_REPEATER
+        POWERED_COMPARATOR -> UNPOWERED_COMPARATOR
         else -> state.name
     }
 
