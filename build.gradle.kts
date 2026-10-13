@@ -18,7 +18,7 @@ dependencies {
     implementation("io.netty:netty-all:4.1.101.Final")
 
     // Kotlinx Serialization (To parse the NetherNet HTTP JSON handshakes and the vanilla data)
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
 
     // Cloudburst NBT (Reads the vanilla data files, and writes NBT for packets and block state hashes)
     implementation("org.cloudburstmc:nbt:3.0.5.Final")

@@ -102,6 +102,19 @@ class WorldStorageTest {
     }
 
     @Test
+    fun `a world made before keeps its game mode, unless the game mode's forced, and its seed`() {
+        session {}
+        val creative = settings.copy(gameMode = GameMode.CREATIVE, seed = 99)
+
+        WorldStorage.open(directory, "Test", layers, blocks, items, creative).use { assertEquals(listOf(GameMode.SURVIVAL, 7L), listOf(it.settings.gameMode, it.settings.seed)) }
+        WorldStorage.open(directory, "Test", layers, blocks, items, creative.copy(forceGameMode = true)).use { forced ->
+            assertEquals(listOf(GameMode.CREATIVE, 7L), listOf(forced.settings.gameMode, forced.settings.seed))
+            forced.save()
+        }
+        WorldStorage.open(directory, "Test", layers, blocks, items, settings).use { assertEquals(GameMode.CREATIVE, it.settings.gameMode, "as it was forced to last time") }
+    }
+
+    @Test
     fun `chests keep their items, furnaces their fuel, what they cook and how far along they are, and beacons their powers`() {
         val furnaceAt = here.copy(x = 7)
         val beaconAt = here.copy(x = 9)

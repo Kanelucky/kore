@@ -3,11 +3,13 @@ package org.koremc
 import org.koremc.network.JoinInfo
 import org.koremc.protocol.Difficulty
 import org.koremc.protocol.GameMode
+import org.koremc.storage.LevelType
 import java.nio.file.Path
 
 /**
- * Static server settings. Hardcoded defaults for now; this becomes the
- * target of a config file loader once there is something worth configuring.
+ * The server's settings, as server.properties and kore.json give them (see
+ * [loadServerConfig] and [withKoreSettings]). The defaults are what new files
+ * start with.
  */
 data class ServerConfig(
     /** TCP port for signaling and UDP port for gameplay. */
@@ -23,15 +25,23 @@ data class ServerConfig(
     val operatorKeyFile: Path = Path.of("operator.key"),
     /** Shown to players as untrusted text when they first accept this server's key. */
     val operatorDomain: String = "localhost",
+    /** What players still on the server are told as it stops, which the game has no words of its own for. */
+    val shutdownMessage: String = "Server closed",
     /** Where the game's item and block data lives: a checkout of https://github.com/KoreMC/data matching [version]. */
     val dataDirectory: Path = Path.of("data"),
     val name: String = "Kore Server",
     /** The world's name, and the folder it's saved in, under [worldsDirectory]. */
-    val level: String = "world",
+    val level: String = "Bedrock level",
+    /** What a new world is like. A world made before keeps its own. */
+    val levelType: LevelType = LevelType.FLAT,
     /** Where worlds are saved, each in a folder of its own, as the game's dedicated server keeps them. */
     val worldsDirectory: Path = Path.of("worlds"),
+    /** The most players on the server at once. Anyone else who tries to join is told it's full. */
     val maxPlayers: Int = 20,
+    /** The game mode new players start in, and a new world's. */
     val gameMode: GameMode = GameMode.SURVIVAL,
+    /** Whether [gameMode] applies to a world made before, rather than the game mode it keeps. */
+    val forceGameMode: Boolean = false,
     val difficulty: Difficulty = Difficulty.NORMAL,
     /**
      * Whether commands that change the game, like `/gamemode` and `/give`,
@@ -41,7 +51,8 @@ data class ServerConfig(
     val allowCheats: Boolean = true,
     /** Where the operators are kept, as the game's dedicated server keeps them, by XUID. */
     val permissionsFile: Path = Path.of("permissions.json"),
-    val seed: Long = 0,
+    /** The seed of a new world, or null for a random one. A world made before keeps its own. */
+    val seed: Long? = null,
     /** The most chunks around each player Kore will send, whatever the client asks for. */
     val viewDistance: Int = 8,
     // Must match the client's protocol number and version string.

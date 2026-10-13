@@ -30,6 +30,7 @@ import java.nio.file.NoSuchFileException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.random.Random
 import kotlin.system.exitProcess
 
 private val log = LoggerFactory.getLogger("Kore")
@@ -37,7 +38,12 @@ private val log = LoggerFactory.getLogger("Kore")
 fun main() {
     // A crash on any thread lands in the log file too, not just the console.
     Thread.setDefaultUncaughtExceptionHandler { thread, e -> log.error("Uncaught exception on {}", thread.name, e) }
-    val config = ServerConfig()
+    val config = try {
+        loadServerConfig(SERVER_PROPERTIES).withKoreSettings(KORE_JSON)
+    } catch (e: IllegalStateException) {
+        log.error(e.message)
+        exitProcess(1)
+    }
     val vanilla = try {
         VanillaData.load(config.dataDirectory)
     } catch (e: NoSuchFileException) {
@@ -66,29 +72,34 @@ fun main() {
 
     val peers = Peers()
     val items = ItemStacks(vanilla.items, vanilla.creative, vanilla.blocks)
-    val settings = WorldSettings(config.gameMode, config.difficulty, config.allowCheats, config.seed, config.version, config.protocol)
+    val settings = WorldSettings(
+        config.gameMode, config.difficulty, config.allowCheats, config.seed ?: Random.nextLong(), config.version, config.protocol, config.forceGameMode, config.levelType,
+    )
     val storage = try {
         WorldStorage.open(config.worldsDirectory.resolve(config.level), config.level, FlatLayers(FlatWorld.vanillaLayers(vanilla.blocks)), vanilla.blocks, items, settings)
     } catch (e: Exception) {
         log.error("Couldn't open the world in {}", config.worldsDirectory.resolve(config.level).toAbsolutePath(), e)
         exitProcess(1)
     }
+    // A world made before keeps its own game mode, unless force-gamemode says otherwise, and its own seed.
+    val running = config.copy(gameMode = storage.settings.gameMode, seed = storage.settings.seed)
     // One thread carries every client's UDP traffic and runs every session, so the world needs no locks.
     val loop = NioEventLoopGroup(1)
     // Completes when the server should stop: when `/stop` runs, or the signaling server closes.
     val stopping = CompletableFuture<Unit>()
     // Built once, on start, so no player's login pays to encode the definitions.
     val sessions = Sessions(
-        config, GameData.of(vanilla, storage.world, items, players = storage), LoginAuthenticator(auth.verifier, config.onlineMode), loop.next(),
+        running, GameData.of(vanilla, storage.world, items, players = storage), LoginAuthenticator(auth.verifier, config.onlineMode), loop.next(),
         stop = { stopping.complete(Unit) }, saveWorld = storage::save,
     )
 
-    // Saves the world one last time, on the sessions' thread as it always is, then closes it, however the server
-    // stops. It goes first, as closing the gameplay server stops that thread.
+    // Saves the world one last time, on the sessions' thread as it always is, and tells everyone still on that the
+    // server closed, then closes the world, however the server stops. It goes first, as closing the gameplay server
+    // stops that thread.
     val closed = AtomicBoolean(false)
     fun closeWorld() {
         if (!closed.compareAndSet(false, true)) return
-        runCatching { loop.submit(sessions::save).get(SAVE_TIMEOUT_SECONDS, TimeUnit.SECONDS) }.onFailure { log.error("Couldn't save the world as the server stopped", it) }
+        runCatching { loop.submit(sessions::shutDown).get(SAVE_TIMEOUT_SECONDS, TimeUnit.SECONDS) }.onFailure { log.error("Couldn't save the world as the server stopped", it) }
         storage.close()
         log.info("Saved the world")
     }
@@ -96,7 +107,7 @@ fun main() {
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),
         handler = NetherNetSignalingHandler(
-            joinInfo = { config.toJoinInfo(onlinePlayers = 0) },
+            joinInfo = { running.toJoinInfo(onlinePlayers = 0) },
             answerOffer = { networkId, offer ->
                 val clientKey = offer.verifiedClientKey(requireIdentity = config.onlineMode)
                 localPeer.answer(offer).also { answer ->

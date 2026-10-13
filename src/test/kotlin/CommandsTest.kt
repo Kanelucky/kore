@@ -330,7 +330,7 @@ class CommandsTest {
         assertTrue(received.any { idOf(it) == UPDATE_ABILITIES })
         assertTrue(received.any { idOf(it) == AVAILABLE_COMMANDS })
         assertTrue(alex.session.isOperator)
-        assertTrue("2222" in permissions.readText())
+        assertTrue("\"name\": \"Alex\",\n        \"permission\": \"operator\",\n        \"xuid\": \"2222\"" in permissions.readText(), "name, permission, then XUID")
         assertTrue(Operators(permissions).contains("Alex", "2222"))
 
         steve.runs("/op Alex")

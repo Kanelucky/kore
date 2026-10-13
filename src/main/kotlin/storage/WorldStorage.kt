@@ -48,7 +48,11 @@ private const val CHUNK_VERSION: Byte = 42
 /** How far along the game says a chunk it's finished making is. */
 private const val FINISHED = 2
 
-/** The settings Kore runs a world with, besides what the world itself says. */
+/**
+ * The settings Kore runs a world with, besides what the world itself says.
+ * A world made before keeps its own [gameMode], unless [forceGameMode], and
+ * its own [seed]. [levelType] says what a new world is like.
+ */
 data class WorldSettings(
     val gameMode: GameMode,
     val difficulty: Difficulty,
@@ -56,6 +60,8 @@ data class WorldSettings(
     val seed: Long,
     val version: String,
     val protocol: Int,
+    val forceGameMode: Boolean = false,
+    val levelType: LevelType = LevelType.FLAT,
 )
 
 /** Where players' own data is kept between sessions: where they were, what they had, and so on, by their identity. */
@@ -95,7 +101,8 @@ class WorldStorage private constructor(
     private var levelDat: LevelDat,
     private val blocks: BlockPalette,
     private val itemStacks: ItemStacks,
-    private val settings: WorldSettings,
+    /** The settings Kore runs the world with: those it was given, but for the game mode and seed a world made before keeps. */
+    val settings: WorldSettings,
 ) : ChunkLoader, PlayerSaves, AutoCloseable {
     /** The world, which loads its chunks from here. */
     lateinit var world: FlatWorld
@@ -296,7 +303,8 @@ class WorldStorage private constructor(
         /**
          * Opens the world in [directory], or makes a new flat world called
          * [name] there, of [defaultLayers], if there's none. Its blocks and
-         * items are [blocks] and [items], and Kore runs it with [settings].
+         * items are [blocks] and [items], and Kore runs it with [settings],
+         * but for the game mode and seed a world made before keeps.
          */
         fun open(directory: Path, name: String, defaultLayers: FlatLayers, blocks: BlockPalette, items: ItemStacks, settings: WorldSettings): WorldStorage {
             Files.createDirectories(directory)
@@ -305,13 +313,21 @@ class WorldStorage private constructor(
             val levelDat = if (existing) {
                 LevelDat.read(levelDatFile)
             } else {
+                if (settings.levelType != LevelType.FLAT) log.warn("Kore makes only flat worlds so far, so the new world \"{}\" is flat, not {}", name, settings.levelType)
                 val spawn = BlockPos(0, MIN_Y + defaultLayers.layers.size, 0)
                 LevelDat.create(name, defaultLayers, spawn, settings.gameMode, settings.difficulty, settings.seed, settings.cheats, settings.version, settings.protocol)
             }
             val layers = levelDat.flatLayers(blocks).takeIf { levelDat.generator == FLAT_GENERATOR } ?: defaultLayers.also {
                 if (existing) log.warn("Kore makes only flat terrain, so the chunks of {} the game hasn't made yet will be flat", directory)
             }
-            val storage = WorldStorage(directory, WorldDatabase.open(directory.resolve("db")), levelDat, blocks, items, settings)
+            val kept = settings.copy(
+                gameMode = levelDat.gameMode?.takeUnless { settings.forceGameMode } ?: settings.gameMode,
+                seed = levelDat.seed,
+            )
+            if (kept.gameMode != settings.gameMode) {
+                log.info("The world \"{}\" keeps its game mode, {}, as force-gamemode is off", levelDat.name, kept.gameMode.name.lowercase())
+            }
+            val storage = WorldStorage(directory, WorldDatabase.open(directory.resolve("db")), levelDat, blocks, items, kept)
             storage.biome = layers.biome
             val spawn = levelDat.spawn ?: levelDat.groundSpawn.let { (x, z) -> BlockPos(x, MIN_Y + layers.layers.size, z) }
             storage.world = FlatWorld(blocks, layers.layers, layers.biome, loader = storage, spawn = spawn)

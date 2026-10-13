@@ -15,9 +15,9 @@ private val json = Json {
     explicitNulls = false
 }
 
-/** An entry in `permissions.json`: a player's permission level, and who they are. */
+/** An entry in `permissions.json`: who a player is, and their permission level, written in that order. */
 @Serializable
-private data class PermissionEntry(val permission: String, val xuid: String? = null, val name: String? = null)
+private data class PermissionEntry(val name: String? = null, val permission: String, val xuid: String? = null)
 
 private const val OPERATOR = "operator"
 
@@ -25,10 +25,10 @@ private const val OPERATOR = "operator"
  * The server's operators, who may run the commands players may not, kept
  * in [file] as the game's dedicated server keeps them in its
  * `permissions.json`: a list of entries naming each player's permission
- * level and XUID. Kore also writes the name the player had, which is how it
- * knows a player without an XUID, who isn't signed in to Xbox Live, as
- * only an offline server lets in. Other entries in the file are kept as
- * they are. Without a file, the operators last only as long as the server.
+ * level and XUID. Kore also writes the name the player had, first, which
+ * is how it knows a player without an XUID, who isn't signed in to Xbox
+ * Live, as only an offline server lets in. Other entries in the file are
+ * kept as they are. Without a file, the operators last only as long as the server.
  */
 class Operators(private val file: Path? = null) {
     private val entries: MutableList<PermissionEntry> = file?.takeIf { it.exists() }?.let(::read)?.toMutableList() ?: mutableListOf()
@@ -40,7 +40,7 @@ class Operators(private val file: Path? = null) {
     fun add(name: String, xuid: String?): Boolean {
         if (contains(name, xuid)) return false
         entries.removeIf { it.names(name, xuid) }
-        entries += PermissionEntry(OPERATOR, xuid, name)
+        entries += PermissionEntry(name, OPERATOR, xuid)
         save()
         return true
     }

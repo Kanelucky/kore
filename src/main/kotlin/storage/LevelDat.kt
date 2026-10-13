@@ -38,6 +38,18 @@ const val LEGACY_GENERATOR = 0
 const val INFINITE_GENERATOR = 1
 const val FLAT_GENERATOR = 2
 
+/** The kinds of world the game makes, by the names its dedicated server gives them. */
+enum class LevelType {
+    /** Worlds that go on for ever, with hills, caves and oceans. */
+    DEFAULT,
+
+    /** Superflat worlds. */
+    FLAT,
+
+    /** Old worlds, of a limited size. */
+    LEGACY,
+}
+
 /** The height the game saves as a spawn's, for one it puts on the ground wherever that is. */
 private const val GROUND = Short.MAX_VALUE.toInt()
 
@@ -60,6 +72,9 @@ class LevelDat(val data: NbtMap) {
     val generator: Int get() = data.getInt("Generator", FLAT_GENERATOR)
 
     val seed: Long get() = data.getLong("RandomSeed", 0)
+
+    /** The game mode players start in, or null for one Kore doesn't know. */
+    val gameMode: GameMode? get() = data.getInt("GameType", 0).let { id -> GameMode.entries.find { it.id == id } }
 
     /** Where players appear, or null for the game to put them on the ground at the spawn's x and z, as [groundSpawn] says. */
     val spawn: BlockPos? get() = BlockPos(data.getInt("SpawnX", 0), data.getInt("SpawnY", GROUND), data.getInt("SpawnZ", 0)).takeIf { it.y != GROUND }

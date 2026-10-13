@@ -88,7 +88,7 @@ The console logs at `INFO`. Each run also writes everything at `DEBUG` to its ow
 
 ### ⚙️ Configuration
 
-Settings live in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) until there's a config file. Behind NAT, set `advertisedAddresses` to your public IP so clients get a candidate they can reach. When moving to a new client release, update `protocol`, `version` and the data together.
+Settings live in `server.properties`, with the dedicated server's names, and Kore's own in `kore.json`. Kore writes both on first run. Behind NAT, set `advertisedAddresses` in `kore.json` to your public IP so clients get a candidate they can reach. When moving to a new client release, update `protocol` and `version` in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) and the data together.
 
 ### 🔑 The Operator Key
 
@@ -100,7 +100,7 @@ On first run, Kore creates `operator.key`, which signs every SDP answer. Players
 
 ### 🛡️ Authentication
 
-Kore runs in **online mode** by default: every player proves who they are through Xbox Live, and their login is tied to the key in their connection's offer. The server needs outbound HTTPS to fetch Minecraft's signing keys. `onlineMode = false` turns this off for local testing; never run it where the public can reach it.
+Kore runs in **online mode** by default: every player proves who they are through Xbox Live, and their login is tied to the key in their connection's offer. The server needs outbound HTTPS to fetch Minecraft's signing keys. `online-mode=false` turns this off for local testing; never run it where the public can reach it.
 
 ### ⌨️ Commands and Operators
 

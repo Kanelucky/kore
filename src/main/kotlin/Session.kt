@@ -392,6 +392,8 @@ private const val JOIN_MESSAGE_DELAY = 10
 private const val JOINED = "\u00a7e%multiplayer.player.joined"
 private const val LEFT = "\u00a7e%multiplayer.player.left"
 
+/** What a player turned away from a full server is told, in their own language. */
+private const val SERVER_FULL = "disconnectionScreen.serverFull"
 /** The device a player plays on, when their client doesn't say. */
 private const val UNKNOWN_PLATFORM = -1
 
@@ -797,6 +799,12 @@ class Session(
             reject()
             return
         }
+        if (viewers().count { it !== this && it.player != null && it.state != State.CLOSED } >= config.maxPlayers) {
+            log.info("Turned away {}: the server is full, with {} players", player.displayName, config.maxPlayers)
+            send(Disconnect(Disconnect.Reason.SERVER_FULL, SERVER_FULL))
+            state = State.CLOSED
+            return
+        }
         this.player = player
         game.players.load(player.uuid)?.let(::restoreFrom)
         login = request
@@ -844,7 +852,7 @@ class Session(
                 runtimeId = entityId,
                 playerGameMode = gameMode,
                 position = position,
-                seed = config.seed,
+                seed = config.seed ?: 0,
                 worldGameMode = config.gameMode,
                 difficulty = config.difficulty,
                 playerPermissions = permissionLevel,
@@ -2737,9 +2745,18 @@ class Sessions(
 
     /** Disconnects everyone, as the server is shutting down, then shuts it down, once the command that asked has finished. */
     private fun stopAll() {
-        save()
-        sessions.values.forEach { it.disconnect(Disconnect.Reason.SHUTDOWN) }
+        shutDown()
         loop.execute(stop)
+    }
+
+    /**
+     * Saves the world and every player in it, then disconnects everyone,
+     * with the shutdown message. Run on the sessions' thread as the server
+     * stops, however it does.
+     */
+    fun shutDown() {
+        save()
+        sessions.values.forEach { it.disconnect(Disconnect.Reason.SHUTDOWN, config.shutdownMessage) }
     }
 
     /** Saves the world, and every player in it. Run on the sessions' thread. */

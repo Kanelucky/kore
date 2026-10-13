@@ -10,6 +10,7 @@ import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.Animate
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.Disconnect
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.LevelSoundEvent
@@ -43,6 +44,7 @@ import java.security.interfaces.ECPublicKey
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 private const val PROTOCOL = 2193
@@ -58,7 +60,7 @@ private const val SNEAKING = 8
 class PlayersTest {
     private val authority = TestAuthority()
     private val authenticator = LoginAuthenticator(MultiplayerTokenVerifier(keys = { authority.keys }), onlineMode = true)
-    private val config = ServerConfig(protocol = PROTOCOL, viewDistance = 8, gameMode = GameMode.SURVIVAL)
+    private var config = ServerConfig(protocol = PROTOCOL, viewDistance = 8, gameMode = GameMode.SURVIVAL)
 
     private val stone = BlockState("minecraft:stone", NbtMap.EMPTY, version = 18168865)
     private val palette = BlockPalette(listOf(BlockState(AIR, NbtMap.EMPTY, version = 18168865), stone))
@@ -82,10 +84,14 @@ class PlayersTest {
             schedule = { _, task -> scheduled += task },
         ) { sent += it }
 
+        /** Every packet the client got as it joined. */
+        val joining: List<ByteArray>
+
         init {
             clients += this
             sends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(193).writeInt(PROTOCOL)))
             batches.enableCompression(256)
+            sent.clear() // The network settings, from before compression
             val token = authority.multiplayerToken(key.public as ECPublicKey, xuid = xuid, displayName = name)
             sends(loginPacket(PROTOCOL, connectionRequest(tokenAuthentication(token), clientDataToken(key.private))))
             sends(packResponse(2, "downloadingfinished"))
@@ -100,7 +106,7 @@ class PlayersTest {
                     ),
                 ),
             )
-            sent.clear()
+            joining = received()
         }
 
         fun sends(packet: ByteArray) = session.receive(batches.encode(listOf(packet)))
@@ -127,6 +133,19 @@ class PlayersTest {
 
     /** A tick of showing players to each other, as the server runs it. */
     private fun tick() = clients.forEach { it.session.syncPlayers() }
+
+    @Test
+    fun `a full server turns away anyone else who joins, telling them so, until someone leaves`() {
+        config = config.copy(maxPlayers = 1)
+        val steve = Client(1, "Steve", "1111")
+
+        val alex = Client(2, "Alex", "2222")
+        assertFalse(alex.session.isInGame)
+        assertContentEquals(Disconnect(Disconnect.Reason.SERVER_FULL, "disconnectionScreen.serverFull").encode(), alex.joining.single())
+
+        steve.session.leave()
+        assertTrue(Client(3, "Alex", "2222").session.isInGame)
+    }
 
     @Test
     fun `players in the game are on each other's lists, and appear to those who have their chunk`() {

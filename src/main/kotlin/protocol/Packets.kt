@@ -224,6 +224,7 @@ data class Disconnect(
     /** The handful of the client's 150 disconnect reasons Kore uses, with their wire values. */
     enum class Reason(val id: Int) {
         UNKNOWN(0),
+        SERVER_FULL(25),
         OUTDATED_SERVER(34),
         OUTDATED_CLIENT(35),
         NOT_AUTHENTICATED(46),
