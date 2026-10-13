@@ -79,9 +79,9 @@ private val BlockState.repeaterDelay: Int get() = ((properties[REPEATER_DELAY] a
 /**
  * Whether power passes through this block to what's around it: a whole
  * one, though not glass, leaves or ice, nor a redstone block, which gives
- * power of its own instead.
+ * power of its own instead, nor a piston.
  */
-internal val BlockState.conductsPower get() = isFullCube && !letsLightThrough && name != REDSTONE_BLOCK
+internal val BlockState.conductsPower get() = isFullCube && !letsLightThrough && name != REDSTONE_BLOCK && !isPiston
 
 /** Whether the block at [pos] is powered: something beside it gives it any power. */
 fun FlatWorld.isPowered(pos: BlockPos): Boolean = Face.entries.any { signal(pos.side(it), it.opposite) > 0 }
@@ -282,6 +282,11 @@ private fun FlatWorld.answerPower(pos: BlockPos, changed: MutableSet<BlockPos>, 
             val powered = state.name == POWERED_REPEATER
             if (repeaterLocked(pos, state) || powered == diodeInput(pos, state) > 0 || !redstoneDue.add(pos)) return
             schedule(pos, state.repeaterDelay, BlockUpdate.REPEATER)
+        }
+        state.isPiston -> {
+            val arm = pistonArm(pos, state)
+            if (arm.moving || pistonPowered(pos, state) == arm.extending || !redstoneDue.add(pos)) return
+            schedule(pos, PISTON_DELAY, BlockUpdate.PISTON)
         }
         state.isComparator -> {
             val works = comparatorWorks(pos, state)

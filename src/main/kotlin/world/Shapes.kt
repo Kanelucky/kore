@@ -13,6 +13,7 @@ private val PARTIAL_ENDINGS = listOf(
     "chest", "anvil", "_shelf", "golem_statue", "lightning_rod", "sapling", "_tulip", "_mushroom", "_fungus",
     "_vines", "_petals", "_bush", "_grass", "_plant", "dripleaf", "_dripleaf_block", "blossom", "_flower",
     "_propagule", "_bud", "_cluster", "coral", "_fan", "_egg", "_spike", "_spawn", "detector", "repeater", "comparator",
+    "piston_arm_collision",
 )
 
 /** Blocks that aren't whole cubes and have names of their own. */

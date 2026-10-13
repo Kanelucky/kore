@@ -15,9 +15,18 @@ data class BrokenBlock(val state: BlockState, val blockEntity: NbtMap? = null, v
 /** A sound a block makes as it changes, by the game's name for it, with its data: the network ID of the block making it, or -1. */
 data class BlockSound(val pos: BlockPos, val sound: String, val data: Int)
 
-/** What a change to the world did around it: the blocks that broke, where blocks changed shape, and the sounds they made. */
-class Changes(val broken: Map<BlockPos, BrokenBlock>, val reshaped: List<BlockPos>, val sounds: List<BlockSound> = emptyList()) {
-    val isEmpty get() = broken.isEmpty() && reshaped.isEmpty() && sounds.isEmpty()
+/**
+ * What a change to the world did around it: the blocks that broke, where
+ * blocks changed shape, the sounds they made, and where only the data a
+ * block keeps changed, like a piston's arm moving out.
+ */
+class Changes(
+    val broken: Map<BlockPos, BrokenBlock>,
+    val reshaped: List<BlockPos>,
+    val sounds: List<BlockSound> = emptyList(),
+    val data: List<BlockPos> = emptyList(),
+) {
+    val isEmpty get() = broken.isEmpty() && reshaped.isEmpty() && sounds.isEmpty() && data.isEmpty()
 }
 
 /** Why a block is to be looked at again, some ticks after something changed. */
@@ -39,6 +48,9 @@ enum class BlockUpdate {
 
     /** What a comparator gives out of its front, as what reaches it changes. */
     COMPARATOR,
+
+    /** Whether a piston pushes out or pulls in, as power reaches it or goes. */
+    PISTON,
 }
 
 /** Looks at the block at [pos] again for [update], [ticks] from now. */
@@ -219,9 +231,12 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
  */
 fun FlatWorld.tickBlocks(): Changes {
     blockTicks++
-    val due = scheduled.remove(blockTicks) ?: return Changes(emptyMap(), emptyList())
-    val broken = linkedMapOf<BlockPos, BrokenBlock>()
     val reshaped = LinkedHashSet<BlockPos>()
+    val data = LinkedHashSet<BlockPos>()
+    // Arms already moving go on before any starts, which shows where it starts from first.
+    movePistonArms(reshaped, data)
+    val due = scheduled.remove(blockTicks) ?: return Changes(emptyMap(), reshaped.toList(), data = (data - reshaped).toList())
+    val broken = linkedMapOf<BlockPos, BrokenBlock>()
     val sounds = mutableListOf<BlockSound>()
     val changed = mutableListOf<BlockPos>()
     for ((at, update) in due) {
@@ -250,11 +265,12 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.TORCH -> if (tickTorch(at, state, sounds)) reshaped += at
             BlockUpdate.REPEATER -> if (tickRepeater(at, state)) reshaped += at
             BlockUpdate.COMPARATOR -> if (tickComparator(at, state)) reshaped += at
+            BlockUpdate.PISTON -> movePiston(at, state, broken, reshaped, sounds)
         }
     }
     reshaped += settle(changed).reshaped
     reshaped.removeAll(broken.keys)
-    return Changes(broken, reshaped.toList(), sounds)
+    return Changes(broken, reshaped.toList(), sounds, (data - reshaped).toList())
 }
 
 /**

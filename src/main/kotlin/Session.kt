@@ -2140,12 +2140,14 @@ private fun firing(fired: Fired): List<Pair<BlockPos, ServerPacket>> {
 /**
  * What players see of [changes]: blocks going, with the particles and
  * sound of their breaking, blocks changing shape, with any data they keep,
- * and the sounds blocks made.
+ * the sounds blocks made, and the data blocks keep that changed by itself,
+ * like a piston's arm moving out.
  */
 private fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPacket>> =
     changes.broken.flatMap { (pos, broken) ->
         listOf(pos to UpdateBlock(pos, AIR_NETWORK_ID), pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
-    } + changes.reshaped.flatMap(::withData) + changes.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) }
+    } + changes.reshaped.flatMap(::withData) + changes.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) } +
+        changes.data.mapNotNull { pos -> blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) } }
 
 /** The block at [pos] as it is now, followed by the data it keeps, if any. */
 private fun FlatWorld.withData(pos: BlockPos): List<Pair<BlockPos, ServerPacket>> =

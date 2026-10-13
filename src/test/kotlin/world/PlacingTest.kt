@@ -328,6 +328,25 @@ class PlacingTest {
     }
 
     @Test
+    fun `a piston placed facing the player pushes towards them, with its arm's data`() {
+        // A player looking north, standing south of it, places it facing them.
+        val piston = above
+        place("minecraft:piston", ground, Face.UP, Placer(Face.NORTH))
+        assertEquals("PistonArm", world.blockEntityAt(piston)?.getString("id"))
+        val front = piston.side(Face.SOUTH)
+        world[front] = blocks.defaultOf("minecraft:stone")!!
+        world[piston.side(Face.EAST)] = blocks.defaultOf("minecraft:redstone_block")!!
+        world.updatePower()
+        repeat(5) {
+            world.tickBlocks()
+            world.updatePower()
+        }
+
+        assertEquals("minecraft:piston_arm_collision", world.stateAt(front)?.name)
+        assertEquals("minecraft:stone", world.stateAt(front.side(Face.SOUTH))?.name)
+    }
+
+    @Test
     fun `coral out of water dies ten ticks after a block beside it changes, and never by itself`() {
         place("minecraft:tube_coral_block", ground, Face.UP)
         repeat(40) { world.tickBlocks() }

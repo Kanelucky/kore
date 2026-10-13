@@ -261,8 +261,11 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
 fun FlatWorld.breakBlock(pos: BlockPos): Changes {
     val state = stateAt(pos)?.takeIf { it.name != AIR } ?: return Changes(emptyMap(), emptyList())
     val broken = linkedMapOf<BlockPos, BrokenBlock>()
+    val partner = pistonPartner(pos, state)
     val unpaired = listOfNotNull(breakAt(pos, state, broken))
     state.otherHalf(pos)?.let { other -> stateAt(other)?.takeIf { it.name == state.name }?.let { breakAt(other, it, broken) } }
+    // A piston that's out and its head break together.
+    partner?.let { other -> stateAt(other)?.let { breakAt(other, it, broken) } }
     val settled = settle(broken.keys)
     return Changes(broken + settled.broken, (unpaired + settled.reshaped).distinct())
 }

@@ -8,7 +8,8 @@ import org.koremc.registry.ItemStack
 /**
  * The block entity a block keeps when [placer] places it at [pos] from
  * [item], for blocks whose looks don't all fit in their state: a head's
- * turn on the floor, a bed's colour, and a banner's colour and patterns.
+ * turn on the floor, a bed's colour, a banner's colour and patterns, and
+ * a piston's arm.
  * The client makes a plain one for any other block that needs one. Null
  * for a block that keeps nothing of its own.
  */
@@ -27,6 +28,7 @@ internal fun blockEntityFor(state: BlockState, pos: BlockPos, placer: Placer, it
             item?.nbt?.getList("Patterns", NbtType.COMPOUND)?.let { banner.putList("Patterns", NbtType.COMPOUND, it) }
             banner.build()
         }
+        state.isPiston -> PistonArm(state.name == STICKY_PISTON).data()
         else -> null
     }
 }
