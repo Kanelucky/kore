@@ -31,7 +31,8 @@ private val SWEEP_INTERVAL = 5.seconds
 
 /**
  * Handles everything that arrives on the UDP socket. STUN and DTLS share the
- * port and are told apart by their first byte (RFC 7983).
+ * port and are told apart by their first byte (RFC 7983). The server list's
+ * RakNet pings come here too, and go to [serverList].
  *
  * Kore runs ICE-lite, so the STUN side only answers the client's checks.
  * Every address that passes a check is a valid path for that client, and
@@ -50,6 +51,8 @@ class NetherNetRtcHandler(
     private val onConnect: (connection: NetherNetConnection) -> Unit = {},
     private val onMessage: (connection: NetherNetConnection, message: ByteArray) -> Unit = { _, _ -> },
     private val onDisconnect: (connection: NetherNetConnection, reason: DisconnectReason) -> Unit = { _, _ -> },
+    /** What answers the server list's pings, which come to the same port, if anything does. */
+    private val serverList: ServerListPing? = null,
 ) : SimpleChannelInboundHandler<DatagramPacket>() {
     // Only touched on this channel's event loop.
     private val byAddress = HashMap<InetSocketAddress, Peer>()
@@ -69,6 +72,11 @@ class NetherNetRtcHandler(
     override fun channelRead0(ctx: ChannelHandlerContext, packet: DatagramPacket) {
         val content = packet.content()
         if (!content.isReadable) return
+        // A server list's ping, or a RakNet client, which a STUN check'"'"'s first byte doesn'"'"'t rule out.
+        serverList?.answer(content)?.let { reply ->
+            ctx.writeAndFlush(DatagramPacket(reply, packet.sender()))
+            return
+        }
 
         when (content.getUnsignedByte(content.readerIndex()).toInt()) {
             in 0..3 -> onStun(ctx, packet.sender(), ByteBufUtil.getBytes(content))

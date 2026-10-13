@@ -2822,6 +2822,11 @@ class Sessions(
     /** How many times the game has ticked, which it saves every [AUTOSAVE_TICKS] of. */
     private var ticks = 0L
     private val sessions = HashMap<NetherNetConnection, Session>()
+
+    /** How many players are in the game, as of the last tick, which the server list and LAN discovery read from their own threads. */
+    @Volatile
+    var playerCount = 0
+        private set
     private val commands = Commands(config, game, { sessions.values }, Operators(config.permissionsFile), shutDown = ::stopAll)
 
     /** The console runs commands from the middle of the world's spawn. */
@@ -2833,6 +2838,7 @@ class Sessions(
 
     private fun tick() {
         if (++ticks % AUTOSAVE_TICKS == 0L) save()
+        playerCount = sessions.values.count { it.isInGame }
         sessions.values.tickBlocks(game, dropItems = config.gameMode != GameMode.CREATIVE)
         game.world.tickItems()
         sessions.values.tickMachines(game)

@@ -1,11 +1,19 @@
 package org.koremc
 
+import io.netty.bootstrap.Bootstrap
+import io.netty.channel.ChannelOption
+import io.netty.channel.EventLoopGroup
 import io.netty.channel.nio.NioEventLoopGroup
+import io.netty.channel.socket.InternetProtocolFamily
+import io.netty.channel.socket.nio.NioDatagramChannel
 import org.koremc.auth.AuthService
 import org.koremc.command.Console
+import org.koremc.network.LAN_DISCOVERY_PORT
+import org.koremc.network.LanDiscovery
 import org.koremc.network.NetherNetRtcHandler
 import org.koremc.network.NetherNetSignalingHandler
 import org.koremc.network.RtcServer
+import org.koremc.network.ServerListPing
 import org.koremc.network.SignalingServer
 import org.koremc.network.rtc.DtlsCertificate
 import org.koremc.network.rtc.DtlsContext
@@ -13,6 +21,7 @@ import org.koremc.network.rtc.LocalPeer
 import org.koremc.network.rtc.OperatorIdentity
 import org.koremc.network.rtc.Peer
 import org.koremc.network.rtc.Peers
+import org.koremc.network.rtc.SdpOffer
 import org.koremc.network.rtc.hostCandidates
 import org.koremc.network.rtc.localAddresses
 import org.koremc.network.rtc.maxSendableMessageSize
@@ -104,17 +113,18 @@ fun main() {
         log.info("Saved the world")
     }
 
+    // What the server list, LAN discovery and joining show of the server, as it is now.
+    val status = { running.toJoinInfo(onlinePlayers = sessions.playerCount) }
+    // A client's offer, over HTTP or LAN discovery, answered as the peer it'll connect as.
+    val answerOffer = { networkId: String, offer: SdpOffer ->
+        val clientKey = offer.verifiedClientKey(requireIdentity = config.onlineMode)
+        localPeer.answer(offer).also { answer ->
+            peers.add(Peer(networkId, answer.ice, offer.iceUfrag, offer.fingerprints, offer.maxSendableMessageSize, clientKey))
+        }
+    }
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),
-        handler = NetherNetSignalingHandler(
-            joinInfo = { running.toJoinInfo(onlinePlayers = 0) },
-            answerOffer = { networkId, offer ->
-                val clientKey = offer.verifiedClientKey(requireIdentity = config.onlineMode)
-                localPeer.answer(offer).also { answer ->
-                    peers.add(Peer(networkId, answer.ice, offer.iceUfrag, offer.fingerprints, offer.maxSendableMessageSize, clientKey))
-                }
-            },
-        ),
+        handler = NetherNetSignalingHandler(joinInfo = status, answerOffer = answerOffer),
     )
     val rtc = RtcServer(
         group = loop,
@@ -125,6 +135,7 @@ fun main() {
             onConnect = sessions::connect,
             onMessage = sessions::receive,
             onDisconnect = sessions::disconnect,
+            serverList = ServerListPing(serverId = Random.nextLong(), port = config.port, status = status),
         ),
     )
 
@@ -134,6 +145,7 @@ fun main() {
         val tcp = signaling.bind()
         rtc.bind()
         log.info("Kore is listening for NetherNet on {} (TCP signaling, UDP gameplay)", tcp.localAddress())
+        if (config.lanVisibility) bindLanDiscovery(loop, LanDiscovery(Random.nextLong(), config.onlineMode, status, answerOffer))
         Console(sessions::runConsole).start()
         tcp.closeFuture().addListener { stopping.complete(Unit) }
         stopping.join()
@@ -147,3 +159,27 @@ fun main() {
 
 /** How long the last save waits for the sessions' thread before the server stops without it. */
 private const val SAVE_TIMEOUT_SECONDS = 30L
+
+/**
+ * Listens for games looking for others on the local network, on the
+ * threads of [group], which closing it shuts down. Games share the port,
+ * as the game itself listens on it to find other worlds, so the server
+ * does too. If it can't, it carries on without, as games can still join
+ * by its address.
+ */
+private fun bindLanDiscovery(group: EventLoopGroup, discovery: LanDiscovery) {
+    runCatching {
+        Bootstrap()
+            .group(group)
+            .channelFactory { NioDatagramChannel(InternetProtocolFamily.IPv4) }
+            .option(ChannelOption.SO_BROADCAST, true)
+            .option(ChannelOption.SO_REUSEADDR, true)
+            .handler(discovery)
+            .bind(InetSocketAddress(LAN_DISCOVERY_PORT))
+            .sync()
+    }.onSuccess {
+        log.info("Games on the local network can find the server, on port {}", LAN_DISCOVERY_PORT)
+    }.onFailure {
+        log.warn("Games on the local network won't find the server: port {} isn't free ({})", LAN_DISCOVERY_PORT, it.message)
+    }
+}

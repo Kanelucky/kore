@@ -38,6 +38,8 @@ data class ServerConfig(
     val worldsDirectory: Path = Path.of("worlds"),
     /** The most players on the server at once. Anyone else who tries to join is told it's full. */
     val maxPlayers: Int = 20,
+    /** Whether games on the local network find the server, as they find each other's worlds. */
+    val lanVisibility: Boolean = true,
     /** The game mode new players start in, and a new world's. */
     val gameMode: GameMode = GameMode.SURVIVAL,
     /** Whether [gameMode] applies to a world made before, rather than the game mode it keeps. */

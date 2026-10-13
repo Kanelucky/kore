@@ -77,6 +77,11 @@ private val SETTINGS = listOf(
         value.toIntOrNull()?.takeIf { it in 1..65535 }?.let { copy(port = it) }
     },
     Setting(
+        "enable-lan-visibility",
+        "Whether games on the local network find the server, as they find each other's worlds.\nAllowed values: \"true\" or \"false\"",
+        { it.lanVisibility.toString() },
+    ) { value -> boolean(value)?.let { copy(lanVisibility = it) } },
+    Setting(
         "view-distance",
         "The most chunks around each player the server sends, whatever their own setting.\nAllowed values: whole numbers from $MIN_VIEW_DISTANCE up",
         { it.viewDistance.toString() },
