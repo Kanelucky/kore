@@ -57,10 +57,12 @@ internal const val STAIRS_CORNER = "minecraft:corner"
  * bottoms, or tops when they're upside down. Straight stairs have a whole
  * back too, and stairs filling an inner corner have whole sides on both
  * the back and the side the corner turns to. Stairs rounding an outer
- * corner have no whole side.
+ * corner have no whole side. A hopper's top counts as whole, as Bedrock
+ * has it, bowl and all, so levers and the like go on it.
  */
 fun BlockState.hasFullFace(face: Face): Boolean {
     if (isFullCube) return true
+    if (name == HOPPER) return face == Face.UP
     when (properties["minecraft:vertical_half"]) {
         "top" -> return face == Face.UP
         "bottom" -> return face == Face.DOWN

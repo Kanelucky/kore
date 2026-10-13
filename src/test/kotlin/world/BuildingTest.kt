@@ -39,7 +39,8 @@ class BuildingTest {
             (0..5).map { state("minecraft:stone_button", "button_pressed_bit" to 0.toByte(), "facing_direction" to it) } +
             (0..1).map { state("minecraft:sunflower", "upper_block_bit" to it.toByte()) } +
             (2..5).map { state("minecraft:ladder", "facing_direction" to it) } +
-            listOf("down_east_west", "down_north_south", "up_east_west", "up_north_south", "north", "south", "west", "east").map { lever(it) },
+            listOf("down_east_west", "down_north_south", "up_east_west", "up_north_south", "north", "south", "west", "east").map { lever(it) } +
+            state("minecraft:hopper", "facing_direction" to 0, "toggle_bit" to 0.toByte()),
     )
 
     // One layer of stone, at the bottom of the world. A stone pillar stands on it, to click the sides of.
@@ -183,6 +184,16 @@ class BuildingTest {
         assertEquals(emptyList(), world.place(button, steps[1], Face.WEST, clickY = 0.5f, Placer(Face.EAST)))
         world.place(torch, steps[0], Face.WEST, clickY = 0.5f, Placer(Face.EAST))
         assertEquals(torch("top"), world.stateAt(steps[0].side(Face.WEST)))
+    }
+
+    @Test
+    fun `a hopper's top holds levers and buttons, and its sides don't`() {
+        val hopper = BlockPos(4, MIN_Y + 1, 4)
+        world[hopper] = state("minecraft:hopper", "facing_direction" to 0, "toggle_bit" to 0.toByte())
+
+        assertEquals(listOf(hopper.side(Face.UP)), world.place(lever, hopper, Face.UP, clickY = 0f, Placer(Face.EAST)))
+        assertEquals(lever("up_east_west"), world.stateAt(hopper.side(Face.UP)))
+        assertEquals(emptyList(), world.place(button, hopper, Face.EAST, clickY = 0.5f, Placer(Face.WEST)))
     }
 
     @Test
