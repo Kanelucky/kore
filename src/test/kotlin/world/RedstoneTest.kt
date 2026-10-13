@@ -20,6 +20,12 @@ class RedstoneTest {
     private val wire = (0..MAX_POWER).map { state("minecraft:redstone_wire", REDSTONE_SIGNAL to it) }
     private val torch = state("minecraft:redstone_torch", TORCH_FACING to "top")
     private val unlitTorch = state("minecraft:unlit_redstone_torch", TORCH_FACING to "top")
+    private val wallTorches = listOf("minecraft:redstone_torch", "minecraft:unlit_redstone_torch").map { state(it, TORCH_FACING to "west") }
+
+    /** A repeater taking power in at its [back], set to wait [delay] steps. */
+    private fun repeater(back: Face, delay: Int = 0, powered: Boolean = false) =
+        state(if (powered) POWERED_REPEATER else UNPOWERED_REPEATER, CARDINAL to back.id, REPEATER_DELAY to delay)
+    private val repeaters = AROUND.flatMap { back -> (0..3).flatMap { delay -> listOf(false, true).map { repeater(back, delay, it) } } }
 
     private fun door(name: String, upper: Int, open: Int) =
         state(name, CARDINAL to "south", "door_hinge_bit" to 0.toByte(), "open_bit" to open.toByte(), UPPER_BLOCK to upper.toByte())
@@ -28,7 +34,7 @@ class RedstoneTest {
     private fun gate(open: Int) = state("minecraft:fence_gate", CARDINAL to "south", "in_wall_bit" to 0.toByte(), "open_bit" to open.toByte())
 
     private val palette = BlockPalette(
-        listOf(state(AIR), stone, glass, redstoneBlock, torch, unlitTorch) + levers + wallLevers + wire +
+        listOf(state(AIR), stone, glass, redstoneBlock, torch, unlitTorch) + wallTorches + repeaters + levers + wallLevers + wire +
             doors("minecraft:iron_door") + doors("minecraft:wooden_door") + (0..1).map(::trapdoor) + (0..1).map(::gate),
     )
 
@@ -201,6 +207,89 @@ class RedstoneTest {
         assertEquals(unlitTorch, world.stateAt(at))
         tick(60)
         assertEquals(torch, world.stateAt(at))
+    }
+
+    @Test
+    fun `a repeater passes power on at full strength, after its delay, out of its front only`() {
+        val at = BlockPos(1, -63, 0)
+        world[at] = repeater(Face.WEST)
+        world[BlockPos(-1, -63, 0)] = levers[0]
+        for (x in listOf(0, 2)) world[BlockPos(x, -63, 0)] = wire[0]
+        world[BlockPos(1, -63, 1)] = wire[0]
+        update()
+
+        // Through the dust behind it, the lever turns it on two ticks later.
+        world[BlockPos(-1, -63, 0)] = levers[1]
+        update()
+        tick()
+        assertEquals(repeater(Face.WEST), world.stateAt(at))
+        tick()
+        assertEquals(repeater(Face.WEST, powered = true), world.stateAt(at))
+        assertEquals(15, powerAt(BlockPos(2, -63, 0)))
+        assertEquals(0, powerAt(BlockPos(1, -63, 1))) // Beside it
+
+        world[BlockPos(-1, -63, 0)] = levers[0]
+        update()
+        tick(2)
+        assertEquals(repeater(Face.WEST), world.stateAt(at))
+        assertEquals(0, powerAt(BlockPos(2, -63, 0)))
+    }
+
+    @Test
+    fun `a repeater waits two ticks for each step of its delay, and stays on that long however short the power`() {
+        val at = BlockPos(1, -63, 0)
+        world[at] = repeater(Face.WEST, delay = 3)
+        world[BlockPos(0, -63, 0)] = levers[1]
+        update()
+        world[BlockPos(0, -63, 0)] = levers[0]
+        update()
+
+        tick(7)
+        assertEquals(repeater(Face.WEST, delay = 3), world.stateAt(at))
+        tick()
+        assertEquals(repeater(Face.WEST, delay = 3, powered = true), world.stateAt(at))
+        tick(7)
+        assertEquals(repeater(Face.WEST, delay = 3, powered = true), world.stateAt(at))
+        tick()
+        assertEquals(repeater(Face.WEST, delay = 3), world.stateAt(at))
+    }
+
+    @Test
+    fun `a powered repeater facing into another's side locks it as it is`() {
+        val at = BlockPos(1, -63, 0)
+        val lock = BlockPos(1, -63, 1)
+        world[at] = repeater(Face.WEST)
+        world[lock] = repeater(Face.SOUTH) // Facing north, into its side
+        world[BlockPos(1, -63, 2)] = levers[1]
+        update()
+        tick(2)
+        assertEquals(repeater(Face.SOUTH, powered = true), world.stateAt(lock))
+
+        world[BlockPos(0, -63, 0)] = levers[1]
+        update()
+        tick(4)
+        assertEquals(repeater(Face.WEST), world.stateAt(at))
+
+        world[BlockPos(1, -63, 2)] = levers[0]
+        update()
+        tick(4)
+        assertEquals(repeater(Face.WEST, powered = true), world.stateAt(at))
+    }
+
+    @Test
+    fun `a torch and a repeater feeding back into the block it's on make a clock`() {
+        // A torch on the east side of a block, its power carried round by dust into a repeater facing back into the block.
+        val block = BlockPos(0, -63, 0)
+        val at = BlockPos(1, -63, 0)
+        world[block] = stone
+        world[at] = wallTorches[0]
+        for (pos in listOf(BlockPos(1, -63, 1), BlockPos(1, -63, 2), BlockPos(0, -63, 2))) world[pos] = wire[0]
+        world[BlockPos(0, -63, 1)] = repeater(Face.SOUTH, delay = 3)
+        update()
+
+        val states = (1..80).map { tick(); world.stateAt(at) }
+        assertEquals(4, states.zipWithNext().count { (before, after) -> before == wallTorches[0] && after == wallTorches[1] })
+        assertTrue(states.takeLast(20).contains(wallTorches[0])) // Not burnt out
     }
 
     @Test

@@ -34,7 +34,7 @@ data class Used(
 /** Daylight detectors, which a click switches between sensing day and night. */
 private val DAYLIGHT_DETECTORS = listOf("minecraft:daylight_detector", "minecraft:daylight_detector_inverted")
 
-private const val REPEATER_DELAY = "repeater_delay"
+internal const val REPEATER_DELAY = "repeater_delay"
 private const val SUBTRACTING = "output_subtract_bit"
 
 /** Whether clicking this block uses it, rather than placing the held item against it. */

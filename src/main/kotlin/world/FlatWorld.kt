@@ -127,7 +127,7 @@ class FlatWorld(
             machines.remove(pos)
             poweredOpen.remove(pos)
             torchToggles.remove(pos)
-            torchesDue.remove(pos)
+            redstoneDue.remove(pos)
         }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
         // A hopper works from the moment it's there, whether anyone opens it or not.
@@ -148,11 +148,15 @@ class FlatWorld(
     /** When each redstone torch went out lately, by the block ticks, which burn it out if it's too often. */
     internal val torchToggles = HashMap<BlockPos, MutableList<Long>>()
 
-    /** The redstone torches due to look again whether to light, so that none is due twice at once. */
-    internal val torchesDue = HashSet<BlockPos>()
+    /** The redstone torches and repeaters due to look again at the power they take, so that none is due twice at once. */
+    internal val redstoneDue = HashSet<BlockPos>()
 
-    /** What kind of block [state] is, which a furnace or redstone torch is whether lit or not. */
-    private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: if (state.name == UNLIT_REDSTONE_TORCH) REDSTONE_TORCH else state.name
+    /** What kind of block [state] is, which a furnace or redstone torch is whether lit or not, and a repeater whether powered or not. */
+    private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: when (state.name) {
+        UNLIT_REDSTONE_TORCH -> REDSTONE_TORCH
+        POWERED_REPEATER -> UNPOWERED_REPEATER
+        else -> state.name
+    }
 
     /** The items each chest, barrel and shulker box keeps, by where it is, once a player has opened it or put something in it. */
     private val containers = HashMap<BlockPos, Container>()

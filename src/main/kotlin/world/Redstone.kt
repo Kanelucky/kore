@@ -10,6 +10,8 @@ internal const val REDSTONE_SIGNAL = "redstone_signal"
 internal const val REDSTONE_TORCH = "minecraft:redstone_torch"
 internal const val UNLIT_REDSTONE_TORCH = "minecraft:unlit_redstone_torch"
 private const val REDSTONE_BLOCK = "minecraft:redstone_block"
+internal const val UNPOWERED_REPEATER = "minecraft:unpowered_repeater"
+internal const val POWERED_REPEATER = "minecraft:powered_repeater"
 
 /** How long a redstone torch takes to answer the block it's on being powered, or not any more, in ticks. */
 private const val TORCH_DELAY = 2
@@ -50,6 +52,14 @@ internal val BlockState.isWire get() = name == REDSTONE_WIRE
 
 private val BlockState.isRedstoneTorch get() = name == REDSTONE_TORCH || name == UNLIT_REDSTONE_TORCH
 
+private val BlockState.isRepeater get() = name == UNPOWERED_REPEATER || name == POWERED_REPEATER
+
+/** The side a repeater takes power in at, its back, which its cardinal direction names. It gives power out of the side across. */
+private val BlockState.repeaterBack: Face get() = Face.entries.find { it.id == properties[CARDINAL] } ?: Face.SOUTH
+
+/** How long a repeater waits to pass a change on, in ticks: two for each step its delay is set to. */
+private val BlockState.repeaterDelay: Int get() = ((properties[REPEATER_DELAY] as? Int ?: 0) + 1) * 2
+
 /**
  * Whether power passes through this block to what's around it: a whole
  * one, though not glass, leaves or ice, nor a redstone block, which gives
@@ -73,6 +83,7 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
     return when {
         state.givesPower || state.name == REDSTONE_BLOCK -> MAX_POWER
         state.name == REDSTONE_TORCH -> if (towards == state.torchHeldFrom) 0 else MAX_POWER
+        state.name == POWERED_REPEATER -> if (towards == state.repeaterBack.opposite) MAX_POWER else 0
         state.isWire && withWire -> wireGives(from, state, towards)
         else -> 0
     }
@@ -81,7 +92,8 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
 /**
  * The strongest power going straight into the block at [pos], which it
  * passes on to what's beside it: from a lever or button fixed to it, a lit
- * redstone torch under it, or, [withWire], dust on it or pointing into it.
+ * redstone torch under it, a powered repeater facing it, or, [withWire],
+ * dust on it or pointing into it.
  */
 private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Face.entries.maxOf { face ->
     val from = pos.side(face)
@@ -91,6 +103,7 @@ private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Fac
         state == null -> 0
         state.givesPower -> if (state.heldFrom == towards) MAX_POWER else 0
         state.name == REDSTONE_TORCH -> if (towards == Face.UP) MAX_POWER else 0
+        state.name == POWERED_REPEATER -> if (towards == state.repeaterBack.opposite) MAX_POWER else 0
         state.isWire && withWire -> wireGives(from, state, towards)
         else -> 0
     }
@@ -147,7 +160,7 @@ private fun BlockState.joinsWire(side: Face): Boolean {
     val name = name.removePrefix("minecraft:")
     return when {
         name in WIRE_JOINS || WIRE_JOIN_ENDINGS.any(name::endsWith) -> true
-        name.endsWith("repeater") || name.endsWith("comparator") -> (properties[DIRECTION] as? Int)?.let(Face::ofLegacyIndex)?.axis == side.axis
+        name.endsWith("repeater") || name.endsWith("comparator") -> Face.entries.find { it.id == properties[CARDINAL] }?.axis == side.axis
         else -> false
     }
 }
@@ -160,7 +173,8 @@ private val BlockState.torchHeldFrom: Face get() = heldFrom ?: Face.DOWN
  * it last looked, and those around them, then with what that changed, and
  * so on. Dust takes the power that reaches it first. A redstone torch
  * looks again two ticks later, once the block it's on has started or
- * stopped being powered. A dispenser or dropper that power has just
+ * stopped being powered, and a repeater its delay later, once its back
+ * has, unless it's locked. A dispenser or dropper that power has just
  * reached fires a moment later, and a hopper is locked for as long as
  * it's powered. A door, trapdoor or fence gate opens as power reaches it,
  * and shuts as the power goes, a door if either half is powered. Between
@@ -234,8 +248,13 @@ private fun FlatWorld.answerPower(pos: BlockPos, changed: MutableSet<BlockPos>, 
             swung.sound?.let { sounds += BlockSound(lower, it, swung.soundData) }
         }
         state.isRedstoneTorch -> {
-            if (torchLit(pos, state) == (state.name == REDSTONE_TORCH) || !torchesDue.add(pos)) return
+            if (torchLit(pos, state) == (state.name == REDSTONE_TORCH) || !redstoneDue.add(pos)) return
             schedule(pos, TORCH_DELAY, BlockUpdate.TORCH)
+        }
+        state.isRepeater -> {
+            val powered = state.name == POWERED_REPEATER
+            if (repeaterLocked(pos, state) || powered == repeaterInput(pos, state) > 0 || !redstoneDue.add(pos)) return
+            schedule(pos, state.repeaterDelay, BlockUpdate.REPEATER)
         }
         state.name == HOPPER || state.dispenserKind != null -> {
             val property = if (state.name == HOPPER) HOPPER_LOCKED else TRIGGERED
@@ -261,7 +280,7 @@ private fun FlatWorld.torchLit(pos: BlockPos, state: BlockState): Boolean {
  * Returns whether it changed.
  */
 internal fun FlatWorld.tickTorch(pos: BlockPos, state: BlockState, sounds: MutableList<BlockSound>): Boolean {
-    torchesDue -= pos
+    redstoneDue -= pos
     if (!state.isRedstoneTorch) return false
     val toggles = torchToggles.getOrPut(pos) { mutableListOf() }.apply { removeAll { blockTicks - it > TOGGLE_MEMORY } }
     val lit = state.name == REDSTONE_TORCH
@@ -272,10 +291,48 @@ internal fun FlatWorld.tickTorch(pos: BlockPos, state: BlockState, sounds: Mutab
         toggles += blockTicks
         if (toggles.size >= BURNOUT_TOGGLES) {
             sounds += BlockSound(pos, FIZZ, -1)
-            torchesDue += pos
+            redstoneDue += pos
             schedule(pos, BURNOUT_TICKS, BlockUpdate.TORCH)
         }
     }
+    return true
+}
+
+/**
+ * The power going into the back of the repeater at [pos]: what the block
+ * behind gives it, or what dust there has, whichever way the dust points.
+ */
+private fun FlatWorld.repeaterInput(pos: BlockPos, state: BlockState): Int {
+    val back = state.repeaterBack
+    val behind = pos.side(back)
+    val wire = stateAt(behind)?.takeIf { it.isWire }?.properties?.get(REDSTONE_SIGNAL) as? Int ?: 0
+    return maxOf(signal(behind, back.opposite), wire)
+}
+
+/** Whether the repeater at [pos] is locked, by a powered repeater facing into its side, so that it keeps as it is. */
+private fun FlatWorld.repeaterLocked(pos: BlockPos, state: BlockState): Boolean {
+    val back = state.repeaterBack
+    return listOf(back.clockwise, back.counterClockwise).any { side ->
+        stateAt(pos.side(side))?.let { it.name == POWERED_REPEATER && it.repeaterBack == side } == true
+    }
+}
+
+/**
+ * Passes on the change at the back of the repeater at [pos], its delay
+ * after it came, unless it's locked: it powers what's in front of it
+ * while its back is powered. Once on, it stays on for its delay at least,
+ * however short the power behind it was. Returns whether it changed.
+ */
+internal fun FlatWorld.tickRepeater(pos: BlockPos, state: BlockState): Boolean {
+    redstoneDue -= pos
+    if (!state.isRepeater || repeaterLocked(pos, state)) return false
+    val input = repeaterInput(pos, state) > 0
+    if (state.name == POWERED_REPEATER) {
+        if (input) return false
+        return blocks.find(UNPOWERED_REPEATER, state.properties)?.also { set(pos, it) } != null
+    }
+    blocks.find(POWERED_REPEATER, state.properties)?.let { set(pos, it) } ?: return false
+    if (!input && redstoneDue.add(pos)) schedule(pos, state.repeaterDelay, BlockUpdate.REPEATER)
     return true
 }
 

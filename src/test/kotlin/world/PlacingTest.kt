@@ -306,6 +306,28 @@ class PlacingTest {
     }
 
     @Test
+    fun `a repeater placed facing away from the player carries power the way it faces`() {
+        // A lever, dust, a repeater and more dust, in a line south, placed by a player looking south.
+        val south = Placer(Face.SOUTH)
+        val line = (0..3).map { BlockPos(0, ground.y, it) }
+        world.place(blocks.defaultOf("minecraft:lever")!!, line[0], Face.UP, 0f, south)
+        world.place(blocks.blockPlacedBy("minecraft:redstone")!!, line[1], Face.UP, 0f, south)
+        world.place(blocks.blockPlacedBy("minecraft:repeater")!!, line[2], Face.UP, 0f, south)
+        world.place(blocks.blockPlacedBy("minecraft:redstone")!!, line[3], Face.UP, 0f, south)
+        world.updatePower()
+
+        world.use(line[0].side(Face.UP), Face.SOUTH)
+        world.updatePower()
+        repeat(2) {
+            world.tickBlocks()
+            world.updatePower()
+        }
+
+        assertEquals("minecraft:powered_repeater", world.stateAt(line[2].side(Face.UP))?.name)
+        assertEquals(15, world.stateAt(line[3].side(Face.UP))?.properties?.get(REDSTONE_SIGNAL))
+    }
+
+    @Test
     fun `coral out of water dies ten ticks after a block beside it changes, and never by itself`() {
         place("minecraft:tube_coral_block", ground, Face.UP)
         repeat(40) { world.tickBlocks() }
