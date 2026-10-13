@@ -532,6 +532,57 @@ class ContainersTest {
         assertEquals(listOf(UpdateBlock(front, AIR_NETWORK_ID), UpdateBlock(front, pistonHead.networkId)).map { it.encode().toList() }, shown.map { it.toList() })
     }
 
+    @Test
+    fun `a chest a piston moves closes for whoever had it open, and keeps what it held`() {
+        world[here] = piston
+        world.setBlockEntity(here, world.pistonArm(here, piston).data())
+        val lever = BlockPos(here.x, here.y + 1, here.z)
+        world[lever] = levers[0]
+        val box = BlockPos(here.x + 1, here.y, here.z)
+        world[box] = chest
+        world.containerAt(box)[0] = SlotStack(ItemStack(stoneItem, 5, block = stone), 900)
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        steve.clicks(box)
+        steve.received()
+
+        alex.clicks(lever)
+        val players = clients.map { it.session }
+        repeat(6) {
+            players.tickBlocks(game, dropItems = false)
+            players.tickPower(game)
+        }
+
+        assertTrue(steve.received().has(ContainerClose(1, ContainerType.CONTAINER, serverInitiated = true).encode()))
+        val moved = BlockPos(here.x + 2, here.y, here.z)
+        assertEquals(chest, world.stateAt(moved))
+        assertEquals(5, world.containerAt(moved)[0]?.stack?.count)
+    }
+
+    @Test
+    fun `a shulker box a piston breaks drops with what it held inside it, even in creative`() {
+        world[here] = piston
+        world.setBlockEntity(here, world.pistonArm(here, piston).data())
+        val lever = BlockPos(here.x, here.y + 1, here.z)
+        world[lever] = levers[0]
+        val box = BlockPos(here.x + 1, here.y, here.z)
+        world[box] = shulkerBox
+        val held = ItemStack(stoneItem, 5, block = stone)
+        world.containerAt(box)[3] = SlotStack(held, 900)
+        val alex = Client(2, "Alex", "2222")
+
+        alex.clicks(lever)
+        val players = clients.map { it.session }
+        repeat(6) {
+            players.tickBlocks(game, dropItems = false)
+            players.tickPower(game)
+        }
+
+        val dropped = world.items.single().stack
+        assertEquals(shulkerItem.name, dropped.item.name)
+        assertEquals(ItemStacks.holding(listOf(3 to held)), dropped.nbt)
+    }
+
     /** The data a BlockActorData packet gives a block. */
     private fun dataIn(packet: ByteArray): NbtMap {
         val buffer = Unpooled.wrappedBuffer(packet)

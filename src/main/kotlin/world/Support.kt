@@ -17,14 +17,16 @@ data class BlockSound(val pos: BlockPos, val sound: String, val data: Int)
 
 /**
  * What a change to the world did around it: the blocks that broke, where
- * blocks changed shape, the sounds they made, and where only the data a
- * block keeps changed, like a piston's arm moving out.
+ * blocks changed shape, the sounds they made, where only the data a block
+ * keeps changed, like a piston's arm moving out, and where blocks a
+ * piston moved were.
  */
 class Changes(
     val broken: Map<BlockPos, BrokenBlock>,
     val reshaped: List<BlockPos>,
     val sounds: List<BlockSound> = emptyList(),
     val data: List<BlockPos> = emptyList(),
+    val moved: List<BlockPos> = emptyList(),
 ) {
     val isEmpty get() = broken.isEmpty() && reshaped.isEmpty() && sounds.isEmpty() && data.isEmpty()
 }
@@ -242,6 +244,7 @@ fun FlatWorld.tickBlocks(): Changes {
     val broken = linkedMapOf<BlockPos, BrokenBlock>()
     val sounds = mutableListOf<BlockSound>()
     val changed = mutableListOf<BlockPos>()
+    val moved = mutableListOf<BlockPos>()
     for ((at, update) in due) {
         val state = stateAt(at)?.takeIf { it.name != AIR } ?: continue
         when (update) {
@@ -268,13 +271,13 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.TORCH -> if (tickTorch(at, state, sounds)) reshaped += at
             BlockUpdate.REPEATER -> if (tickRepeater(at, state)) reshaped += at
             BlockUpdate.COMPARATOR -> if (tickComparator(at, state)) reshaped += at
-            BlockUpdate.PISTON -> movePiston(at, state, broken, reshaped, sounds)
+            BlockUpdate.PISTON -> movePiston(at, state, broken, reshaped, sounds, moved)
             BlockUpdate.OBSERVER -> if (tickObserver(at, state)) reshaped += at
         }
     }
     reshaped += settle(changed).reshaped
     reshaped.removeAll(broken.keys)
-    return Changes(broken, reshaped.toList(), sounds, (data - reshaped).toList())
+    return Changes(broken, reshaped.toList(), sounds, (data - reshaped).toList(), moved)
 }
 
 /**

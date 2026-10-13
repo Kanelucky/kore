@@ -1,6 +1,7 @@
 package org.koremc.world
 
 import org.cloudburstmc.nbt.NbtMap
+import org.koremc.inventory.SlotStack
 import org.koremc.registry.AIR
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
@@ -12,6 +13,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class PistonsTest {
@@ -26,6 +28,11 @@ class PistonsTest {
     private val levers = (0..1).map { on -> state("minecraft:lever", "lever_direction" to "up_east_west", "open_bit" to on.toByte()) }
     private val observers = listOf(false, true).map { state(OBSERVER, "minecraft:facing_direction" to "up", "powered_bit" to bit(it)) }
     private val westObservers = listOf(false, true).map { state(OBSERVER, "minecraft:facing_direction" to "west", "powered_bit" to bit(it)) }
+    // Facing east, so a chest pairs with one north or south of it.
+    private val chest = state("minecraft:chest", CARDINAL to "east")
+    private val furnace = state("minecraft:furnace", CARDINAL to "east")
+    private val shulkerBox = state("minecraft:white_shulker_box")
+    private val enderChest = state("minecraft:ender_chest", CARDINAL to "east")
     private val eastObservers = listOf(false, true).map { state(OBSERVER, "minecraft:facing_direction" to "east", "powered_bit" to bit(it)) }
 
     /** Facings as pistons store them, sideways the wrong way round. */
@@ -35,7 +42,7 @@ class PistonsTest {
         state(if (sticky) "minecraft:sticky_piston_arm_collision" else "minecraft:piston_arm_collision", FACING_DIRECTION to stored(facing))
 
     private val palette = BlockPalette(
-        listOf(air, stone, obsidian, slime, torch, movingBlock) + levers + observers + westObservers + eastObservers +
+        listOf(air, stone, obsidian, slime, torch, movingBlock, chest, furnace, shulkerBox, enderChest) + levers + observers + westObservers + eastObservers +
             Face.entries.flatMap { facing -> listOf(false, true).flatMap { sticky -> listOf(piston(facing, sticky), head(facing, sticky)) } },
     )
 
@@ -380,6 +387,65 @@ class PistonsTest {
         val item = world.spawnItem(ItemStack(cobblestone), Vec3(0.5f, -60f, 0.5f), Vec3(0f, 0f, 0f), 0)
         repeat(20) { world.tickItems() }
         assertEquals(-61f, item.position.y)
+    }
+
+    @Test
+    fun `a piston moves a chest with what's in it, and a furnace with what it's smelting, as in Bedrock`() {
+        placePiston()
+        world[east(1)] = chest
+        world.containerAt(east(1))[0] = SlotStack(ItemStack(cobblestone, 5), 1)
+        switch(on = true)
+        assertEquals(chest, world.stateAt(east(2)))
+        assertEquals(5, world.containerAt(east(2))[0]?.stack?.count)
+
+        switch(on = false)
+        world[east(2)] = air
+        world[east(1)] = furnace
+        val oven = world.furnaceAt(east(1))!!
+        oven.slots[FURNACE_INPUT] = SlotStack(ItemStack(cobblestone, 3), 2)
+        switch(on = true)
+        assertEquals(furnace, world.stateAt(east(2)))
+        assertSame(oven, world.furnaceAt(east(2)))
+    }
+
+    @Test
+    fun `a chest moves drawn as a chest, and lands with its own block entity`() {
+        placePiston()
+        world[east(1)] = chest
+        world[lever] = levers[1]
+        world.updatePower()
+        tick(2)
+        val moving = world.blockEntityAt(east(2))!!
+        assertEquals("Chest", moving.getCompound("movingEntity").getString("id"))
+        assertEquals(listOf(2, -63, 0), moving.getCompound("movingEntity").let { listOf(it.getInt("x"), it.getInt("y"), it.getInt("z")) })
+    }
+
+    @Test
+    fun `a double chest a piston moves half of comes apart, as in Bedrock`() {
+        placePiston()
+        val partner = BlockPos(1, -63, -1)
+        world[east(1)] = chest
+        world[partner] = chest
+        world.pairChest(partner)
+        world.containerAt(east(1))[0] = SlotStack(ItemStack(cobblestone, 5), 1)
+        switch(on = true)
+
+        assertFalse(world.blockEntityAt(east(2))?.containsKey(PAIR_X) == true)
+        assertFalse(world.blockEntityAt(partner)?.containsKey(PAIR_X) == true)
+        assertEquals(5, world.containerAt(east(2))[0]?.stack?.count)
+    }
+
+    @Test
+    fun `a piston breaks a shulker box, and won't move an ender chest`() {
+        placePiston()
+        world[east(1)] = shulkerBox
+        switch(on = true)
+        assertEquals(listOf(east(1)), broken)
+
+        switch(on = false)
+        world[east(1)] = enderChest
+        switch(on = true)
+        assertEquals(enderChest, world.stateAt(east(1)))
     }
 
     @Test

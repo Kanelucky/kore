@@ -38,24 +38,33 @@ private const val CARRY_SINK = 0.05
 private const val PISTON_OUT = "piston.out"
 private const val PISTON_IN = "piston.in"
 
-/** Blocks a piston can't move, whatever's beside them. */
+/**
+ * Blocks a piston can't move, whatever's beside them, as in Bedrock, which
+ * moves most blocks that keep items or data of their own, but not these.
+ */
 private val IMMOVABLE = setOf(
     "obsidian", "crying_obsidian", "respawn_anchor", "reinforced_deepslate", "bedrock", "barrier", "end_portal_frame",
     "end_portal", "end_gateway", "portal", "command_block", "repeating_command_block", "chain_command_block",
     "structure_block", "structure_void", "jigsaw", "allow", "deny", "border_block", "moving_block",
-    "piston_arm_collision", "sticky_piston_arm_collision",
-    // Blocks that keep data of their own, which Kore doesn't carry along yet
-    "enchanting_table", "beacon", "mob_spawner", "jukebox", "lectern", "conduit", "beehive", "bee_nest", "campfire",
-    "soul_campfire", "chiseled_bookshelf", "crafter", "sculk_sensor", "calibrated_sculk_sensor", "sculk_shrieker",
-    "sculk_catalyst", "trial_spawner", "vault", "daylight_detector", "daylight_detector_inverted", "noteblock",
+    "piston_arm_collision", "sticky_piston_arm_collision", "enchanting_table", "beacon", "mob_spawner", "jukebox",
+    "ender_chest", "grindstone", "lodestone", "creaking_heart", "sculk_sensor", "calibrated_sculk_sensor",
+    "sculk_shrieker", "sculk_catalyst", "trial_spawner", "vault",
 ).mapTo(HashSet()) { "minecraft:$it" }
+
+/** Light blocks, one for each level of light, which a piston can't move either. */
+private const val LIGHT_BLOCK = "minecraft:light_block"
 
 /** Blocks a piston breaks, for what they drop, rather than moving them, besides those another block holds up. */
 private val BROKEN_BY_PISTONS = setOf(
-    "web", "dragon_egg", "pumpkin", "melon_block", "waterlily", "trip_wire", "chorus_plant", "chorus_flower", "vine",
-    "glow_lichen", "sculk_vein", "frog_spawn", "decorated_pot", "bed",
+    "web", "dragon_egg", "pumpkin", "carved_pumpkin", "lit_pumpkin", "melon_block", "waterlily", "trip_wire", "chorus_plant",
+    "chorus_flower", "vine", "glow_lichen", "sculk_vein", "frog_spawn", "turtle_egg", "decorated_pot", "flower_pot", "bed",
+    "frame", "glow_frame", "budding_amethyst", "cactus", "cake", "bamboo", "reeds", "cocoa", "sea_pickle", "pointed_dripstone",
+    "moss_block", "moss_carpet", "pale_moss_block", "pale_moss_carpet", "pale_hanging_moss", "pink_petals", "resin_clump",
+    "campfire", "soul_campfire", "fire", "soul_fire",
 ).mapTo(HashSet()) { "minecraft:$it" }
-private val BROKEN_BY_PISTONS_ENDINGS = listOf("_head", "_skull", "amethyst_bud", "amethyst_cluster")
+private val BROKEN_BY_PISTONS_ENDINGS = listOf(
+    "_head", "_skull", "amethyst_bud", "amethyst_cluster", "shulker_box", "_leaves", "leaves_flowered", "copper_golem_statue",
+)
 
 private const val SLIME = "minecraft:slime"
 private const val HONEY = "minecraft:honey_block"
@@ -102,6 +111,9 @@ class PistonArm(val sticky: Boolean) {
     internal val moved = mutableListOf<BlockPos>()
     internal val landing = LinkedHashMap<BlockPos, BlockState>()
 
+    /** What the blocks it's moving keep besides their states, their items and the like, by where they land. */
+    internal val kept = HashMap<BlockPos, FlatWorld.Kept>()
+
     /** The state the client draws the arm in: in, moving out, out, or moving in. */
     private val state: Byte get() = (if (extending) if (moving) 1 else 2 else if (moving) 3 else 0).toByte()
 
@@ -136,10 +148,19 @@ internal fun FlatWorld.pistonPowered(pos: BlockPos, state: BlockState): Boolean 
  * be moved but breaks. Nothing moves, and it stays in, if something in the
  * way won't move. A sticky piston pulls back the block in front of its
  * arm, and whatever that drags along, unless it can't. The blocks it moves
- * are moving blocks until it's done, two ticks later, as in Bedrock. What
- * broke is in [broken], and where blocks changed in [reshaped].
+ * are moving blocks until it's done, two ticks later, as in Bedrock, and
+ * take what they keep along with them, like a chest its items. What broke
+ * is in [broken], where blocks changed in [reshaped], and where blocks
+ * moved away from in [moved].
  */
-internal fun FlatWorld.movePiston(pos: BlockPos, state: BlockState, broken: MutableMap<BlockPos, BrokenBlock>, reshaped: MutableCollection<BlockPos>, sounds: MutableList<BlockSound>) {
+internal fun FlatWorld.movePiston(
+    pos: BlockPos,
+    state: BlockState,
+    broken: MutableMap<BlockPos, BrokenBlock>,
+    reshaped: MutableCollection<BlockPos>,
+    sounds: MutableList<BlockSound>,
+    moved: MutableCollection<BlockPos> = mutableListOf(),
+) {
     if (!state.isPiston) return
     redstoneDue -= pos
     val arm = pistonArm(pos, state)
@@ -163,8 +184,9 @@ internal fun FlatWorld.movePiston(pos: BlockPos, state: BlockState, broken: Muta
         push?.moved?.takeIf { powered || arm.sticky }?.map { "${stateAt(it)?.name} at $it" }.orEmpty(), push?.broken.orEmpty(),
     )
     if (push != null && (powered || arm.sticky)) {
-        for (at in push.broken.asReversed()) stateAt(at)?.let { breakAt(at, it, broken) }
+        for (at in push.broken.asReversed()) stateAt(at)?.let { breakAt(at, it, broken)?.let(reshaped::add) }
         moveBlocks(pos, if (powered) facing else facing.opposite, push.moved, powered, arm, reshaped)
+        moved += push.moved
     }
     if (powered) {
         val head = if (arm.sticky) STICKY_PISTON_HEAD else PISTON_HEAD
@@ -187,24 +209,39 @@ internal fun FlatWorld.movePiston(pos: BlockPos, state: BlockState, broken: Muta
 /**
  * Moves [moving] a block [direction], for the piston at [piston]: each
  * becomes a moving block where it's going, which the client draws sliding
- * along with the arm, and lands there once the arm's done.
+ * along with the arm, and lands there once the arm's done, with what it
+ * keeps. A double chest comes apart into two, as in Bedrock, even if both
+ * halves move.
  */
 private fun FlatWorld.moveBlocks(piston: BlockPos, direction: Face, moving: List<BlockPos>, extending: Boolean, arm: PistonArm, reshaped: MutableCollection<BlockPos>) {
     val states = moving.associateWith { stateAt(it)!! }
+    val kept = moving.associateWith { lift(it) }
+    for (keeps in kept.values) keeps.blockEntity?.let { unpairChestFrom(it) }?.let(reshaped::add)
     for (at in moving) set(at, blocks.stateOf(AIR))
     val movingBlock = blocks.stateOf(MOVING_BLOCK)
     for ((at, state) in states) {
         val to = at.side(direction)
+        val keeps = kept.getValue(at).alone()
         set(to, movingBlock)
-        setBlockEntity(to, movingData(to, state, piston, extending))
+        setBlockEntity(to, movingData(to, state, keeps.blockEntity, piston, extending))
         arm.landing[to] = state
+        arm.kept[to] = keeps
     }
     arm.moved += moving
     reshaped += moving + arm.landing.keys
 }
 
-/** A moving block's block entity: the block that's moving, and the piston moving it. A piston moving keeps its arm's data too. */
-private fun movingData(at: BlockPos, state: BlockState, piston: BlockPos, extending: Boolean): NbtMap {
+/** What a block keeps, but for its pairing with another chest. */
+private fun FlatWorld.Kept.alone() =
+    FlatWorld.Kept(blockEntity?.let { data -> NbtMap.fromMap(data.filterKeys { it != PAIR_X && it != PAIR_Z }) }, container, machine)
+
+/**
+ * A moving block's block entity: the block that's moving, and the piston
+ * moving it, and the block entity of the block it carries, [entity], or
+ * the one the client makes for such a block, which it draws moving too,
+ * like a chest's. A piston moving has its arm's.
+ */
+private fun movingData(at: BlockPos, state: BlockState, entity: NbtMap?, piston: BlockPos, extending: Boolean): NbtMap {
     val data = NbtMap.builder()
         .putString("id", "MovingBlock")
         .putCompound("movingBlock", state.stateData())
@@ -214,12 +251,27 @@ private fun movingData(at: BlockPos, state: BlockState, piston: BlockPos, extend
         .putInt("pistonPosX", piston.x)
         .putInt("pistonPosY", piston.y)
         .putInt("pistonPosZ", piston.z)
-    if (state.isPiston) {
-        val arm = PistonArm(state.name == STICKY_PISTON).data().toBuilder().putInt("x", at.x).putInt("y", at.y).putInt("z", at.z)
-        data.putCompound("movingEntity", arm.build())
+    val carried = when {
+        state.isPiston -> PistonArm(state.name == STICKY_PISTON).data()
+        entity != null -> entity
+        else -> blockEntityIdOf(state.name)?.let { NbtMap.builder().putString("id", it).build() }
     }
+    carried?.let { data.putCompound("movingEntity", it.toBuilder().putInt("x", at.x).putInt("y", at.y).putInt("z", at.z).build()) }
     return data.build()
 }
+
+/** The id of the block entity the client makes for the block called [name], of those a piston moves, if it makes one. */
+private fun blockEntityIdOf(name: String): String? {
+    val short = name.removePrefix("minecraft:")
+    return BLOCK_ENTITY_IDS[short] ?: BLOCK_ENTITY_IDS[short.removePrefix("lit_")] ?: "Chest".takeIf { short.endsWith("chest") }
+}
+
+private val BLOCK_ENTITY_IDS = mapOf(
+    "barrel" to "Barrel", "furnace" to "Furnace", "blast_furnace" to "BlastFurnace", "smoker" to "Smoker", "hopper" to "Hopper",
+    "dispenser" to "Dispenser", "dropper" to "Dropper", "brewing_stand" to "BrewingStand", "lectern" to "Lectern", "beehive" to "Beehive",
+    "bee_nest" to "Beehive", "conduit" to "Conduit", "crafter" to "Crafter", "chiseled_bookshelf" to "ChiseledBookshelf",
+    "daylight_detector" to "DaylightDetector", "daylight_detector_inverted" to "DaylightDetector", "noteblock" to "Music",
+)
 
 /** A block state as the game names one in data: its name, its properties, and the version of them. */
 private fun BlockState.stateData(): NbtMap = NbtMap.builder().putString("name", name).putCompound("states", properties).putInt("version", version).build()
@@ -273,12 +325,19 @@ private fun FlatWorld.pushBodies(arm: PistonArm, direction: Face) {
  */
 private fun FlatWorld.land(arm: PistonArm, reshaped: MutableCollection<BlockPos>) {
     for ((at, state) in arm.landing) {
-        if (stateAt(at)?.name != MOVING_BLOCK) continue
+        val keeps = arm.kept.remove(at)
+        if (stateAt(at)?.name != MOVING_BLOCK) {
+            // What it kept spills out where it would have landed.
+            keeps?.let { dropFromBlock(at, it.empty().filterNotNull()) }
+            continue
+        }
         if (state.isObserver) landObserver(at, state) else set(at, state)
+        keeps?.let { lay(at, it) }
         if (state.isPiston) setBlockEntity(at, pistonArm(at, state).data())
         reshaped += at
     }
     arm.landing.clear()
+    arm.kept.clear()
     arm.moved.clear()
     arm.moving = false
 }
@@ -454,7 +513,7 @@ private fun FlatWorld.resolvePush(piston: BlockPos, facing: Face, extending: Boo
         if (state.name == AIR) return true
         if ((moving == Face.DOWN && at.y == MIN_Y) || (moving == Face.UP && at.y == MAX_Y)) return false
         if (state.isPiston) return pistonArms[at]?.let { !it.extending && !it.moving } ?: true
-        return when (pushReaction(at, state)) {
+        return when (pushReaction(state)) {
             PushReaction.BLOCK -> false
             PushReaction.BREAK -> breaking
             PushReaction.PUSH_ONLY -> moving == pistonFacing
@@ -503,7 +562,7 @@ private fun FlatWorld.resolvePush(piston: BlockPos, facing: Face, extending: Boo
             val nextState = stateAt(next) ?: return false
             if (nextState.name == AIR) return true
             if (!pushable(next, direction, true, direction) || next == piston) return false
-            if (pushReaction(next, nextState) == PushReaction.BREAK) {
+            if (pushReaction(nextState) == PushReaction.BREAK) {
                 broken += next
                 return true
             }
@@ -525,7 +584,7 @@ private fun FlatWorld.resolvePush(piston: BlockPos, facing: Face, extending: Boo
 
     val first = stateAt(start) ?: return null
     if (!pushable(start, direction, false, facing)) {
-        if (extending && pushReaction(start, first) == PushReaction.BREAK) return Push(emptyList(), listOf(start))
+        if (extending && pushReaction(first) == PushReaction.BREAK) return Push(emptyList(), listOf(start))
         return null
     }
     if (!addLine(start, direction)) return null
@@ -547,18 +606,18 @@ private fun sticksTo(one: BlockState, other: BlockState): Boolean {
 private enum class PushReaction { NORMAL, BLOCK, BREAK, PUSH_ONLY }
 
 /**
- * How the block at [pos] takes to a piston: it won't move at all, like
- * obsidian, or anything that keeps items or data Kore doesn't carry along
- * yet; it breaks, like what another block holds up, plants and torches
- * among them, and what a placed block would replace; it moves only when
- * pushed, like glazed terracotta; or it moves either way. Rails move,
- * though they stand on the floor.
+ * How [state] takes to a piston, as in Bedrock: it won't move at all, like
+ * obsidian or an ender chest; it breaks, like what another block holds
+ * up, plants and torches among them, what a placed block would replace,
+ * and shulker boxes and leaves; it moves only when pushed, like glazed
+ * terracotta; or it moves either way, chests, furnaces, hoppers and the
+ * like taking their items along. Rails move, though they stand on the
+ * floor.
  */
-private fun FlatWorld.pushReaction(pos: BlockPos, state: BlockState): PushReaction {
+private fun pushReaction(state: BlockState): PushReaction {
     val name = state.name
     return when {
-        name in IMMOVABLE || state.storage != null || state.furnaceKind != null || name == BREWING_STAND || name == HOPPER ||
-            state.dispenserKind != null || (blockEntityAt(pos) != null && !breaksForPistons(state)) -> PushReaction.BLOCK
+        name in IMMOVABLE || name.startsWith(LIGHT_BLOCK) -> PushReaction.BLOCK
         breaksForPistons(state) -> PushReaction.BREAK
         name.endsWith("glazed_terracotta") -> PushReaction.PUSH_ONLY
         else -> PushReaction.NORMAL

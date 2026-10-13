@@ -214,6 +214,25 @@ class FlatWorld(
         return Dispenser(kind).also { machines[pos] = it }
     }
 
+    /**
+     * What a block keeps besides its state, which goes with it as a piston
+     * moves it: the data of its block entity, its items, and its machine.
+     */
+    internal class Kept(val blockEntity: NbtMap?, val container: Container?, val machine: Machine?) {
+        /** Every item it keeps, slot by slot, taken out. */
+        fun empty(): List<ItemStack?> = container?.empty() ?: machine?.slots?.empty().orEmpty()
+    }
+
+    /** Takes what the block at [pos] keeps off it, to go with it elsewhere. */
+    internal fun lift(pos: BlockPos) = Kept(blockEntities[pos.chunk]?.remove(pos), containers.remove(pos), machines.remove(pos))
+
+    /** Puts [kept] with the block at [pos], once it's there. */
+    internal fun lay(pos: BlockPos, kept: Kept) {
+        kept.blockEntity?.let { setBlockEntity(pos, it) }
+        kept.container?.let { containers[pos] = it }
+        kept.machine?.let { machines[pos] = it }
+    }
+
     /** Takes out every item the block at [pos] kept, as it breaks, slot by slot. */
     fun emptyContainer(pos: BlockPos): List<ItemStack?> = (containers.remove(pos)?.empty() ?: (machines[pos])?.slots?.empty()).orEmpty()
 

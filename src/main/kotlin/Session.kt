@@ -1130,7 +1130,7 @@ class Session(
             if (worn == null) {
                 val changes = world.breakBlock(pos)
                 showAround(world.packetsFor(changes) + (pos to LevelEvent(LevelEvent.SOUND_ANVIL_BREAK, pos.centre, 0)))
-                changes.broken.filterKeys { it != pos }.forEach { (at, broken) -> dropFrom(at, broken) }
+                changes.broken.filterKeys { it != pos }.forEach { (at, broken) -> game.dropBroken(at, broken, harvested = true) }
                 viewers().forEach { it.containerBroke(changes.broken.keys) }
                 return
             }
@@ -1193,8 +1193,8 @@ class Session(
         open.shownSlots = open.view.contents()
     }
 
-    /** Closes the player's window if it shows a block that broke, at one of [positions]. */
-    private fun containerBroke(positions: Collection<BlockPos>) {
+    /** Closes the player's window if it shows a block that broke, or that a piston moved away, at one of [positions]. */
+    internal fun containerBroke(positions: Collection<BlockPos>) {
         if (window?.blocks?.any { it in positions } == true) closeWindow(reply = true, byServer = true)
     }
 
@@ -1459,12 +1459,7 @@ class Session(
             // What the player broke drops only if what they hold harvests it. What fell with it always drops.
             val byHand = at == pos || broken.state.otherHalf(at) == pos
             val harvested = !creative && (!byHand || game.mining[broken.state.name]?.let { harvests(it, held) } != false)
-            // What a container held drops too, even in creative. A shulker box keeps it inside itself.
-            val keepsItems = broken.state.storage == Storage.SHULKER_BOX
-            if (harvested || (keepsItems && broken.contents.any { it != null })) dropFrom(at, broken)
-            if (!keepsItems) world.dropFromBlock(at, broken.contents.filterNotNull())
-            // What a furnace had made earned experience nobody took.
-            wholeExperience(broken.experience).takeIf { it > 0 }?.let { world.dropExperience(at.centre, it) }
+            game.dropBroken(at, broken, harvested)
         }
         viewers().forEach { it.containerBroke(changes.broken.keys) }
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
@@ -1488,8 +1483,6 @@ class Session(
         }
     }
 
-    /** Drops what the [broken] block at [pos] drops, given the data and items it kept. */
-    private fun dropFrom(pos: BlockPos, broken: BrokenBlock) = world.dropFromBlock(pos, game.drops.of(broken.state, broken.blockEntity, broken.contents))
 
     /**
      * Throws [stack] the way the player looks, from just below their eyes,
@@ -2175,7 +2168,8 @@ private fun Collection<Session>.showAround(packets: List<Pair<BlockPos, ServerPa
  * scaffolding moves along, coral out of water dies, big dripleaves tip
  * under the players and items standing on them, and pistons move, and
  * push or carry the players in the way of what they move, or on top of
- * it. What breaks drops what it drops, if [dropItems]. Run once a tick.
+ * it. What breaks drops what it drops, if [dropItems], and what it held
+ * either way. Run once a tick.
  */
 internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) {
     val world = game.world
@@ -2184,10 +2178,25 @@ internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) 
     val changes = Changes(ticked.broken, (stood + ticked.reshaped).distinct(), ticked.sounds, ticked.data)
     val packets = if (changes.isEmpty) emptyList() else world.packetsFor(changes)
     forEach { listOf(it).showAround(it.pistonView(packets)) }
+    if (ticked.broken.isNotEmpty() || ticked.moved.isNotEmpty()) forEach { it.containerBroke(ticked.broken.keys + ticked.moved) }
     val players = filter { it.isInGame }
     val motions = world.pistonMotions(players.associate { it.entityId to it.feet })
     players.forEach { it.pushedByPistons(motions[it.entityId]) }
-    if (dropItems) changes.broken.forEach { (pos, broken) -> game.world.dropFromBlock(pos, game.drops.of(broken.state, broken.blockEntity)) }
+    changes.broken.forEach { (pos, broken) -> game.dropBroken(pos, broken, harvested = dropItems) }
+}
+
+/**
+ * Drops what the [broken] block at [pos] leaves in the world: the block,
+ * if it was [harvested], with the data it kept, and what it held, even if
+ * not, a shulker box keeping that inside itself as it drops, and any other
+ * container dropping it loose. The experience a furnace's work earned that
+ * nobody took drops too.
+ */
+private fun GameData.dropBroken(pos: BlockPos, broken: BrokenBlock, harvested: Boolean) {
+    val keepsItems = broken.state.storage == Storage.SHULKER_BOX
+    if (harvested || (keepsItems && broken.contents.any { it != null })) world.dropFromBlock(pos, drops.of(broken.state, broken.blockEntity, broken.contents))
+    if (!keepsItems) world.dropFromBlock(pos, broken.contents.filterNotNull())
+    wholeExperience(broken.experience).takeIf { it > 0 }?.let { world.dropExperience(pos.centre, it) }
 }
 
 /**
