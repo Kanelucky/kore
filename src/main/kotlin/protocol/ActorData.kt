@@ -8,6 +8,8 @@ private const val SET_ACTOR_DATA = 39
 enum class ActorDataId(val id: Int) {
     /** A bitmask of [ActorFlag]s. */
     FLAGS(0),
+    /** Which kind of an actor it is, like the block a falling block is, by its network ID. */
+    VARIANT(2),
     /** The name above an actor's head. */
     NAME(4),
     AIR_SUPPLY(7),

@@ -174,7 +174,7 @@ internal fun FlatWorld.savedTicks(): Map<ChunkPos, List<NbtMap>> {
 private fun pendingTick(pos: BlockPos, state: BlockState, time: Long) = NbtMap.builder()
     .putInt("x", pos.x).putInt("y", pos.y).putInt("z", pos.z)
     .putLong("time", time)
-    .putCompound("blockState", NbtMap.builder().putString("name", state.name).putCompound("states", state.properties).putInt("version", state.version).build())
+    .putCompound("blockState", blockStateNbt(state))
     .build()
 
 /**
@@ -205,14 +205,18 @@ internal fun FlatWorld.restoreTicks(saved: NbtMap): List<Pair<NbtMap, Long>> {
 // The game's names for the entities Kore keeps in the world.
 private const val ITEM = "minecraft:item"
 private const val ORB = "minecraft:xp_orb"
+private const val FALLING = "minecraft:falling_block"
+
+/** Where the game keeps the block a falling block is. */
+private const val FALLING_STATE = "FallingBlock"
 
 /** How much an orb is worth, as the game saves it. */
 private const val ORB_VALUE = "experience value"
 
 /**
- * The items and orbs lying in the world, as the game saves entities, by
- * the chunk each is in, each under the unique ID [uniqueId] gives its
- * number.
+ * The items, orbs and falling blocks in the world, as the game saves
+ * entities, by the chunk each is in, each under the unique ID [uniqueId]
+ * gives its number.
  */
 internal fun FlatWorld.savedActors(uniqueId: (Long) -> Long = { it }): Map<ChunkPos, List<NbtMap>> {
     val items = items.map { item ->
@@ -229,8 +233,18 @@ internal fun FlatWorld.savedActors(uniqueId: (Long) -> Long = { it }): Map<Chunk
             .putShort("Age", orb.age.toShort())
             .build()
     }
-    return (items + orbs).groupBy({ it.first }, { it.second })
+    val falling = fallingBlocks.map { falling ->
+        falling.position.toBlockPos().chunk to actor(FALLING, uniqueId(falling.id), falling.position, falling.velocity, onGround = false)
+            .putCompound(FALLING_STATE, blockStateNbt(falling.state))
+            .putByte("Time", minOf(falling.age, Byte.MAX_VALUE.toInt()).toByte())
+            .build()
+    }
+    return (items + orbs + falling).groupBy({ it.first }, { it.second })
 }
+
+/** [state] as the game saves a block's state: its name, its properties and the version it's from. */
+internal fun blockStateNbt(state: BlockState): NbtMap =
+    NbtMap.builder().putString("name", state.name).putCompound("states", state.properties).putInt("version", state.version).build()
 
 /** The health the game gives an item lying in the world. */
 private const val ITEM_HEALTH: Short = 5
@@ -245,9 +259,9 @@ private fun actor(identifier: String, id: Long, position: Vec3, velocity: Vec3, 
     .putBoolean("OnGround", onGround)
 
 /**
- * Puts the item or orb the game saved as [data] back in the world, making
- * an item's stack with [items]. Returns whether it was one, as Kore keeps
- * no other kind of entity.
+ * Puts the item, orb or falling block the game saved as [data] back in
+ * the world, making an item's stack with [items]. Returns whether it was
+ * one, as Kore keeps no other kind of entity.
  */
 internal fun FlatWorld.restoreActor(data: NbtMap, items: ItemStacks): Boolean {
     val position = data.getList("Pos", NbtType.FLOAT, emptyList()).takeIf { it.size == 3 }?.let { Vec3(it[0], it[1], it[2]) } ?: return false
@@ -261,6 +275,11 @@ internal fun FlatWorld.restoreActor(data: NbtMap, items: ItemStacks): Boolean {
         ORB -> {
             val value = data.getInt(ORB_VALUE, data.getInt("Value", 0)).takeIf { it > 0 } ?: return true
             spawnOrb(value, position, velocity).age = data.getShort("Age", 0).toInt()
+        }
+        FALLING -> {
+            val saved = data.getCompound(FALLING_STATE, NbtMap.EMPTY)
+            val state = blocks.find(saved.getString("name", ""), saved.getCompound("states", NbtMap.EMPTY)) ?: return true
+            spawnFallingBlock(state, position, position.toBlockPos().y, velocity).age = data.getByte("Time", 0).toInt()
         }
         else -> return false
     }

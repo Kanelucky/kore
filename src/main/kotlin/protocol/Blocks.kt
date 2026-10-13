@@ -182,9 +182,10 @@ data class LevelEvent(val event: Int, val position: Vec3, val data: Int) : Serve
         /** Smoke puffing out of a dispenser as it fires. The data is which way, as [org.koremc.world.smokeDirection] has it. */
         const val PARTICLES_SHOOT = 2000
 
-        /** An anvil clanging as a player uses it, or breaking as it wears out. */
+        /** An anvil clanging as a player uses it, or breaking as it wears out, and landing after a fall. */
         const val SOUND_ANVIL_BREAK = 1020
         const val SOUND_ANVIL_USE = 1021
+        const val SOUND_ANVIL_LAND = 1022
 
         /** The chime of a player picking up experience. */
         const val SOUND_EXPERIENCE_ORB = 1051

@@ -103,7 +103,7 @@ class PlacingTest {
     }
 
     @Test
-    fun `candles, snow and petals pile onto their own kind`() {
+    fun `candles, snow and petals pile onto their own kind, snow from any side`() {
         place("minecraft:candle", ground, Face.UP)
         place("minecraft:candle", above, Face.UP)
         assertEquals(1, world.stateAt(above)?.properties?.get("candles"))
@@ -112,6 +112,9 @@ class PlacingTest {
         place("minecraft:snow_layer", snow, Face.UP)
         place("minecraft:snow_layer", snow.side(Face.UP), Face.UP)
         assertEquals(1, world.stateAt(snow.side(Face.UP))?.properties?.get("height"))
+        place("minecraft:snow_layer", snow.side(Face.UP), Face.NORTH)
+        assertEquals(2, world.stateAt(snow.side(Face.UP))?.properties?.get("height"))
+        assertEquals(AIR, world.stateAt(snow.side(Face.UP).side(Face.NORTH))?.name)
 
         val petals = BlockPos(6, ground.y, 0)
         world[petals] = blocks.defaultOf("minecraft:grass_block")!!

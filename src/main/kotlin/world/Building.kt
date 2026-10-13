@@ -188,7 +188,7 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
     if (clickedState.name == block.name && face == openFace) {
         blocks.doubleSlabOf(clickedState)?.let { set(clicked, it); return listOf(clicked) }
     }
-    blocks.piledOnto(clickedState, block, face)?.let { set(clicked, it); return listOf(clicked) }
+    blocks.piledOnto(clickedState, block)?.let { set(clicked, it); return listOf(clicked) }
 
     val replacing = clickedState.replaceable && !(clickedState.name == block.name && block.name == SNOW_LAYER)
     val target = if (replacing) clicked else clicked.side(face)
@@ -196,7 +196,7 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
     val targetState = stateAt(target) ?: return emptyList()
     if (targetState.name == block.name) {
         blocks.doubleSlabOf(targetState)?.let { set(target, it); return listOf(target) }
-        blocks.piledOnto(targetState, block, face)?.let { set(target, it); return listOf(target) }
+        blocks.piledOnto(targetState, block)?.let { set(target, it); return listOf(target) }
         blocks.spreadOver(targetState, face)?.let { set(target, it); return listOf(target) }
     }
     if (!targetState.replaceable) return emptyList()
@@ -506,18 +506,15 @@ internal fun facesIn(bits: Map<Face, Int>, value: Int) = bits.filterValues { val
 /**
  * [existing] with one more of [block] piled on: candles, sea pickles,
  * turtle eggs, petals, leaf litter and wildflowers, up to four, and snow
- * up to eight layers. Null if [block] doesn't pile onto [existing], or
- * there's no room. Snow piles only onto the top of snow.
+ * up to eight layers, which pile on from any side, as in Bedrock. Null if
+ * [block] doesn't pile onto [existing], or there's no room.
  */
-private fun BlockPalette.piledOnto(existing: BlockState, block: BlockState, face: Face): BlockState? {
+private fun BlockPalette.piledOnto(existing: BlockState, block: BlockState): BlockState? {
     if (existing.name != block.name) return null
     val (property, more) = when {
         "candles" in existing.properties -> "candles" to (existing.properties["candles"] as Int + 1).takeIf { it <= 3 }
         "cluster_count" in existing.properties -> "cluster_count" to (existing.properties["cluster_count"] as Int + 1).takeIf { it <= 3 }
-        existing.name == SNOW_LAYER -> {
-            if (face != Face.UP) return null
-            "height" to (existing.properties["height"] as Int + 1).takeIf { it <= 7 }
-        }
+        existing.name == SNOW_LAYER -> "height" to (existing.properties["height"] as Int + 1).takeIf { it <= 7 }
         existing.name in PILES_BY_GROWTH -> "growth" to (existing.properties["growth"] as Int + 1).takeIf { it <= 3 }
         existing.name == "minecraft:turtle_egg" -> {
             val counts = listOf("one_egg", "two_egg", "three_egg", "four_egg")

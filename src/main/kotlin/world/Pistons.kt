@@ -58,7 +58,7 @@ private const val LIGHT_BLOCK = "minecraft:light_block"
 private val BROKEN_BY_PISTONS = setOf(
     "web", "dragon_egg", "pumpkin", "carved_pumpkin", "lit_pumpkin", "melon_block", "waterlily", "trip_wire", "chorus_plant",
     "chorus_flower", "vine", "glow_lichen", "sculk_vein", "frog_spawn", "turtle_egg", "decorated_pot", "flower_pot", "bed",
-    "frame", "glow_frame", "budding_amethyst", "cactus", "cake", "bamboo", "reeds", "cocoa", "sea_pickle", "pointed_dripstone",
+    "frame", "glow_frame", "budding_amethyst", "cactus", "cake", "bamboo", "reeds", "cocoa", "sea_pickle", "pointed_dripstone", "sulfur_spike",
     "moss_block", "moss_carpet", "pale_moss_block", "pale_moss_carpet", "pale_hanging_moss", "pink_petals", "resin_clump",
     "campfire", "soul_campfire", "fire", "soul_fire",
 ).mapTo(HashSet()) { "minecraft:$it" }

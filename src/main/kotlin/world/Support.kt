@@ -15,11 +15,15 @@ data class BrokenBlock(val state: BlockState, val blockEntity: NbtMap? = null, v
 /** A sound a block makes as it changes, by the game's name for it, with its data: the network ID of the block making it, or -1. */
 data class BlockSound(val pos: BlockPos, val sound: String, val data: Int)
 
+/** Something happening at a block that the client shows, like an anvil clanging, by the game's number for it, with its data. */
+data class BlockEvent(val pos: BlockPos, val event: Int, val data: Int)
+
 /**
  * What a change to the world did around it: the blocks that broke, where
  * blocks changed shape, the sounds they made, where only the data a block
- * keeps changed, like a piston's arm moving out, and where blocks a
- * piston moved were.
+ * keeps changed, like a piston's arm moving out, where blocks a piston
+ * moved were, other things that happened at blocks, and the falling
+ * blocks that couldn't land, where they came down, which drop as items.
  */
 class Changes(
     val broken: Map<BlockPos, BrokenBlock>,
@@ -27,8 +31,10 @@ class Changes(
     val sounds: List<BlockSound> = emptyList(),
     val data: List<BlockPos> = emptyList(),
     val moved: List<BlockPos> = emptyList(),
+    val events: List<BlockEvent> = emptyList(),
+    val dropped: List<Pair<Vec3, BlockState>> = emptyList(),
 ) {
-    val isEmpty get() = broken.isEmpty() && reshaped.isEmpty() && sounds.isEmpty() && data.isEmpty()
+    val isEmpty get() = broken.isEmpty() && reshaped.isEmpty() && sounds.isEmpty() && data.isEmpty() && events.isEmpty()
 }
 
 /** Why a block is to be looked at again, some ticks after something changed. */
@@ -68,6 +74,9 @@ enum class BlockUpdate {
 
     /** A pressed button popping back out. */
     BUTTON,
+
+    /** Whether sand and the like with nothing under it falls. */
+    FALL,
 }
 
 /**
@@ -92,6 +101,7 @@ internal val BlockState.dueFor: List<BlockUpdate>
             isLivingCoral -> BlockUpdate.CORAL
             name == BIG_DRIPLEAF -> BlockUpdate.TILT
             name.endsWith("button") -> BlockUpdate.BUTTON
+            fallsFreely -> BlockUpdate.FALL
             else -> null
         }
         return listOfNotNull(BlockUpdate.SUPPORT.takeIf { held }, own)
@@ -168,7 +178,7 @@ internal val BlockState.heldFrom: Face?
                 else -> null
             }
             name.endsWith("_hanging_sign") -> return if (properties[HANGING] == 1.toByte()) Face.UP else null
-            (name.endsWith("lantern") && HANGING in properties) || name == "minecraft:pointed_dripstone" || name == "minecraft:mangrove_propagule" ->
+            (name.endsWith("lantern") && HANGING in properties) || isDripstone || name == "minecraft:mangrove_propagule" ->
                 return if (properties[HANGING] == 1.toByte()) Face.UP else Face.DOWN
             name in FROM_CEILING -> return Face.UP
             name in ON_FLOOR || ON_FLOOR_ENDINGS.any(name::endsWith) -> return Face.DOWN
@@ -267,11 +277,14 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
 /**
  * Ticks the world's blocks: looks again at those whose time has come.
  * Blocks [settle] left that still can't stay break, with the other half of
- * a door, bed or tall plant, and scaffolding takes its new distance. Coral
- * out of water dies, big dripleaves tip over or right themselves, and
- * pressed buttons pop back out. The world settles around what changed, which can leave more for later ticks.
- * Run once a tick. Returns what broke, where blocks changed shape, and the
- * sounds they made.
+ * a door, bed or tall plant, but for snow and hanging pointed dripstone,
+ * which fall, and scaffolding takes its new distance. Sand and the like
+ * with nothing under them fall, and falling blocks fall on, landing or
+ * dropping as items. Coral out of water dies, big dripleaves tip over or
+ * right themselves, and pressed buttons pop back out. The world settles
+ * around what changed, which can leave more for later ticks. Run once a
+ * tick. Returns what broke, where blocks changed shape, the sounds they
+ * made, and the falling blocks that drop as items.
  */
 fun FlatWorld.tickBlocks(): Changes {
     blockTicks++
@@ -279,15 +292,23 @@ fun FlatWorld.tickBlocks(): Changes {
     val data = LinkedHashSet<BlockPos>()
     // Arms already moving go on before any starts, which shows where it starts from first.
     movePistonArms(reshaped, data)
-    val due = scheduled.remove(blockTicks) ?: return Changes(emptyMap(), reshaped.toList(), data = (data - reshaped).toList())
+    lookForFalls()
     val broken = linkedMapOf<BlockPos, BrokenBlock>()
     val sounds = mutableListOf<BlockSound>()
     val changed = mutableListOf<BlockPos>()
     val moved = mutableListOf<BlockPos>()
-    for ((at, update) in due) {
+    val events = mutableListOf<BlockEvent>()
+    val dropped = mutableListOf<Pair<Vec3, BlockState>>()
+    // Those already falling go on before any more start.
+    changed += moveFallingBlocks(sounds, events, dropped)
+    for ((at, update) in scheduled.remove(blockTicks).orEmpty()) {
         val state = stateAt(at)?.takeIf { it.name != AIR } ?: continue
         when (update) {
             BlockUpdate.SUPPORT -> if (!survives(at, state) || remainingFaces(at, state)?.isEmpty() == true) {
+                if (state.fallsUnheld) {
+                    changed += fallFrom(at, state)
+                    continue
+                }
                 breakAt(at, state, broken)?.let(reshaped::add)
                 changed += at
                 state.otherHalf(at)?.let { other -> stateAt(other)?.takeIf { it.name == state.name }?.let { breakAt(other, it, broken); changed += other } }
@@ -316,11 +337,16 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.PLATE -> if (checkPlate(at, state, sounds)) reshaped += at
             BlockUpdate.LECTERN -> if (endPagePulse(at, state)) reshaped += at
             BlockUpdate.BUTTON -> if (releaseButton(at, sounds)) reshaped += at
+            BlockUpdate.FALL -> if (canFall(at, state)) {
+                startFalling(at, state)
+                changed += at
+            }
         }
     }
+    reshaped += changed
     reshaped += settle(changed).reshaped
     reshaped.removeAll(broken.keys)
-    return Changes(broken, reshaped.toList(), sounds, (data - reshaped).toList(), moved)
+    return Changes(broken, reshaped.toList(), sounds, (data - reshaped).toList(), moved, events, dropped)
 }
 
 /**

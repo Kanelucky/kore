@@ -33,6 +33,7 @@ import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorEvent
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.AddExperienceOrb
+import org.koremc.protocol.AddFallingBlock
 import org.koremc.protocol.AddItemActor
 import org.koremc.protocol.AddPlayer
 import org.koremc.protocol.Animate
@@ -144,6 +145,7 @@ import org.koremc.registry.mendedBy
 import org.koremc.registry.worn
 import org.koremc.world.BlockPos
 import org.koremc.world.Changes
+import org.koremc.world.FALLING_BLOCK_SIZE
 import org.koremc.world.FlatWorld
 import org.koremc.world.ChunkPos
 import org.koremc.world.Face
@@ -210,6 +212,7 @@ import org.koremc.world.PlayerExperience
 import org.koremc.world.dropExperience
 import org.koremc.world.furnaceKind
 import org.koremc.world.wholeExperience
+import org.koremc.world.SNOW_LAYER
 import org.koremc.world.STORAGE_SLOTS
 import org.koremc.world.Storage
 import org.koremc.world.bit
@@ -281,6 +284,12 @@ private const val THROW_LIFT = 0.1f
 
 /** How high above where an item lies the client puts it, an eighth of a block. */
 private const val ITEM_NETWORK_OFFSET = 0.125f
+
+/** How high above where a falling block's bottom is the client puts it, about half its height, as it draws the block around that point. */
+private const val FALLING_BLOCK_NETWORK_OFFSET = 0.49f
+
+/** What snow that falls where it can't land drops. */
+private const val SNOWBALL = "minecraft:snowball"
 
 /** How far players reach to pick items up: a block either way of the item, and half a block up and down. */
 private const val PICKUP_REACH = 1f
@@ -561,6 +570,9 @@ class Session(
 
     /** The orbs the client has been shown, by entity ID. */
     private val shownOrbs = HashSet<Long>()
+
+    /** The falling blocks the client has been shown, by entity ID. */
+    private val shownFallingBlocks = HashSet<Long>()
     private var state = State.AWAITING_NETWORK_SETTINGS_REQUEST
 
     /** The player, once their login has authenticated. */
@@ -1868,6 +1880,37 @@ class Session(
         if (packets.isNotEmpty()) send(*packets.toTypedArray())
     }
 
+    /**
+     * Shows the client the blocks falling in the chunks it has: those it
+     * hasn't seen appear, and those that moved move. Run once a tick, before
+     * the blocks that started falling go from where they were, so the
+     * client never has neither.
+     */
+    fun showFallingBlocks() {
+        if (state != State.IN_GAME) return
+        val packets = mutableListOf<ServerPacket>()
+        for (falling in world.fallingBlocks.filter { it.position.toBlockPos().chunk in sentChunks }) {
+            val shown = Vec3(falling.position.x, falling.position.y + FALLING_BLOCK_NETWORK_OFFSET, falling.position.z)
+            if (shownFallingBlocks.add(falling.id)) packets += AddFallingBlock(falling.id, falling.state.networkId, shown, falling.velocity, FALLING_BLOCK_SIZE)
+            else if (falling.moved) packets += MoveActorAbsolute(falling.id, shown, onGround = false)
+        }
+        if (packets.isNotEmpty()) send(*packets.toTypedArray())
+    }
+
+    /**
+     * Takes away the falling blocks the client has that landed, or are out
+     * of view. Run once a tick, after the blocks that landed show where they
+     * landed, so the client never has neither.
+     */
+    fun hideFallingBlocks() {
+        if (state != State.IN_GAME) return
+        val inView = world.fallingBlocks.filter { it.position.toBlockPos().chunk in sentChunks }.mapTo(HashSet()) { it.id }
+        val gone = shownFallingBlocks.filter { it !in inView }
+        if (gone.isEmpty()) return
+        shownFallingBlocks.removeAll(gone.toSet())
+        send(*gone.map(::RemoveActor).toTypedArray())
+    }
+
     /** The player's experience level, which anvils and enchanting cost. */
     val experienceLevel get() = experience.level
 
@@ -2518,26 +2561,42 @@ private fun Collection<Session>.showAround(packets: List<Pair<BlockPos, ServerPa
 /**
  * Ticks the blocks in [game]'s world, for these players to see if they
  * have the chunks: blocks that lost what held them up a tick ago break,
- * scaffolding moves along, coral out of water dies, big dripleaves tip
- * under the players and items standing on them, pressure plates press
- * under the players, items and orbs on them, pressed buttons pop back
- * out, and pistons move, and push or carry the players in the way of
- * what they move, or on top of it. Spectators press nothing. What breaks drops what it drops, if
- * [dropItems], and what it held either way. Run once a tick.
+ * scaffolding moves along, sand and the like fall, coral out of water
+ * dies, big dripleaves tip under the players and items standing on them,
+ * pressure plates press under the players, items and orbs on them,
+ * pressed buttons pop back out, and pistons move, and push or carry the
+ * players in the way of what they move, or on top of it. Spectators press
+ * nothing. What breaks drops what it drops, if [dropItems], and what it
+ * held either way, and falling blocks that can't land drop as items. Run
+ * once a tick.
  */
 internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) {
     val world = game.world
     val stood = world.stepOn(mapNotNull { it.standingAt } + world.items.filter { it.onGround }.map { it.position })
     val pressed = world.pressPlates(filter { it.isInGame && it.gameMode != GameMode.SPECTATOR }.map { it.feet })
     val ticked = world.tickBlocks()
-    val changes = Changes(ticked.broken, (stood + pressed.reshaped + ticked.reshaped).distinct(), pressed.sounds + ticked.sounds, ticked.data)
+    val changes = Changes(ticked.broken, (stood + pressed.reshaped + ticked.reshaped).distinct(), pressed.sounds + ticked.sounds, ticked.data, events = ticked.events)
     val packets = if (changes.isEmpty) emptyList() else world.packetsFor(changes)
+    // A block that starts falling shows falling before it goes from where it was, and one that lands shows where it landed before it stops falling.
+    forEach { it.showFallingBlocks() }
     forEach { listOf(it).showAround(it.pistonView(packets)) }
+    forEach { it.hideFallingBlocks() }
     if (ticked.broken.isNotEmpty() || ticked.moved.isNotEmpty()) forEach { it.containerBroke(ticked.broken.keys + ticked.moved) }
     val players = filter { it.isInGame }
     val motions = world.pistonMotions(players.associate { it.entityId to it.feet })
     players.forEach { it.pushedByPistons(motions[it.entityId]) }
     changes.broken.forEach { (pos, broken) -> game.dropBroken(pos, broken, harvested = dropItems) }
+    ticked.dropped.forEach { (at, state) -> game.dropFallen(at, state) }
+}
+
+/**
+ * Drops the block [state] that fell to [at] and couldn't land there, as
+ * its item, as the game does whatever the game mode: snow as a single
+ * snowball, however deep it was.
+ */
+private fun GameData.dropFallen(at: Vec3, state: BlockState) {
+    val stacks = if (state.name == SNOW_LAYER) listOfNotNull(items.of(SNOWBALL)) else drops.of(state)
+    world.dropFromBlock(at.toBlockPos(), stacks)
 }
 
 /**
@@ -2648,6 +2707,7 @@ private fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPa
     changes.broken.flatMap { (pos, broken) ->
         listOf(pos to UpdateBlock(pos, AIR_NETWORK_ID), pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
     } + changes.reshaped.flatMap(::withData) + changes.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) } +
+        changes.events.map { it.pos to LevelEvent(it.event, it.pos.centre, it.data) } +
         changes.data.mapNotNull { pos -> blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) } }
 
 /** The block at [pos] as it is now, followed by the data it keeps, if any. */

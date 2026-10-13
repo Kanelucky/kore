@@ -115,7 +115,7 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 ## ✨ What Works
 
 - **World:** the vanilla flat world, streamed to players as they move, and saved every minute and on stop in the game's own format, in `worlds/`, so it opens in the game too. Players keep where they were and what they had.
-- **Building and mining:** placing blocks with the game's rules for slabs, stairs, doors, rails, fences, walls, scaffolding and the like; survival mining at the right pace, tool wear, and drops.
+- **Building and mining:** placing blocks with the game's rules for slabs, stairs, doors, rails, fences, walls, scaffolding and the like; sand, gravel, concrete powder, anvils, snow and hanging dripstone falling; survival mining at the right pace, tool wear, and drops.
 - **Items and inventory:** dropped items, picking up and merging, the creative inventory, and server-authoritative inventories.
 - **Containers and workstations:** chests, barrels, shulker boxes and ender chests; crafting; furnaces and brewing stands; stonecutters, smithing tables, anvils, grindstones, looms, enchanting tables and cartography tables; hoppers, dispensers, droppers and crafters; lecterns, and writing and signing books; beacons and their powers; experience.
 - **Maps:** drawn as players explore, locator maps, and zooming out, copying and locking them.

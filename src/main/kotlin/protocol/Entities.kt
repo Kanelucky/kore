@@ -74,6 +74,39 @@ data class AddExperienceOrb(val entityId: Long, val position: Vec3, val velocity
     }
 }
 
+/**
+ * A falling block appearing to the client: the entity [entityId], drawn
+ * as the block [block], by its network ID, [size] each way, at [position]
+ * and moving at [velocity] blocks a tick.
+ */
+data class AddFallingBlock(val entityId: Long, val block: Int, val position: Vec3, val velocity: Vec3, val size: Float) : ServerPacket {
+    override val id get() = ADD_ACTOR
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarLong(entityId)
+        out.writeVarULong(entityId)
+        out.writeString("minecraft:falling_block")
+        out.writeVec3(position)
+        out.writeVec3(velocity)
+        out.writeFloatLE(0f).writeFloatLE(0f) // Pitch and yaw
+        out.writeFloatLE(0f) // Head yaw
+        out.writeFloatLE(0f) // Body yaw
+        out.writeVarUInt(0) // Attributes
+        out.writeActorData(
+            listOf(
+                // Falling, but not colliding: the server says where it is, and it starts inside the block it was.
+                flagsItem(setOf(ActorFlag.HAS_GRAVITY)),
+                IntItem(ActorDataId.VARIANT, block),
+                FloatItem(ActorDataId.WIDTH, size),
+                FloatItem(ActorDataId.HEIGHT, size),
+            ),
+        )
+        out.writeVarUInt(0) // Int properties
+        out.writeVarUInt(0) // Float properties
+        out.writeVarUInt(0) // Entities it rides or is ridden by
+    }
+}
+
 /** An entity gone from the client's world, by its unique ID. */
 data class RemoveActor(val entityId: Long) : ServerPacket {
     override val id get() = REMOVE_ACTOR

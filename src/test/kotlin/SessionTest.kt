@@ -41,6 +41,7 @@ import org.koremc.protocol.writeBlockPos
 import org.koremc.protocol.writeByteArray
 import org.koremc.protocol.writeString
 import org.koremc.protocol.writeVarInt
+import org.koremc.protocol.readVarUInt
 import org.koremc.protocol.writeVarUInt
 import org.koremc.protocol.writeVarULong
 import org.koremc.registry.AIR
@@ -82,6 +83,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private const val PROTOCOL = 2193
+
+// Packet IDs, for telling apart what the client got.
+private const val ADD_ACTOR = 13
+private const val REMOVE_ACTOR = 14
 
 // Input flags, by their numbers in PlayerAuthInput.
 private const val SNEAKING = 8
@@ -143,7 +148,8 @@ class SessionTest {
             "minecraft:connection_west" to (joins shr 1).toByte(),
         )
     }
-    private val palette = BlockPalette(listOf(air, stone, planks, torch) + levers + buttons + doors + fences)
+    private val sand = BlockState("minecraft:sand", NbtMap.EMPTY, version = 18168865)
+    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand) + levers + buttons + doors + fences)
     private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
@@ -558,6 +564,27 @@ class SessionTest {
         assertContentEquals(UpdateBlock(BlockPos(0, -63, 1), AIR_NETWORK_ID).encode(), block[0])
         assertContentEquals(UpdateBlock(BlockPos(-1, -63, 1), AIR_NETWORK_ID).encode(), fallen[0])
         assertContentEquals(LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, Vec3(-0.5f, -62.5f, 1.5f), torch.networkId).encode(), fallen[1])
+    }
+
+    @Test
+    fun `a block that starts falling shows falling before it goes from where it was, and where it lands before it stops falling`() {
+        spawn()
+        val from = BlockPos(1, -60, 0)
+        world[from] = sand
+        fun packetId(packet: ByteArray) = Unpooled.wrappedBuffer(packet).readVarUInt() and 0x3FF
+
+        repeat(3) { listOf(session).tickBlocks(game, dropItems = false) }
+        val started = sent.flatMap { batches.decode(it) }
+        val appeared = started.indexOfFirst { packetId(it) == ADD_ACTOR }
+        val left = started.indexOfFirst { it.contentEquals(UpdateBlock(from, AIR_NETWORK_ID).encode()) }
+        assertTrue(appeared in 0 until left, "the falling block appears at $appeared, before the block goes at $left")
+
+        sent.clear()
+        while (world.fallingBlocks.isNotEmpty()) listOf(session).tickBlocks(game, dropItems = false)
+        val landed = sent.flatMap { batches.decode(it) }
+        val placed = landed.indexOfFirst { it.contentEquals(UpdateBlock(BlockPos(1, -63, 0), sand.networkId).encode()) }
+        val gone = landed.indexOfFirst { packetId(it) == REMOVE_ACTOR }
+        assertTrue(placed in 0 until gone, "the block lands at $placed, before the falling block goes at $gone")
     }
 
     @Test

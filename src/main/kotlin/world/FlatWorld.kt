@@ -66,6 +66,7 @@ class FlatWorld(
 
     private val itemEntities = LinkedHashMap<Long, ItemEntity>()
     private val orbEntities = LinkedHashMap<Long, ExperienceOrb>()
+    private val fallingEntities = LinkedHashMap<Long, FallingBlock>()
     private var nextEntityId = 1L
 
     /** The items lying in the world, oldest first. */
@@ -73,6 +74,12 @@ class FlatWorld(
 
     /** The experience orbs in the world, oldest first. */
     val orbs: Collection<ExperienceOrb> get() = orbEntities.values
+
+    /** The blocks falling, oldest first. */
+    val fallingBlocks: Collection<FallingBlock> get() = fallingEntities.values
+
+    /** Where blocks changed since falling blocks were last looked for, and the blocks above them, which may have nothing under them now. */
+    internal val fallChecks = LinkedHashSet<BlockPos>()
 
     init {
         require(layers.size < SUB_CHUNK_COUNT * 16) { "${layers.size} layers leave no room to stand in the overworld" }
@@ -137,6 +144,14 @@ class FlatWorld(
         orbEntities.remove(id)
     }
 
+    /** Sets [state] falling from [position], having started at the height [fromY], moving at [velocity]. */
+    fun spawnFallingBlock(state: BlockState, position: Vec3, fromY: Int, velocity: Vec3 = Vec3(0f, 0f, 0f)): FallingBlock =
+        FallingBlock(newEntityId(), state, position, fromY, velocity).also { fallingEntities[it.id] = it }
+
+    fun removeFallingBlock(id: Long) {
+        fallingEntities.remove(id)
+    }
+
     /**
      * Puts [state] at [pos], which must be within the overworld's height.
      * Putting a block of another kind there forgets the block entity the
@@ -163,6 +178,8 @@ class FlatWorld(
         if (state.isComparator) comparators += pos else comparators -= pos
         if (state.name == BEACON) beacons.putIfAbsent(pos, 0)
         powerChanges += pos
+        fallChecks += pos
+        fallChecks += pos.side(Face.UP)
     }
 
     /** Where blocks changed since redstone last looked, which may have powered something, or stopped powering it. */
