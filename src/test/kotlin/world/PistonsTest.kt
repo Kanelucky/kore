@@ -4,6 +4,9 @@ import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.AIR
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
+import org.koremc.registry.ItemDefinition
+import org.koremc.registry.ItemStack
+import org.koremc.registry.ItemVersion
 import kotlin.math.roundToInt
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -63,6 +66,16 @@ class PistonsTest {
     }
 
     private val up = Vec3(0f, 0.5f, 0f)
+
+    private val cobblestone = ItemDefinition("minecraft:cobblestone", 1, componentBased = false, ItemVersion.NONE)
+
+    /** Ticks the world's blocks, items, orbs and power [times], as the server does. */
+    private fun tickAll(times: Int = 1) = repeat(times) {
+        world.tickBlocks()
+        world.tickItems()
+        world.tickOrbs(emptyList())
+        world.updatePower()
+    }
 
     /** Switches the lever beside the piston, and waits for the piston to finish moving. */
     private fun switch(on: Boolean) {
@@ -311,6 +324,62 @@ class PistonsTest {
         tick(2)
         assertNull(world.movingFrom(BlockPos(0, -60, 0), Vec3(0.5f, -60f, 0.5f)))
         assertEquals(BlockPos(0, -62, 0), world.movingFrom(BlockPos(0, -61, 0), Vec3(2.5f, -63f, 0.5f))?.first) // Only the head moved in under it
+    }
+
+    @Test
+    fun `an item on a block a piston pushes up rises with it, half a block a tick, seen there at once, and lies on it where it lands`() {
+        placePiston(Face.UP)
+        world[BlockPos(0, -62, 0)] = stone
+        val item = world.spawnItem(ItemStack(cobblestone), Vec3(0.5f, -61f, 0.5f), Vec3(0f, 0f, 0f), 0)
+        tickAll(5)
+        world[lever] = levers[1]
+        world.updatePower()
+
+        val heights = (1..6).map { tickAll(); item.position.y to item.snapped }
+        assertEquals(listOf(-61f to false, -61f to false, -60.5f to true, -60f to true, -60f to false, -60f to false), heights)
+        assertEquals(stone, world.stateAt(BlockPos(0, -61, 0)))
+    }
+
+    @Test
+    fun `an item on a piston's head falls as it pulls back in, rather than going down with it`() {
+        placePiston(Face.UP)
+        switch(on = true)
+        val item = world.spawnItem(ItemStack(cobblestone), Vec3(0.5f, -61f, 0.5f), Vec3(0f, 0f, 0f), 0)
+        tickAll(5)
+        world[lever] = levers[0]
+        world.updatePower()
+
+        val heights = (1..20).map { tickAll(); item.position.y }
+        // The head goes, and the item falls from where it was, slower at first than the head goes.
+        assertTrue(heights[3] > -61.5f, "it's at ${heights[3]}")
+        assertEquals(-62f, heights.last())
+        assertTrue(heights.zipWithNext().all { (a, b) -> b <= a })
+    }
+
+    @Test
+    fun `a block a piston pushes sideways carries the item on it, and pushes an orb in its way as far as it goes beyond it`() {
+        placePiston()
+        world[east(1)] = stone
+        val item = world.spawnItem(ItemStack(cobblestone), Vec3(1.5f, -62f, 0.5f), Vec3(0f, 0f, 0f), 0)
+        // An orb's a quarter of a block across, so 0.375 blocks from the stone.
+        val orb = world.spawnOrb(1, Vec3(2.5f, -63f, 0.5f), Vec3(0f, 0f, 0f))
+        tickAll(5)
+        world[lever] = levers[1]
+        world.updatePower()
+        tickAll(6)
+
+        assertEquals(stone, world.stateAt(east(2)))
+        assertEquals(Vec3(2.5f, -62f, 0.5f), item.position)
+        assertEquals(Vec3(3.125f, -63f, 0.5f), orb.position)
+    }
+
+    @Test
+    fun `an item lands on a piston's head`() {
+        placePiston(Face.UP)
+        switch(on = true)
+        val item = world.spawnItem(ItemStack(cobblestone), Vec3(0.5f, -60f, 0.5f), Vec3(0f, 0f, 0f), 0)
+        repeat(20) { world.tickItems() }
+        assertEquals(-61f, item.position.y)
     }
 
     @Test

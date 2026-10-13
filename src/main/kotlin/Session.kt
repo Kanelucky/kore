@@ -1586,7 +1586,7 @@ class Session(
         for (orb in inView) {
             val shown = Vec3(orb.position.x, orb.position.y + ITEM_NETWORK_OFFSET, orb.position.z)
             if (orb.id !in shownOrbs) packets += AddExperienceOrb(orb.id, shown, orb.velocity, orb.value)
-            else if (orb.moved) packets += MoveActorAbsolute(orb.id, shown, orb.onGround)
+            else if (orb.moved) packets += MoveActorAbsolute(orb.id, shown, orb.onGround, teleport = orb.snapped)
         }
         shownOrbs.retainAll(ids)
         shownOrbs += ids
@@ -1650,7 +1650,7 @@ class Session(
                 packets += AddItemActor(item.id, item.stack, item.position, item.velocity)
                 continue
             }
-            if (item.moved) packets += MoveActorAbsolute(item.id, Vec3(item.position.x, item.position.y + ITEM_NETWORK_OFFSET, item.position.z), item.onGround)
+            if (item.moved) packets += MoveActorAbsolute(item.id, Vec3(item.position.x, item.position.y + ITEM_NETWORK_OFFSET, item.position.z), item.onGround, teleport = item.snapped)
             if (item.restacked) packets += ActorEvent(item.id, ActorEvent.UPDATE_STACK_SIZE, item.stack.count)
         }
         shownItems.retainAll(ids)

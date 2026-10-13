@@ -48,6 +48,17 @@ class ExperienceOrb(val id: Long, val value: Int, position: Vec3, velocity: Vec3
     var moved = false
         private set
 
+    /** Whether a piston moved it this tick, which holds it up until the piston's done. */
+    private var pushed = false
+
+    /**
+     * Whether a piston moved it in the last tick, so those who see it need
+     * to see it there at once, keeping up with the piston, rather than
+     * have it glide there after.
+     */
+    var snapped = false
+        private set
+
     private var age = 0
 
     /** Moves the orb along a tick, pulled towards whichever of [players], by their feet, is nearest. Returns whether it's still there. */
@@ -56,7 +67,7 @@ class ExperienceOrb(val id: Long, val value: Int, position: Vec3, velocity: Vec3
         if (age >= ORB_LIFETIME || position.y < MIN_Y - ORB_VOID_DEPTH) return false
 
         var vx = velocity.x.toDouble()
-        var vy = velocity.y - ORB_GRAVITY
+        var vy = velocity.y - if (pushed) 0.0 else ORB_GRAVITY
         var vz = velocity.z.toDouble()
         val target = players.minByOrNull { distanceSquared(it) }
         if (target != null) {
@@ -89,8 +100,21 @@ class ExperienceOrb(val id: Long, val value: Int, position: Vec3, velocity: Vec3
         val friction = if (onGround) ORB_DRAG * ORB_GROUND_FRICTION else ORB_DRAG
         velocity = Vec3((vx * friction).toFloat(), (vy * ORB_DRAG).toFloat(), (vz * friction).toFloat())
         position = box.bottom()
-        moved = position != start
+        moved = pushed || position != start
+        snapped = pushed
+        pushed = false
         return true
+    }
+
+    /**
+     * Pushes it [by] along [axis], as a piston does, as far as the blocks in
+     * its way let it, stopping it that way and holding it up for the tick,
+     * so it keeps pace with the piston.
+     */
+    internal fun pushBy(world: FlatWorld, axis: Axis, by: Double) {
+        position = world.pushed(position, axis, by)
+        velocity = velocity.stoppedAlong(axis)
+        pushed = true
     }
 
     /** How far, squared, the orb is from where it aims at a player standing at [feet], or as far as can be once they're out of its range. */

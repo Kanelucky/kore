@@ -94,22 +94,24 @@ data class TakeItemActor(val itemId: Long, val takerId: Long) : ServerPacket {
 }
 
 /**
- * An entity at a new [position], which the client moves it to smoothly.
- * The position is the client's for the entity, which for an item is an
+ * An entity at a new [position], which the client moves it to smoothly
+ * over a few ticks, or, for a [teleport], puts it at at once. The
+ * position is the client's for the entity, which for an item is an
  * eighth of a block above where it lies.
  */
-data class MoveActorAbsolute(val entityId: Long, val position: Vec3, val onGround: Boolean) : ServerPacket {
+data class MoveActorAbsolute(val entityId: Long, val position: Vec3, val onGround: Boolean, val teleport: Boolean = false) : ServerPacket {
     override val id get() = MOVE_ACTOR_ABSOLUTE
 
     override fun encodeBody(out: ByteBuf) {
         out.writeVarULong(entityId)
-        out.writeByte(if (onGround) ON_GROUND else 0)
+        out.writeByte((if (onGround) ON_GROUND else 0) or (if (teleport) TELEPORT else 0))
         out.writeVec3(position)
         out.writeZero(3) // Pitch, yaw and head yaw, a byte each, which an item doesn't have
     }
 
     private companion object {
         const val ON_GROUND = 0b1
+        const val TELEPORT = 0b10
     }
 }
 

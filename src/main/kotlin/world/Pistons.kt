@@ -96,6 +96,9 @@ class PistonArm(val sticky: Boolean) {
 
     /** The players it moves along with what it moves, by entity ID, settled once it starts. */
     internal var riders: Map<Long, Rider>? = null
+
+    /** The items and orbs it moves along with what it moves, by entity ID, settled as it starts. */
+    internal var bodies: Map<Long, Rider> = emptyMap()
     internal val moved = mutableListOf<BlockPos>()
     internal val landing = LinkedHashMap<BlockPos, BlockState>()
 
@@ -171,6 +174,9 @@ internal fun FlatWorld.movePiston(pos: BlockPos, state: BlockState, broken: Muta
     arm.extending = powered
     arm.moving = true
     arm.riders = null
+    val direction = if (powered) facing else facing.opposite
+    arm.bodies = (items.map { it.id to it.position } + orbs.map { it.id to it.position })
+        .mapNotNull { (id, at) -> gapTo(pos, arm, facing, direction, Box.around(at), carriedDown = false)?.let { id to Rider(it) } }.toMap()
     arm.progress = if (powered) 0f else 1f
     arm.lastProgress = arm.progress
     setBlockEntity(pos, arm.data())
@@ -229,6 +235,7 @@ internal fun FlatWorld.movePistonArms(reshaped: MutableCollection<BlockPos>, dat
         if (!arm.moving) continue
         arm.lastProgress = arm.progress
         arm.progress = if (arm.extending) minOf(1f, arm.progress + ARM_STEP) else maxOf(0f, arm.progress - ARM_STEP)
+        stateAt(pos)?.takeIf { it.isPiston }?.let { pushBodies(arm, if (arm.extending) it.pistonFacing else it.pistonFacing.opposite) }
         if (arm.progress == if (arm.extending) 1f else 0f) {
             arm.lastProgress = arm.progress
             land(arm, reshaped)
@@ -237,6 +244,26 @@ internal fun FlatWorld.movePistonArms(reshaped: MutableCollection<BlockPos>, dat
         }
         setBlockEntity(pos, arm.data())
         data += pos
+    }
+}
+
+/**
+ * Moves the items and orbs [arm] moves along with what it moves as far as
+ * it went this tick, [direction]: those on top of what it moves as far as
+ * it went, and those in the way as far as it went beyond where it met
+ * them, as far as the blocks in their way let them. The server moves
+ * them itself, so they keep pace with the arm, rather than a tick ahead
+ * of it as players do.
+ */
+private fun FlatWorld.pushBodies(arm: PistonArm, direction: Face) {
+    fun gone(progress: Float) = (if (arm.extending) progress else 1 - progress).toDouble()
+    val from = gone(arm.lastProgress)
+    val to = gone(arm.progress)
+    for ((id, rider) in arm.bodies) {
+        val by = maxOf(rider.gap, to) - maxOf(rider.gap, from)
+        if (by <= 0.0) continue
+        val signed = if (direction.dx + direction.dy + direction.dz > 0) by else -by
+        itemWith(id)?.pushBy(this, direction.boxAxis, signed) ?: orbWith(id)?.pushBy(this, direction.boxAxis, signed)
     }
 }
 
@@ -283,7 +310,7 @@ internal fun FlatWorld.pistonMotions(feet: Map<Long, Vec3>): Map<Long, Vec3> {
         if (!arm.moving) continue
         val facing = stateAt(pos)?.takeIf { it.isPiston }?.pistonFacing ?: continue
         val direction = if (arm.extending) facing else facing.opposite
-        val riders = arm.riders ?: feet.mapNotNull { (id, at) -> gapTo(pos, arm, facing, direction, playerBox(at))?.let { id to Rider(it) } }.toMap().also {
+        val riders = arm.riders ?: feet.mapNotNull { (id, at) -> gapTo(pos, arm, facing, direction, playerBox(at), carriedDown = true)?.let { id to Rider(it) } }.toMap().also {
             if (it.isNotEmpty()) log.debug("Piston at {} facing {} moves players {}", pos, facing, it.mapValues { (id, rider) -> "${feet[id]}, ${rider.gap} away" })
             arm.riders = it
         }
@@ -305,28 +332,35 @@ private fun faster(a: Float, b: Float) = if (abs(b) > abs(a)) b else a
 
 /**
  * How far what the arm at [pos], facing [facing] and starting to move
- * [direction], goes before it meets the player in [player]: none for one
- * standing on top of what it moves, and for one in the way of that or of
- * its head, the gap between them. Null if it doesn't meet them. Pushing
- * out, the head starts inside the piston, and carries no one along, and
- * pulling back in, it slides out from under those on it but going down.
+ * [direction], goes before it meets what's in [box]: none for something
+ * on top of what it moves, and for something in the way of that or of its
+ * head, the gap between them. Null if it doesn't meet it. Pushing out,
+ * the head starts inside the piston, and carries nothing along, and
+ * pulling back in, it slides out from under what's on it but going down.
+ * Going down, it carries what's on top along only if [carriedDown]:
+ * players, who'd otherwise hang in the air a moment, while items fall.
  */
-private fun FlatWorld.gapTo(pos: BlockPos, arm: PistonArm, facing: Face, direction: Face, player: Box): Double? {
+private fun FlatWorld.gapTo(pos: BlockPos, arm: PistonArm, facing: Face, direction: Face, box: Box, carriedDown: Boolean): Double? {
     val blocks = arm.landing.mapNotNull { (to, state) -> state.solidHeights()?.let { blockBox(to.side(direction.opposite), it) } }
     val head = blockBox(if (arm.extending) pos else pos.side(facing), 0.0..1.0)
-    val carrying = if (direction == Face.DOWN && !arm.extending) blocks + head else blocks
-    if (carrying.any { it.carries(player) }) return 0.0
-    return (blocks + head).mapNotNull { it.gapAlong(direction, player) }.minOrNull()
+    val carrying = when {
+        direction != Face.DOWN -> blocks
+        !carriedDown -> emptyList()
+        arm.extending -> blocks
+        else -> blocks + head
+    }
+    if (carrying.any { it.carries(box) }) return 0.0
+    return (blocks + head).mapNotNull { it.gapAlong(direction, box) }.minOrNull()
 }
 
 /**
- * How far this box goes [direction] before it meets [player], if [player]
- * is in its way within a block: from its front to the back of the player.
+ * How far this box goes [direction] before it meets [other], if [other] is
+ * in its way within a block: from its front to the back of the other.
  */
-private fun Box.gapAlong(direction: Face, player: Box): Double? {
-    if (!path(direction).overlaps(player)) return null
-    val axis = if (direction.dx != 0) 0 else if (direction.dy != 0) 1 else 2
-    val gap = if (direction.dx + direction.dy + direction.dz > 0) player.min[axis] - max[axis] else min[axis] - player.max[axis]
+private fun Box.gapAlong(direction: Face, other: Box): Double? {
+    if (!path(direction).overlaps(other)) return null
+    val axis = direction.boxAxis.ordinal
+    val gap = if (direction.dx + direction.dy + direction.dz > 0) other.min[axis] - max[axis] else min[axis] - other.max[axis]
     return gap.coerceAtLeast(0.0)
 }
 
@@ -371,9 +405,12 @@ private fun playerBox(feet: Vec3): Box {
 private fun blockBox(pos: BlockPos, heights: ClosedFloatingPointRange<Double>) =
     Box(doubleArrayOf(pos.x.toDouble(), pos.y + heights.start, pos.z.toDouble()), doubleArrayOf(pos.x + 1.0, pos.y + heights.endInclusive, pos.z + 1.0))
 
+/** The axis a face is across, as boxes number them. */
+private val Face.boxAxis get() = if (dx != 0) Axis.X else if (dy != 0) Axis.Y else Axis.Z
+
 /** The space this box moves through going a block [direction]. */
 private fun Box.path(direction: Face): Box {
-    val axis = if (direction.dx != 0) 0 else if (direction.dy != 0) 1 else 2
+    val axis = direction.boxAxis.ordinal
     val from = min.copyOf()
     val to = max.copyOf()
     if (direction.dx + direction.dy + direction.dz > 0) {
@@ -386,9 +423,9 @@ private fun Box.path(direction: Face): Box {
     return Box(from, to)
 }
 
-/** Whether [player] stands on top of this box, near enough to ride along as it moves. */
-private fun Box.carries(player: Box) = player.min[1] in max[1] - CARRY_SINK..max[1] + CARRY_REACH &&
-    player.max[0] > min[0] && player.min[0] < max[0] && player.max[2] > min[2] && player.min[2] < max[2]
+/** Whether [other] stands on top of this box, near enough to ride along as it moves. */
+private fun Box.carries(other: Box) = other.min[1] in max[1] - CARRY_SINK..max[1] + CARRY_REACH &&
+    other.max[0] > min[0] && other.min[0] < max[0] && other.max[2] > min[2] && other.min[2] < max[2]
 
 /** The block [steps] blocks away on its [face] side. */
 private fun BlockPos.side(face: Face, steps: Int) = BlockPos(x + face.dx * steps, y + face.dy * steps, z + face.dz * steps)

@@ -66,6 +66,17 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
     var moved = false
         private set
 
+    /** Whether a piston moved it this tick, which holds it up until the piston's done. */
+    private var pushed = false
+
+    /**
+     * Whether a piston moved it in the last tick, so those who see it need
+     * to see it there at once, keeping up with the piston, rather than
+     * have it glide there after.
+     */
+    var snapped = false
+        private set
+
     /**
      * Whether its stack changed since the last tick began, by merging or
      * being partly picked up, so those who see it need to hear how many it
@@ -89,7 +100,7 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
         if (age >= ITEM_LIFETIME || position.y < MIN_Y - VOID_DEPTH) return false
 
         var (vx, vy, vz) = velocity.toDoubles()
-        vy -= GRAVITY
+        if (!pushed) vy -= GRAVITY
         val start = position
         var box = Box.around(position)
         val dy = world.clip(box, Axis.Y, vy)
@@ -107,8 +118,21 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
         val friction = if (onGround) DRAG * GROUND_FRICTION else DRAG
         velocity = Vec3((vx * friction).toFloat(), (vy * DRAG).toFloat(), (vz * friction).toFloat())
         position = box.bottom()
-        moved = position != start
+        moved = pushed || position != start
+        snapped = pushed
+        pushed = false
         return true
+    }
+
+    /**
+     * Pushes it [by] along [axis], as a piston does, as far as the blocks in
+     * its way let it, stopping it that way and holding it up for the tick,
+     * so it keeps pace with the piston.
+     */
+    internal fun pushBy(world: FlatWorld, axis: Axis, by: Double) {
+        position = world.pushed(position, axis, by)
+        velocity = velocity.stoppedAlong(axis)
+        pushed = true
     }
 
     /**
@@ -226,6 +250,23 @@ internal fun FlatWorld.clip(box: Box, axis: Axis, by: Double): Double {
 private fun blocksAcross(box: Box, axis: Int) = floor(box.min[axis]).toInt()..floor(box.max[axis] - TOUCHING).toInt()
 
 /**
+ * Where something a quarter of a block each way, an item or an orb,
+ * standing at [bottom], ends up pushed [by] along [axis], as far as the
+ * blocks in its way let it.
+ */
+internal fun FlatWorld.pushed(bottom: Vec3, axis: Axis, by: Double): Vec3 {
+    val box = Box.around(bottom)
+    return box.shifted(axis, clip(box, axis, by)).bottom()
+}
+
+/** This motion, but none along [axis]. */
+internal fun Vec3.stoppedAlong(axis: Axis) = when (axis) {
+    Axis.X -> Vec3(0f, y, z)
+    Axis.Y -> Vec3(x, 0f, z)
+    Axis.Z -> Vec3(x, y, 0f)
+}
+
+/**
  * Whether something [width] across and [height] tall, standing at
  * [bottom], would be clear of the solid part of every block, by the same
  * reckoning items fall by.
@@ -277,6 +318,6 @@ private val PARTIAL_HEIGHTS = mapOf(
     "daylight_detector" to 6, "daylight_detector_inverted" to 6, "campfire" to 7, "soul_campfire" to 7,
     "powered_repeater" to 2, "unpowered_repeater" to 2, "powered_comparator" to 2, "unpowered_comparator" to 2, "cauldron" to 4,
 ).mapValues { it.value / 16.0 }
-private val PARTIAL_HEIGHT_ENDINGS = listOf("chest" to 14, "carpet" to 1, "anvil" to 16).map { (ending, sixteenths) -> ending to sixteenths / 16.0 }
+private val PARTIAL_HEIGHT_ENDINGS = listOf("chest" to 14, "carpet" to 1, "anvil" to 16, "piston_arm_collision" to 16).map { (ending, sixteenths) -> ending to sixteenths / 16.0 }
 
 private fun Vec3.toDoubles() = Triple(x.toDouble(), y.toDouble(), z.toDouble())
