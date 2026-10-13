@@ -20,6 +20,7 @@ class PistonsTest {
     private val movingBlock = state("minecraft:moving_block")
     private val levers = (0..1).map { on -> state("minecraft:lever", "lever_direction" to "up_east_west", "open_bit" to on.toByte()) }
     private val observers = listOf(false, true).map { state(OBSERVER, "minecraft:facing_direction" to "up", "powered_bit" to bit(it)) }
+    private val westObservers = listOf(false, true).map { state(OBSERVER, "minecraft:facing_direction" to "west", "powered_bit" to bit(it)) }
 
     /** Facings as pistons store them, sideways the wrong way round. */
     private fun stored(facing: Face) = if (facing.horizontal) facing.opposite.ordinal else facing.ordinal
@@ -28,7 +29,7 @@ class PistonsTest {
         state(if (sticky) "minecraft:sticky_piston_arm_collision" else "minecraft:piston_arm_collision", FACING_DIRECTION to stored(facing))
 
     private val palette = BlockPalette(
-        listOf(air, stone, obsidian, slime, torch, movingBlock) + levers + observers +
+        listOf(air, stone, obsidian, slime, torch, movingBlock) + levers + observers + westObservers +
             Face.entries.flatMap { facing -> listOf(false, true).flatMap { sticky -> listOf(piston(facing, sticky), head(facing, sticky)) } },
     )
 
@@ -161,6 +162,20 @@ class PistonsTest {
         assertEquals(observers[0], world.stateAt(east(2))) // Landed, and waiting to pulse
         tick(2)
         assertEquals(observers[1], world.stateAt(east(2)))
+    }
+
+    @Test
+    fun `an observer's pulse pushes a piston out, though it's over before the piston moves, which then pulls back in`() {
+        placePiston()
+        // Behind the piston, watching west, its back into the piston.
+        world[east(-1)] = westObservers[0]
+        world.updatePower()
+        world[east(-2)] = stone
+        world.updatePower()
+
+        val out = (1..15).map { tick(); world.stateAt(east(1)) == head(Face.EAST) }
+        assertTrue(out.any { it })
+        assertEquals(air, world.stateAt(east(1)))
     }
 
     @Test

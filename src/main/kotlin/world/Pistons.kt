@@ -1,7 +1,6 @@
 package org.koremc.world
 
 import org.cloudburstmc.nbt.NbtMap
-import org.cloudburstmc.nbt.NbtType
 import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
 
@@ -72,13 +71,20 @@ class PistonArm(val sticky: Boolean) {
         internal set
     var moving = false
         internal set
+
+    /**
+     * Whether power had reached the piston when it saw the power change,
+     * which it moves by once it looks again, though a pulse, like an
+     * observer's, may be over by then.
+     */
+    internal var pending: Boolean? = null
     internal val moved = mutableListOf<BlockPos>()
     internal val landing = LinkedHashMap<BlockPos, BlockState>()
 
     /** The state the client draws the arm in: in, moving out, out, or moving in. */
     private val state: Byte get() = (if (extending) if (moving) 1 else 2 else if (moving) 3 else 0).toByte()
 
-    /** The arm as its block entity, as the game keeps it. */
+    /** The arm as its block entity, as the client takes it: the blocks it's moving where they started, one coordinate after another. */
     fun data(): NbtMap = NbtMap.builder()
         .putString("id", "PistonArm")
         .putFloat("Progress", progress)
@@ -87,8 +93,7 @@ class PistonArm(val sticky: Boolean) {
         .putByte("NewState", state)
         .putBoolean("Sticky", sticky)
         .putBoolean("isMovable", !extending && !moving)
-        .putList("AttachedBlocks", NbtType.INT, moved.flatMap { listOf(it.x, it.y, it.z) })
-        .putList("BreakBlocks", NbtType.INT, emptyList())
+        .putIntArray("AttachedBlocks", moved.flatMap { listOf(it.x, it.y, it.z) }.toIntArray())
         .build()
 }
 
@@ -103,8 +108,8 @@ internal fun FlatWorld.pistonPowered(pos: BlockPos, state: BlockState): Boolean 
 }
 
 /**
- * Pushes the piston at [pos] out, if power has reached it, or pulls it
- * back in, if the power's gone, when it looks again a moment after it
+ * Pushes the piston at [pos] out, if power had reached it, or pulls it
+ * back in, if the power had gone, when it looks again a moment after it
  * changed. Pushing out, it moves what's in front of it, up to twelve
  * blocks, and anything slime or honey drags along, and breaks what can't
  * be moved but breaks. Nothing moves, and it stays in, if something in the
@@ -117,7 +122,8 @@ internal fun FlatWorld.movePiston(pos: BlockPos, state: BlockState, broken: Muta
     redstoneDue -= pos
     if (!state.isPiston) return
     val arm = pistonArm(pos, state)
-    val powered = pistonPowered(pos, state)
+    val powered = arm.pending ?: pistonPowered(pos, state)
+    arm.pending = null
     if (arm.moving || powered == arm.extending) return
     val facing = state.pistonFacing
     val front = pos.side(facing)

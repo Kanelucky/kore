@@ -339,7 +339,9 @@ private fun FlatWorld.answerPower(pos: BlockPos, changed: MutableSet<BlockPos>, 
         }
         state.isPiston -> {
             val arm = pistonArm(pos, state)
-            if (arm.moving || pistonPowered(pos, state) == arm.extending || !redstoneDue.add(pos)) return
+            val powered = pistonPowered(pos, state)
+            if (arm.moving || powered == arm.extending || !redstoneDue.add(pos)) return
+            arm.pending = powered
             schedule(pos, PISTON_DELAY, BlockUpdate.PISTON)
         }
         state.isComparator -> {
