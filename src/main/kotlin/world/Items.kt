@@ -190,6 +190,9 @@ internal class Box(val min: DoubleArray, val max: DoubleArray) {
 
     fun bottom() = Vec3(((min[0] + max[0]) / 2).toFloat(), min[1].toFloat(), ((min[2] + max[2]) / 2).toFloat())
 
+    /** Whether this box and [other] share any space, more than touching. */
+    fun overlaps(other: Box) = (0..2).all { max[it] > other.min[it] + TOUCHING && min[it] < other.max[it] - TOUCHING }
+
     companion object {
         /** The box of an item, or anything else a quarter of a block each way, standing at [bottom]. */
         fun around(bottom: Vec3) = Box(
@@ -248,7 +251,7 @@ fun FlatWorld.isClear(bottom: Vec3, width: Float, height: Float): Boolean {
  * dripleaf's leaf holds items up until it tips right over, and a hopper's
  * bowl holds them in it.
  */
-private fun BlockState.solidHeights(): ClosedFloatingPointRange<Double>? = when {
+internal fun BlockState.solidHeights(): ClosedFloatingPointRange<Double>? = when {
     isFullCube -> 0.0..1.0
     name == HOPPER -> 0.0..HOPPER_BOWL
     name == BIG_DRIPLEAF -> leafHeights()

@@ -10,6 +10,7 @@ private const val ADD_ITEM_ACTOR = 15
 private const val TAKE_ITEM_ACTOR = 17
 private const val MOVE_ACTOR_ABSOLUTE = 18
 private const val ACTOR_EVENT = 27
+private const val SET_ACTOR_MOTION = 40
 private const val INVENTORY_SLOT = 50
 
 /** The window and container ID of a player's own items: the hotbar and the rest of the inventory. */
@@ -109,6 +110,21 @@ data class MoveActorAbsolute(val entityId: Long, val position: Vec3, val onGroun
 
     private companion object {
         const val ON_GROUND = 0b1
+    }
+}
+
+/**
+ * The entity [entityId] set moving by [motion], in blocks a tick, as a
+ * knock or a push sets it going, which the client carries on from as it
+ * moves the entity, its own player too.
+ */
+data class SetActorMotion(val entityId: Long, val motion: Vec3) : ServerPacket {
+    override val id get() = SET_ACTOR_MOTION
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarULong(entityId)
+        out.writeVec3(motion)
+        out.writeVarULong(0) // The server's tick, which only matters to corrections of where the client's player is
     }
 }
 

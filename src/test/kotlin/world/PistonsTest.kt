@@ -4,8 +4,10 @@ import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.AIR
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
+import kotlin.math.roundToInt
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -53,6 +55,14 @@ class PistonsTest {
         world[at] = piston(facing, sticky)
         world.updatePower()
     }
+
+    /** The motions the pistons give players standing at [feet], each by their place in the list, a tick at a time for [ticks] ticks. */
+    private fun motions(ticks: Int, vararg feet: Vec3): List<Map<Long, Vec3>> = (1..ticks).map {
+        tick()
+        world.pistonMotions(feet.withIndex().associate { (i, at) -> i.toLong() to at })
+    }
+
+    private val up = Vec3(0f, 0.5f, 0f)
 
     /** Switches the lever beside the piston, and waits for the piston to finish moving. */
     private fun switch(on: Boolean) {
@@ -203,6 +213,104 @@ class PistonsTest {
         val stops = (1..160).mapNotNull { tick(); (-50..2).firstOrNull { world.stateAt(up(it, 2))?.name == STICKY_PISTON } }.distinct()
         assertEquals((2 downTo stops.last()).toList(), stops)
         assertTrue(stops.last() < -5, "the sticky piston got to x ${stops.last()}")
+    }
+
+    @Test
+    fun `a piston lifts the player on what it pushes up, half a block a tick, a tick ahead of the arm, and a sticky one carries them back down`() {
+        placePiston(Face.UP, sticky = true)
+        world[BlockPos(0, -62, 0)] = stone
+        val aside = Vec3(2.5f, -63f, 0.5f)
+        world[lever] = levers[1]
+        world.updatePower()
+        assertEquals(listOf(emptyMap(), mapOf(0L to up), mapOf(0L to up), emptyMap()), motions(4, Vec3(0.5f, -61f, 0.5f), aside))
+
+        world[lever] = levers[0]
+        world.updatePower()
+        val down = Vec3(0f, -0.5f, 0f)
+        assertEquals(listOf(emptyMap(), mapOf(0L to down), mapOf(0L to down), emptyMap()), motions(4, Vec3(0.5f, -60f, 0.5f), aside))
+    }
+
+    @Test
+    fun `a piston's head lifts the player standing on the piston, and takes them back down with it`() {
+        placePiston(Face.UP)
+        world[lever] = levers[1]
+        world.updatePower()
+        assertEquals(listOf(emptyMap(), mapOf(0L to up), mapOf(0L to up), emptyMap()), motions(4, Vec3(0.5f, -62f, 0.5f)))
+
+        world[lever] = levers[0]
+        world.updatePower()
+        val down = Vec3(0f, -0.5f, 0f)
+        assertEquals(listOf(emptyMap(), mapOf(0L to down), mapOf(0L to down), emptyMap()), motions(4, Vec3(0.5f, -61f, 0.5f)))
+    }
+
+    @Test
+    fun `a piston's head pulling back in sideways slides out from under the player standing on it`() {
+        placePiston()
+        switch(on = true)
+        world[lever] = levers[0]
+        world.updatePower()
+        assertEquals(List(4) { emptyMap() }, motions(4, Vec3(1.5f, -62f, 0.5f)))
+    }
+
+    @Test
+    fun `a piston pushes a player in the way of what it pushes sideways as far as it goes beyond where it meets them, as soon as it can, and carries one standing on it`() {
+        placePiston()
+        world[east(1)] = stone
+        world[lever] = levers[1]
+        world.updatePower()
+        val onTop = Vec3(1.5f, -62f, 0.5f)
+        // A player's back is 0.3 blocks behind where they stand: up against the stone, and only just in its way.
+        val against = Vec3(2.3f, -63f, 0.5f)
+        val justInTheWay = Vec3(2.9f, -63f, 0.5f)
+        val behind = Vec3(-1.5f, -63f, 0.5f)
+        // East, in thousandths of a block a tick.
+        val pushes = motions(4, onTop, against, justInTheWay, behind).map { tick -> tick.mapValues { (_, motion) -> (motion.x * 1000).roundToInt() } }
+        assertEquals(listOf(emptyMap(), mapOf(0L to 500, 1L to 500, 2L to 400), mapOf(0L to 500, 1L to 500), emptyMap()), pushes)
+    }
+
+    @Test
+    fun `a piston lifts a player jumping over what it pushes up only as far as it goes beyond where it meets them`() {
+        placePiston(Face.UP)
+        world[BlockPos(0, -62, 0)] = stone
+        world[lever] = levers[1]
+        world.updatePower()
+        val pushes = motions(4, Vec3(0.5f, -60.7f, 0.5f)).map { tick -> tick.mapValues { (_, motion) -> (motion.y * 1000).roundToInt() } }
+        assertEquals(listOf(emptyMap(), mapOf(0L to 500), mapOf(0L to 200), emptyMap()), pushes)
+    }
+
+    @Test
+    fun `the client would push a player inside a block a piston's moving, or a piston's head, up out of it, but not out of others`() {
+        placePiston(Face.UP)
+        world[BlockPos(0, -62, 0)] = stone
+        world[lever] = levers[1]
+        world.updatePower()
+        tick(2)
+        val onTop = Vec3(0.5f, -61f, 0.5f)
+        assertTrue(world.snapsUp(BlockPos(0, -61, 0), onTop)) // Moving into them
+        assertFalse(world.snapsUp(BlockPos(0, -62, 0), onTop)) // The head, which they're only standing on
+        assertTrue(world.snapsUp(BlockPos(0, -62, 0), Vec3(0.5f, -62f, 0.5f)))
+        assertFalse(world.snapsUp(BlockPos(0, -61, 0), Vec3(2.5f, -63f, 0.5f)))
+
+        // Drawn from where it started, under the head, sliding up as a block pulled down there would slide up from it.
+        val (from, data) = world.movingFrom(BlockPos(0, -61, 0), onTop)!!
+        assertEquals(BlockPos(0, -62, 0), from)
+        assertEquals(listOf(0, -62, 0, 0), listOf(data.getInt("x"), data.getInt("y"), data.getInt("z"), data.getByte("expanding").toInt()))
+        tick(2)
+        assertFalse(world.snapsUp(BlockPos(0, -61, 0), onTop)) // Landed
+        // Out, the head's in the way of a player as any block is, even one the server last saw inside it.
+        assertFalse(world.snapsUp(BlockPos(0, -62, 0), Vec3(0.5f, -62f, 0.5f)))
+    }
+
+    @Test
+    fun `a moving block isn't drawn from where it started if another moves in there`() {
+        placePiston(Face.UP)
+        world[BlockPos(0, -62, 0)] = stone
+        world[BlockPos(0, -61, 0)] = stone
+        world[lever] = levers[1]
+        world.updatePower()
+        tick(2)
+        assertNull(world.movingFrom(BlockPos(0, -60, 0), Vec3(0.5f, -60f, 0.5f)))
+        assertEquals(BlockPos(0, -62, 0), world.movingFrom(BlockPos(0, -61, 0), Vec3(2.5f, -63f, 0.5f))?.first) // Only the head moved in under it
     }
 
     @Test

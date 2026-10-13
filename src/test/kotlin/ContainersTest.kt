@@ -25,6 +25,7 @@ import org.koremc.protocol.InventorySlot
 import org.koremc.protocol.LevelEvent
 import org.koremc.protocol.LevelSoundEvent
 import org.koremc.protocol.PlayerEnchantOptions
+import org.koremc.protocol.SetActorMotion
 import org.koremc.protocol.UI_WINDOW
 import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.clientDataToken
@@ -41,6 +42,7 @@ import org.koremc.protocol.writeVarInt
 import org.koremc.protocol.writeVarUInt
 import org.koremc.protocol.writeVarULong
 import org.koremc.registry.AIR
+import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
 import org.koremc.registry.CreativeCategory
@@ -60,6 +62,8 @@ import org.koremc.registry.ShapelessRecipe
 import org.koremc.world.BlockPos
 import org.koremc.world.Drops
 import org.koremc.world.FlatWorld
+import org.koremc.world.PLAYER_EYE_HEIGHT
+import org.koremc.world.Vec3
 import org.koremc.world.centre
 import org.koremc.world.pairChest
 import java.security.interfaces.ECPublicKey
@@ -95,9 +99,12 @@ class ContainersTest {
     // Facing east, which pistons store as west.
     private val piston = state("minecraft:piston", "facing_direction" to 4)
     private val pistonHead = state("minecraft:piston_arm_collision", "facing_direction" to 4)
+    private val upPiston = state("minecraft:piston", "facing_direction" to 1)
+    private val upPistonHead = state("minecraft:piston_arm_collision", "facing_direction" to 1)
+    private val movingBlock = state("minecraft:moving_block")
     private val palette = BlockPalette(
         listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable, hopper) + dispensers + levers +
-            listOf(piston, pistonHead, state("minecraft:moving_block")),
+            listOf(piston, pistonHead, upPiston, upPistonHead, movingBlock),
     )
     private val world = FlatWorld(palette, listOf(stone))
 
@@ -176,6 +183,19 @@ class ContainersTest {
         )
 
         fun closes(window: Int) = sends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(47).writeByte(window).writeByte(0).writeBoolean(false)))
+
+        /** Stands the player with their feet at [feet], moving by [delta], as the client reports where they are each tick. */
+        fun standsAt(feet: Vec3, delta: Vec3 = Vec3(0f, 0f, 0f)) = sends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer()
+                    .writeVarUInt(144)
+                    .writeFloatLE(0f).writeFloatLE(0f).writeFloatLE(feet.x).writeFloatLE(feet.y + PLAYER_EYE_HEIGHT).writeFloatLE(feet.z)
+                    .writeZero(8).writeFloatLE(0f) // Move vector, then head yaw
+                    .writeVarUInt(0) // No input flags
+                    .writeVarUInt(1).writeVarUInt(0).writeVarInt(1).writeZero(8)
+                    .writeVarULong(100).writeFloatLE(delta.x).writeFloatLE(delta.y).writeFloatLE(delta.z).writeZero(5).writeZero(28),
+            ),
+        )
 
         /** Breaks the block at [pos], as a creative player does. */
         fun breaks(pos: BlockPos) = sends(
@@ -439,6 +459,77 @@ class ContainersTest {
         val progress = alex.received().filter { it[0] == 0x38.toByte() }.map { dataIn(it).getFloat("Progress") }
         assertEquals(listOf(0f, 0.5f, 1f), progress)
         assertEquals(pistonHead, world.stateAt(BlockPos(here.x + 1, here.y, here.z)))
+    }
+
+    @Test
+    fun `a player walking on a block a piston pushes up rises with it, walking on, and sees it slide up from below them, while everyone else sees it move as it is`() {
+        world[here] = upPiston
+        world.setBlockEntity(here, world.pistonArm(here, upPiston).data())
+        val start = BlockPos(here.x, here.y + 1, here.z)
+        world[start] = stone
+        val lever = BlockPos(here.x, here.y, here.z + 1)
+        world[lever] = levers[0]
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        val landing = BlockPos(here.x, here.y + 2, here.z)
+        steve.standsAt(Vec3(here.x + 0.5f, landing.y.toFloat(), here.z + 0.5f), delta = Vec3(0.2f, 0f, 0f))
+
+        alex.clicks(lever)
+        steve.received()
+        alex.received()
+        val players = clients.map { it.session }
+        val ticks = (1..6).map {
+            players.tickBlocks(game, dropItems = false)
+            players.tickPower(game)
+            steve.received()
+        }
+
+        // Walking east all the while.
+        val up = SetActorMotion(steve.entityId, Vec3(0.2f, 0.5f, 0f)).encode()
+        val stop = SetActorMotion(steve.entityId, Vec3(0.2f, 0f, 0f)).encode()
+        val seen = ticks.flatten()
+        assertEquals(listOf(up, up, stop).map { it.toList() }, seen.filter { it[0] == 0x28.toByte() }.map { it.toList() })
+        assertTrue(seen.has(UpdateBlock(landing, AIR_NETWORK_ID).encode()))
+        assertTrue(!seen.has(UpdateBlock(landing, movingBlock.networkId).encode()))
+        // Where it started, sliding up from there, as if pulled.
+        assertTrue(seen.has(UpdateBlock(start, movingBlock.networkId).encode()))
+        val drawn = seen.filter { it[0] == 0x38.toByte() }.map(::dataIn).single { it.getString("id") == "MovingBlock" }
+        assertEquals(listOf(start.x, start.y, start.z, 0), listOf(drawn.getInt("x"), drawn.getInt("y"), drawn.getInt("z"), drawn.getByte("expanding").toInt()))
+        assertEquals("minecraft:stone", drawn.getCompound("movingBlock").getString("name"))
+        // Then as it is, once it's landed: the stone, and a tick later, once that's drawn, the piston's head under it.
+        val landed = ticks.indexOfFirst { it.has(UpdateBlock(landing, stone.networkId).encode()) }
+        val headBack = ticks.indexOfFirst { it.has(UpdateBlock(start, upPistonHead.networkId).encode()) }
+        assertTrue(landed > ticks.indexOfFirst { it.has(UpdateBlock(start, movingBlock.networkId).encode()) })
+        assertEquals(landed + 1, headBack)
+
+        val watched = alex.received()
+        assertTrue(watched.has(UpdateBlock(landing, movingBlock.networkId).encode()))
+        assertTrue(watched.none { it[0] == 0x28.toByte() })
+        assertEquals(stone, world.stateAt(landing))
+    }
+
+    @Test
+    fun `a player a piston's head pushes sees the head once it's out, though the client hasn't yet said they've moved`() {
+        world[here] = piston
+        world.setBlockEntity(here, world.pistonArm(here, piston).data())
+        val lever = BlockPos(here.x, here.y + 1, here.z)
+        world[lever] = levers[0]
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        val front = BlockPos(here.x + 1, here.y, here.z)
+        steve.standsAt(Vec3(front.x + 0.5f, front.y.toFloat(), front.z + 0.5f))
+
+        alex.clicks(lever)
+        steve.received()
+        val players = clients.map { it.session }
+        val ticks = (1..8).map {
+            players.tickBlocks(game, dropItems = false)
+            players.tickPower(game)
+            steve.received()
+        }
+
+        val shown = ticks.flatten().filter { it.contentEquals(UpdateBlock(front, AIR_NETWORK_ID).encode()) || it.contentEquals(UpdateBlock(front, pistonHead.networkId).encode()) }
+        assertEquals(listOf(UpdateBlock(front, AIR_NETWORK_ID), UpdateBlock(front, pistonHead.networkId)).map { it.encode().toList() }, shown.map { it.toList() })
     }
 
     /** The data a BlockActorData packet gives a block. */

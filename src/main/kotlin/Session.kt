@@ -95,6 +95,7 @@ import org.koremc.protocol.ResourcePackStack
 import org.koremc.protocol.ResourcePacksInfo
 import org.koremc.protocol.ServerPacket
 import org.koremc.protocol.SetActorData
+import org.koremc.protocol.SetActorMotion
 import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.SetPlayerGameType
 import org.koremc.protocol.ShortItem
@@ -135,6 +136,7 @@ import org.koremc.world.ChunkPos
 import org.koremc.world.Face
 import org.koremc.world.ItemEntity
 import org.koremc.world.Placer
+import org.koremc.world.PISTON_MOVE_TICKS
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
 import org.koremc.world.PLAYER_MAX_AIR
@@ -191,6 +193,9 @@ import org.koremc.world.place
 import org.koremc.world.releaseButton
 import org.koremc.world.settle
 import org.koremc.world.side
+import org.koremc.world.movingFrom
+import org.koremc.world.pistonMotions
+import org.koremc.world.snapsUp
 import org.koremc.world.stepOn
 import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
@@ -218,6 +223,9 @@ private const val COMPRESSION_THRESHOLD = 256
 
 /** How long the game's tick is. */
 private const val TICK_MILLIS = 50L
+
+/** How many of the client's reports of where the player is to log after a piston moves them, to see how far it took them. */
+private const val PISTON_WATCH = 10
 
 /** How long an item a player throws waits, long enough for it to clear them: two seconds. */
 private const val THROWN_PICKUP_DELAY = 40
@@ -537,6 +545,22 @@ class Session(
     /** Where a teleport put the player's eyes, until the client says it has moved them there. */
     private var teleportedTo: Vec3? = null
 
+    /**
+     * Blocks the player sees otherwise while a piston moves them through
+     * the player, and the block tick by which it's done, when they see them
+     * as they are.
+     */
+    private val hiddenByPistons = HashMap<BlockPos, Long>()
+
+    /** How the player last moved, as the client reported it. */
+    private var delta = Vec3(0f, 0f, 0f)
+
+    /** How pistons last moved the player, until they're done with them. */
+    private var pistonMotion: Vec3? = null
+
+    /** How many more of the client's reports of where the player is to log, after a piston moved them. */
+    private var pistonWatch = 0
+
     /** The player's name, or their network's until they've logged in. */
     override val name get() = player?.displayName ?: "network $networkId"
 
@@ -785,6 +809,11 @@ class Session(
             teleportedTo = null
         }
         position = reported
+        delta = packet.delta
+        if (pistonWatch > 0) {
+            pistonWatch--
+            log.debug("{} is at {}, moving {}, at tick {}", player?.displayName, feet, delta, packet.tick)
+        }
         yaw = packet.yaw
         pitch = packet.pitch
         headYaw = packet.headYaw
@@ -1824,6 +1853,64 @@ class Session(
         if (chunk in sentChunks) send(*packets)
     }
 
+    /**
+     * What the player sees of [packets] about blocks changing: all of them,
+     * but for blocks a piston's moving, and its head, that the player's
+     * inside, until the piston's done, when they see them as they are. The
+     * client takes those for whole blocks where they end up, and would push
+     * the player up on top of them rather than let the piston carry them.
+     * A moving block is drawn instead from where it started, which the
+     * player isn't inside, sliding along from there as a block the piston
+     * pulled would, and a head is left out, as the piston draws it anyway.
+     * The block drawn from where it started stays a tick after the one it
+     * stood for lands, which the client takes a moment to draw, so that
+     * it doesn't flicker out in between.
+     */
+    internal fun pistonView(packets: List<Pair<BlockPos, ServerPacket>>): List<Pair<BlockPos, ServerPacket>> {
+        if (packets.isEmpty() && hiddenByPistons.isEmpty()) return packets
+        val now = world.blockTicks
+        val done = hiddenByPistons.filterValues { it <= now }.keys.toList()
+        hiddenByPistons.keys -= done.toSet()
+        val shown = packets + done.filter { pos -> packets.none { it.first == pos } }.flatMap { world.withData(it) }
+        if (!isInGame) return shown
+        val instead = LinkedHashMap<BlockPos, List<ServerPacket>>()
+        val drawnFrom = HashSet<BlockPos>()
+        for ((pos, packet) in shown) {
+            if (packet !is UpdateBlock || pos in instead || !world.snapsUp(pos, feet)) continue
+            instead[pos] = listOf(UpdateBlock(pos, AIR_NETWORK_ID))
+            world.movingFrom(pos, feet)?.takeIf { (from, _) -> from !in instead }?.let { (from, data) ->
+                instead[from] = listOf(UpdateBlock(from, world.blockAt(pos)), BlockActorData(from, data))
+                drawnFrom += from
+            }
+        }
+        if (instead.isEmpty()) return shown
+        for (pos in instead.keys) hiddenByPistons[pos] = now + PISTON_MOVE_TICKS + if (pos in drawnFrom) 1 else 0
+        val replaced = HashSet<BlockPos>()
+        val seen = shown.flatMap { (pos, packet) ->
+            val view = instead[pos] ?: return@flatMap listOf(pos to packet)
+            if (replaced.add(pos)) view.map { pos to it } else emptyList()
+        }
+        return seen + instead.filterKeys { it !in replaced }.flatMap { (pos, view) -> view.map { pos to it } }
+    }
+
+    /**
+     * Moves the player by [motion], as pistons push them or carry them
+     * along, or stops them once the pistons are done with them, so they
+     * end up where the blocks do rather than sliding on. Along the axes no
+     * piston pushes them, they go on as the client last said they were
+     * going, so they can still walk about.
+     */
+    internal fun pushedByPistons(motion: Vec3?) {
+        val pushed = motion ?: pistonMotion ?: return
+        pistonMotion = motion
+        val push = motion ?: Vec3(0f, 0f, 0f)
+        fun along(by: Float, axis: Float, own: Float) = if (axis != 0f) by else own
+        val sent = Vec3(along(push.x, pushed.x, delta.x), along(push.y, pushed.y, delta.y), along(push.z, pushed.z, delta.z))
+        send(SetActorMotion(entityId, sent))
+        pistonWatch = PISTON_WATCH
+        log.debug("{} at {} {} by pistons, set moving {}", player?.displayName, feet, if (motion == null) "stopped" else "pushed", sent)
+    }
+
     private fun onPlayerInitialised(packet: SetLocalPlayerAsInitialised) {
         if (packet.runtimeId != entityId) {
             log.debug("Network {} initialised runtime ID {}, but its player's is {}", networkId, packet.runtimeId, entityId)
@@ -2085,17 +2172,21 @@ private fun Collection<Session>.showAround(packets: List<Pair<BlockPos, ServerPa
 /**
  * Ticks the blocks in [game]'s world, for these players to see if they
  * have the chunks: blocks that lost what held them up a tick ago break,
- * scaffolding moves along, coral out of water dies, and big dripleaves tip
- * under the players and items standing on them. What breaks drops what it
- * drops, if [dropItems]. Run once a tick.
+ * scaffolding moves along, coral out of water dies, big dripleaves tip
+ * under the players and items standing on them, and pistons move, and
+ * push or carry the players in the way of what they move, or on top of
+ * it. What breaks drops what it drops, if [dropItems]. Run once a tick.
  */
 internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) {
     val world = game.world
     val stood = world.stepOn(mapNotNull { it.standingAt } + world.items.filter { it.onGround }.map { it.position })
     val ticked = world.tickBlocks()
     val changes = Changes(ticked.broken, (stood + ticked.reshaped).distinct(), ticked.sounds, ticked.data)
-    if (changes.isEmpty) return
-    showAround(world.packetsFor(changes))
+    val packets = if (changes.isEmpty) emptyList() else world.packetsFor(changes)
+    forEach { listOf(it).showAround(it.pistonView(packets)) }
+    val players = filter { it.isInGame }
+    val motions = world.pistonMotions(players.associate { it.entityId to it.feet })
+    players.forEach { it.pushedByPistons(motions[it.entityId]) }
     if (dropItems) changes.broken.forEach { (pos, broken) -> game.world.dropFromBlock(pos, game.drops.of(broken.state, broken.blockEntity)) }
 }
 
