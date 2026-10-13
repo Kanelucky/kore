@@ -26,7 +26,10 @@ data class ServerConfig(
     /** Where the game's item and block data lives: a checkout of https://github.com/KoreMC/data matching [version]. */
     val dataDirectory: Path = Path.of("data"),
     val name: String = "Kore Server",
+    /** The world's name, and the folder it's saved in, under [worldsDirectory]. */
     val level: String = "world",
+    /** Where worlds are saved, each in a folder of its own, as the game's dedicated server keeps them. */
+    val worldsDirectory: Path = Path.of("worlds"),
     val maxPlayers: Int = 20,
     val gameMode: GameMode = GameMode.SURVIVAL,
     val difficulty: Difficulty = Difficulty.NORMAL,

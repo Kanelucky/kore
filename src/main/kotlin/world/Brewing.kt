@@ -44,6 +44,13 @@ class BrewingStand : Machine(5) {
     /** The reagent the brew going on started with. Taking it out, or putting another in, stops the brew. */
     private var reagent: ItemDefinition? = null
 
+    /** Picks up where it was saved: [brewTime] ticks left of a brew with what's in its reagent slot, and [fuel] brews left. */
+    internal fun restore(brewTime: Int, fuel: Int) {
+        this.brewTime = brewTime.coerceAtLeast(0)
+        this.fuel = fuel.coerceAtLeast(0)
+        if (this.brewTime > 0) reagent = slots[BREWING_REAGENT]?.stack?.item
+    }
+
     /**
      * Brews for a tick, as the game's brewing stands do. With no fuel left,
      * a blaze powder goes on, for twenty brews. A brew starts when the

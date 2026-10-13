@@ -84,6 +84,9 @@ class MapData(
     /** The markers the map's viewers last saw. */
     internal var shownMarkers: List<MapMarker> = emptyList()
 
+    /** Whether the map's been drawn on since it was last saved, or never saved. */
+    internal var unsaved = true
+
     /** How many blocks each pixel covers, each way. */
     val blocksPerPixel get() = 1 shl scale
 
@@ -93,6 +96,7 @@ class MapData(
     operator fun set(x: Int, y: Int, colour: Int): Boolean {
         if (pixels[y * MAP_SIZE + x] == colour) return false
         pixels[y * MAP_SIZE + x] = colour
+        unsaved = true
         changedFrom[x] = if (changedFrom[x] < 0) y else minOf(changedFrom[x], y)
         changedTo[x] = maxOf(changedTo[x], y)
         return true
@@ -181,8 +185,10 @@ class Maps {
 
     operator fun contains(id: Long) = id in byId
 
+    /** Keeps [map], whose items' names count on from its. */
     fun add(map: MapData) {
         byId[map.id] = map
+        named = maxOf(named, map.nameIndex)
     }
 
     /**

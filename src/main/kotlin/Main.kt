@@ -17,13 +17,19 @@ import org.koremc.network.rtc.hostCandidates
 import org.koremc.network.rtc.localAddresses
 import org.koremc.network.rtc.maxSendableMessageSize
 import org.koremc.network.rtc.verifiedClientKey
+import org.koremc.registry.ItemStacks
 import org.koremc.registry.VanillaData
+import org.koremc.storage.FlatLayers
+import org.koremc.storage.WorldSettings
+import org.koremc.storage.WorldStorage
 import org.koremc.world.FlatWorld
 import org.slf4j.LoggerFactory
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.file.NoSuchFileException
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.system.exitProcess
 
 private val log = LoggerFactory.getLogger("Kore")
@@ -59,13 +65,33 @@ fun main() {
     if (config.onlineMode) auth.start() else log.warn("Offline mode: players aren't authenticated, so anyone can join as anyone")
 
     val peers = Peers()
-    val world = FlatWorld.vanilla(vanilla.blocks)
+    val items = ItemStacks(vanilla.items, vanilla.creative, vanilla.blocks)
+    val settings = WorldSettings(config.gameMode, config.difficulty, config.allowCheats, config.seed, config.version, config.protocol)
+    val storage = try {
+        WorldStorage.open(config.worldsDirectory.resolve(config.level), config.level, FlatLayers(FlatWorld.vanillaLayers(vanilla.blocks)), vanilla.blocks, items, settings)
+    } catch (e: Exception) {
+        log.error("Couldn't open the world in {}", config.worldsDirectory.resolve(config.level).toAbsolutePath(), e)
+        exitProcess(1)
+    }
     // One thread carries every client's UDP traffic and runs every session, so the world needs no locks.
     val loop = NioEventLoopGroup(1)
     // Completes when the server should stop: when `/stop` runs, or the signaling server closes.
     val stopping = CompletableFuture<Unit>()
     // Built once, on start, so no player's login pays to encode the definitions.
-    val sessions = Sessions(config, GameData.of(vanilla, world), LoginAuthenticator(auth.verifier, config.onlineMode), loop.next(), stop = { stopping.complete(Unit) })
+    val sessions = Sessions(
+        config, GameData.of(vanilla, storage.world, items, players = storage), LoginAuthenticator(auth.verifier, config.onlineMode), loop.next(),
+        stop = { stopping.complete(Unit) }, saveWorld = storage::save,
+    )
+
+    // Saves the world one last time, on the sessions' thread as it always is, then closes it, however the server
+    // stops. It goes first, as closing the gameplay server stops that thread.
+    val closed = AtomicBoolean(false)
+    fun closeWorld() {
+        if (!closed.compareAndSet(false, true)) return
+        runCatching { loop.submit(sessions::save).get(SAVE_TIMEOUT_SECONDS, TimeUnit.SECONDS) }.onFailure { log.error("Couldn't save the world as the server stopped", it) }
+        storage.close()
+        log.info("Saved the world")
+    }
 
     val signaling = SignalingServer(
         address = InetSocketAddress(config.port),
@@ -91,7 +117,7 @@ fun main() {
         ),
     )
 
-    Runtime.getRuntime().addShutdownHook(Thread({ signaling.close(); rtc.close(); auth.close() }, "kore-shutdown"))
+    Runtime.getRuntime().addShutdownHook(Thread({ closeWorld(); signaling.close(); rtc.close(); auth.close() }, "kore-shutdown"))
 
     try {
         val tcp = signaling.bind()
@@ -101,8 +127,12 @@ fun main() {
         tcp.closeFuture().addListener { stopping.complete(Unit) }
         stopping.join()
     } finally {
+        closeWorld()
         signaling.close()
         rtc.close()
         auth.close()
     }
 }
+
+/** How long the last save waits for the sessions' thread before the server stops without it. */
+private const val SAVE_TIMEOUT_SECONDS = 30L

@@ -59,7 +59,7 @@ class ExperienceOrb(val id: Long, val value: Int, position: Vec3, velocity: Vec3
     var snapped = false
         private set
 
-    private var age = 0
+    internal var age = 0
 
     /** Moves the orb along a tick, pulled towards whichever of [players], by their feet, is nearest. Returns whether it's still there. */
     internal fun tick(world: FlatWorld, players: List<Vec3>): Boolean {

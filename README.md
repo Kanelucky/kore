@@ -19,7 +19,7 @@
 ---
 
 > [!WARNING]
-> Kore is in early development. Players can join a flat world, build, mine, craft, wire up redstone and pistons, and play together, but there are no mobs, and nothing is saved yet.
+> Kore is in early development. Players can join a flat world, build, mine, craft, wire up redstone and pistons, and play together, and the world is saved, but there are no mobs yet.
 > Follow the [milestones](#-milestones) to see where things stand.
 
 ## 🧭 Philosophy
@@ -43,6 +43,7 @@ Kore is not a fork, a wrapper, or a port of an existing server. It's a ground-up
 | WebRTC | ICE-lite, DTLS 1.2 from the **JDK**, and **SCTP written in Kotlin**, with no native libraries |
 | NBT | **Cloudburst NBT** |
 | Game data | **[KoreMC/data](https://github.com/KoreMC/data)**, dumped from the game by CloudburstMC, with mining and stack data from minecraft-data |
+| Worlds | **LevelDB**, as the game saves worlds, through Hive's [leveldb-mcpe-java](https://github.com/HiveGamesOSS/leveldb-mcpe-java) |
 | Logging | **SLF4J + Logback** |
 
 ## 🔌 How a Client Connects
@@ -113,7 +114,7 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 
 ## ✨ What Works
 
-- **World:** the vanilla flat world, streamed to players as they move. Changes last as long as the server runs.
+- **World:** the vanilla flat world, streamed to players as they move, and saved every minute and on stop in the game's own format, in `worlds/`, so it opens in the game too. Players keep where they were and what they had.
 - **Building and mining:** placing blocks with the game's rules for slabs, stairs, doors, rails, fences, walls, scaffolding and the like; survival mining at the right pace, tool wear, and drops.
 - **Items and inventory:** dropped items, picking up and merging, the creative inventory, and server-authoritative inventories.
 - **Containers and workstations:** chests, barrels, shulker boxes and ender chests; crafting; furnaces and brewing stands; stonecutters, smithing tables, anvils, grindstones, looms, enchanting tables and cartography tables; hoppers, dispensers, droppers and crafters; lecterns, and writing and signing books; beacons and their powers; experience.
@@ -133,6 +134,7 @@ Packages leave out the common root, so `org.koremc.network` lives in `src/main/k
 | [`auth`](src/main/kotlin/auth) | Login tokens and Minecraft's signing keys |
 | [`registry`](src/main/kotlin/registry) | The game's items, block states, biomes, recipes and enchantments |
 | [`world`](src/main/kotlin/world) | Blocks, items, redstone, pistons and everything else that happens in the world |
+| [`storage`](src/main/kotlin/storage) | Saving and loading worlds and players as the game does |
 | [`inventory`](src/main/kotlin/inventory) | Players' inventories, item stack requests, crafting and workstations |
 | [`command`](src/main/kotlin/command) | Commands, selectors, operators and the console |
 
@@ -154,7 +156,7 @@ Packages leave out the common root, so `org.koremc.network` lives in `src/main/k
 ### Phase 3: World
 - [x] Chunk streaming in a flat world
 - [x] Player spawning and movement, taking the client's word for its position
-- [ ] **World loading and saving** (LevelDB)
+- [x] World loading and saving (LevelDB)
 - [ ] Movement simulation and corrections
 
 ### Phase 4: Gameplay

@@ -308,6 +308,12 @@ private const val MAX_COORDINATE = 30_000_000f
  */
 private const val RECENTRE_DISTANCE = 2
 
+/** An empty slot, as the game saves one in a list of slots that keeps their order. */
+private val EMPTY_SLOT = NbtMap.builder().putString("Name", "").putByte("Count", 0).putShort("Damage", 0).putByte("WasPickedUp", 0).build()
+
+/** How often the world saves by itself, in ticks: every minute. */
+private const val AUTOSAVE_TICKS = 60 * 20L
+
 /** The window and container type of a player's own inventory. */
 private const val INVENTORY_WINDOW = 0
 private const val INVENTORY_CONTAINER = 0xFF
@@ -489,7 +495,7 @@ class Session(
     private val inventory = PlayerInventory(world::newStackId)
 
     /** The player's experience: their level, and how far into the next. */
-    private val experience = PlayerExperience()
+    private var experience = PlayerExperience()
 
     /** Picks what enchanting tables offer the player, until they next enchant something. */
     private var enchantmentSeed = Random.nextInt()
@@ -793,6 +799,7 @@ class Session(
             return
         }
         this.player = player
+        game.players.load(player.uuid)?.let(::restoreFrom)
         login = request
         skin = skinFrom(request.clientData, config.version)
 
@@ -2193,6 +2200,7 @@ class Session(
         }
         state = State.IN_GAME
         send(*playerState(), commands.map.availableTo(permission))
+        showSavedItems()
         log.info("{} spawned", player?.displayName)
         announceJoin()
     }
@@ -2353,11 +2361,74 @@ class Session(
         state = State.CLOSED
     }
 
-    /** Tells everyone still in the game that this player left, once their session has ended. */
+    /** Saves where the player got to, if they're in the game, as an autosave does. */
+    fun savePlayer() {
+        val identity = player ?: return
+        if (state == State.IN_GAME) game.players.save(identity.uuid, savedData())
+    }
+
+    /**
+     * What's kept of the player between sessions, as the game saves a
+     * player: where their eyes are and which way they look, their game
+     * mode, their items, by slot, in their inventory, armour, offhand and
+     * ender chest, the hotbar slot they hold, and their experience.
+     */
+    private fun savedData(): NbtMap {
+        fun listed(container: Container) = (0 until container.size).map { slot -> container[slot]?.let { ItemStacks.nbtOf(it.stack, slot) } ?: EMPTY_SLOT }
+        return NbtMap.builder()
+            .putString("identifier", "minecraft:player")
+            .putList("Pos", NbtType.FLOAT, listOf(position.x, position.y, position.z))
+            .putList("Rotation", NbtType.FLOAT, listOf(yaw, pitch))
+            .putInt("PlayerGameMode", gameMode.id)
+            .putInt("SelectedInventorySlot", heldSlot)
+            .putList("Inventory", NbtType.COMPOUND, listed(inventory.items))
+            .putList("Armor", NbtType.COMPOUND, listed(inventory.armour))
+            .putList("Offhand", NbtType.COMPOUND, listed(inventory.offhand))
+            .putList("EnderChestInventory", NbtType.COMPOUND, listed(enderChest))
+            .putInt("PlayerLevel", experience.level)
+            .putFloat("PlayerLevelProgress", experience.progress)
+            .build()
+    }
+
+    /** Picks up where the player left off last time, as [savedData] kept it, for whatever it kept that Kore can use. */
+    private fun restoreFrom(data: NbtMap) {
+        data.getList("Pos", NbtType.FLOAT, emptyList()).takeIf { it.size == 3 }?.let { Vec3(it[0], it[1], it[2]) }?.takeIf { it.isPlausible() }?.let {
+            position = it
+            viewCentre = it.toBlockPos().chunk
+        }
+        data.getList("Rotation", NbtType.FLOAT, emptyList()).takeIf { it.size == 2 }?.let { (savedYaw, savedPitch) ->
+            yaw = savedYaw
+            headYaw = savedYaw
+            pitch = savedPitch
+        }
+        GameMode.entries.find { it.id == data.getInt("PlayerGameMode", -1) && it != GameMode.DEFAULT }?.let { gameMode = it }
+        heldSlot = data.getInt("SelectedInventorySlot", 0).coerceIn(0, HOTBAR_SIZE - 1)
+        for ((name, container) in listOf("Inventory" to inventory.items, "Armor" to inventory.armour, "Offhand" to inventory.offhand, "EnderChestInventory" to enderChest)) {
+            data.getList(name, NbtType.COMPOUND, emptyList()).forEachIndexed { index, saved ->
+                val (slot, stack) = game.items.fromNbt(saved) ?: return@forEachIndexed
+                // Armour and the offhand go by their order, as the game lists them.
+                val at = if (name == "Armor" || name == "Offhand") index else slot
+                if (at in 0 until container.size) container[at] = SlotStack(stack, inventory.newStackId())
+            }
+        }
+        experience = PlayerExperience(data.getInt("PlayerLevel", 0).coerceAtLeast(0), data.getFloat("PlayerLevelProgress", 0f).coerceIn(0f, 1f))
+        log.debug("{} picks up at {}, in {}", player?.displayName, position, gameMode)
+    }
+
+    /** Shows the client the items the player had when they were last saved, which it starts out without. */
+    private fun showSavedItems() {
+        val windows = listOf(INVENTORY_WINDOW to inventory.items, OFFHAND_WINDOW to inventory.offhand, ARMOUR_WINDOW to inventory.armour)
+        val packets = windows.filter { (_, container) -> container.contents().any { it != null } }
+            .map { (window, container) -> InventoryContent(window, container.contents().map { slot -> slot?.let { it.stack to it.id } }) }
+        if (packets.isNotEmpty()) send(*packets.toTypedArray())
+    }
+
+    /** Tells everyone still in the game that this player left, once their session has ended, and saves where they got to. */
     fun leave() {
         val identity = player ?: return
         if (state != State.IN_GAME) return
         closeWindow(reply = false)
+        game.players.save(identity.uuid, savedData())
         state = State.CLOSED
         log.info("{} left", identity.displayName)
         tellEveryone(Text(Text.TRANSLATION, LEFT, parameters = listOf(identity.displayName), needsTranslation = true))
@@ -2599,7 +2670,8 @@ private fun names(packets: Array<out ServerPacket>): String {
  * callbacks on the UDP event loop. The game ticks on the same thread, 20
  * times a second: items move, players pick up those in reach, then each
  * player sees what changed. The commands players run are shared, and the
- * console runs them too.
+ * console runs them too. Every minute, and as the server stops, the world
+ * and its players are saved.
  */
 class Sessions(
     private val config: ServerConfig,
@@ -2609,7 +2681,11 @@ class Sessions(
     private val loop: ScheduledExecutorService,
     /** Shuts the server down, once `/stop` has disconnected everyone. */
     private val stop: () -> Unit = {},
+    /** Saves the world, besides its players, which the sessions save. */
+    private val saveWorld: () -> Unit = {},
 ) {
+    /** How many times the game has ticked, which it saves every [AUTOSAVE_TICKS] of. */
+    private var ticks = 0L
     private val sessions = HashMap<NetherNetConnection, Session>()
     private val commands = Commands(config, game, { sessions.values }, Operators(config.permissionsFile), shutDown = ::stopAll)
 
@@ -2621,6 +2697,7 @@ class Sessions(
     }
 
     private fun tick() {
+        if (++ticks % AUTOSAVE_TICKS == 0L) save()
         sessions.values.tickBlocks(game, dropItems = config.gameMode != GameMode.CREATIVE)
         game.world.tickItems()
         sessions.values.tickMachines(game)
@@ -2668,7 +2745,16 @@ class Sessions(
 
     /** Disconnects everyone, as the server is shutting down, then shuts it down, once the command that asked has finished. */
     private fun stopAll() {
+        save()
         sessions.values.forEach { it.disconnect(Disconnect.Reason.SHUTDOWN) }
         loop.execute(stop)
+    }
+
+    /** Saves the world, and every player in it. Run on the sessions' thread. */
+    fun save() {
+        runCatching {
+            sessions.values.forEach(Session::savePlayer)
+            saveWorld()
+        }.onFailure { log.error("Couldn't save the world", it) }
     }
 }

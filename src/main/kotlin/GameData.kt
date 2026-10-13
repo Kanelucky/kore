@@ -14,6 +14,7 @@ import org.koremc.registry.ItemStacks
 import org.koremc.registry.Recipes
 import org.koremc.registry.Mining
 import org.koremc.registry.VanillaData
+import org.koremc.storage.PlayerSaves
 import org.koremc.world.Drops
 import org.koremc.world.FlatWorld
 
@@ -46,19 +47,22 @@ class GameData(
     val enchantments: Enchantments = Enchantments.NONE,
     /** The colour each block state shows on maps, and the light it stops, which beacons' beams need through. */
     val traits: BlockTraits = BlockTraits.NONE,
+    /** Where players' own data is kept between sessions. */
+    val players: PlayerSaves = PlayerSaves.NONE,
 ) {
     companion object {
-        fun of(vanilla: VanillaData, world: FlatWorld) = GameData(
+        fun of(vanilla: VanillaData, world: FlatWorld, items: ItemStacks = ItemStacks(vanilla.items, vanilla.creative, vanilla.blocks), players: PlayerSaves = PlayerSaves.NONE) = GameData(
             world = world,
             definitions = listOf(ItemRegistry(vanilla.items), BiomeDefinitionList(vanilla.biomes), CreativeContent(vanilla.creative), CraftingData(vanilla.recipes)),
             blockDefinitions = BlockDefinitions(vanilla.blockDefinitions),
             creative = vanilla.creative,
             mining = vanilla.mining,
             drops = Drops(vanilla.items, vanilla.creative, vanilla.blocks),
-            items = ItemStacks(vanilla.items, vanilla.creative, vanilla.blocks),
+            items = items,
             recipes = vanilla.recipes,
             enchantments = vanilla.enchantments,
             traits = vanilla.traits,
+            players = players,
         )
     }
 }

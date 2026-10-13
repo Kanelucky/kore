@@ -23,6 +23,10 @@ dependencies {
     // Cloudburst NBT (Reads the vanilla data files, and writes NBT for packets and block state hashes)
     implementation("org.cloudburstmc:nbt:3.0.5.Final")
 
+    // LevelDB as the game stores worlds, with Mojang's compression, for saving and loading them.
+    // The uber jar carries its API and its own copy of Guava, which it needs and doesn't declare.
+    implementation("com.hivemc.leveldb:leveldb:1.1.0:uber")
+
     // Logback for clean server console logging
     implementation("ch.qos.logback:logback-classic:1.4.14")
 }

@@ -8,7 +8,6 @@ import org.koremc.world.Chunk
 import org.koremc.world.ChunkPos
 import org.koremc.world.MIN_Y
 import org.koremc.world.PalettedStorage
-import org.koremc.world.SUB_CHUNK_VOLUME
 
 private const val LEVEL_CHUNK = 58
 private const val NETWORK_CHUNK_PUBLISHER_UPDATE = 121
@@ -18,8 +17,6 @@ private const val OVERWORLD = 0
 /** The sub-chunk format in which each sub-chunk names its own height. */
 private const val SUB_CHUNK_VERSION = 9
 
-/** The bits per palette index Bedrock understands, smallest first. */
-private val BITS_PER_INDEX = intArrayOf(0, 1, 2, 3, 4, 5, 6, 8, 16)
 
 /** Marks a storage that repeats the one before it, sent instead of the storage. Only biomes use it. */
 private const val REPEAT_PREVIOUS = (0x7F shl 1) or 1
@@ -86,15 +83,10 @@ private fun ByteBuf.writePalettedStorage(storage: PalettedStorage, previous: Pal
         return
     }
 
-    val bits = BITS_PER_INDEX.first { 1 shl it >= storage.palette.size }
+    val bits = storage.bitsPerIndex
     writeByte((bits shl 1) or 1) // The low bit says the palette holds network IDs, not NBT
     if (bits > 0) {
-        val perWord = 32 / bits
-        for (first in 0 until SUB_CHUNK_VOLUME step perWord) {
-            var word = 0
-            for (i in 0 until minOf(perWord, SUB_CHUNK_VOLUME - first)) word = word or (storage.paletteIndex(first + i) shl (i * bits))
-            writeIntLE(word)
-        }
+        storage.packedIndices().forEach(::writeIntLE)
         writeVarInt(storage.palette.size)
     }
     storage.palette.forEach { writeVarInt(it) }

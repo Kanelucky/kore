@@ -91,6 +91,14 @@ class Furnace(val kind: FurnaceKind) : Machine(3) {
     /** Takes out the experience it's stored, to give to whoever took what it made. */
     fun takeExperience(): Float = experience.also { experience = 0f }
 
+    /** Picks up where it was saved: [litTime] ticks of fuel burning, of [litDuration], [cookTime] cooked, and [experience] stored. */
+    internal fun restore(litTime: Int, litDuration: Int, cookTime: Int, experience: Float) {
+        this.litTime = litTime.coerceAtLeast(0)
+        this.litDuration = maxOf(litDuration, this.litTime)
+        this.cookTime = cookTime.coerceAtLeast(0)
+        this.experience = experience.coerceAtLeast(0f)
+    }
+
     /**
      * Burns and cooks for a tick, as the game's furnaces do. While fuel
      * burns, and there's something to cook that what it makes has room

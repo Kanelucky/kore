@@ -261,7 +261,7 @@ private fun movingData(at: BlockPos, state: BlockState, entity: NbtMap?, piston:
 }
 
 /** The id of the block entity the client makes for the block called [name], of those a piston moves, if it makes one. */
-private fun blockEntityIdOf(name: String): String? {
+internal fun blockEntityIdOf(name: String): String? {
     val short = name.removePrefix("minecraft:")
     return BLOCK_ENTITY_IDS[short] ?: BLOCK_ENTITY_IDS[short.removePrefix("lit_")] ?: "Chest".takeIf { short.endsWith("chest") }
 }

@@ -52,6 +52,7 @@ import org.koremc.registry.BlockTrait
 import org.koremc.registry.BlockTraits
 import org.koremc.registry.Tint
 import org.koremc.inventory.BEACON_PAYMENT_SLOT
+import org.koremc.storage.PlayerSaves
 import org.koremc.inventory.CARTOGRAPHY_ADDITIONAL_SLOT
 import org.koremc.inventory.CARTOGRAPHY_INPUT_SLOT
 import org.koremc.inventory.CREATED_OUTPUT_SLOT
@@ -155,7 +156,17 @@ class ContainersTest {
         recipes = recipes, enchantments = Enchantments(listOf(unbreaking)),
         // Stone shows grey on maps, and stops all light.
         traits = BlockTraits(mapOf(stone.networkId to BlockTrait(0xFF707070.toInt(), Tint.NONE, 15))),
+        players = object : PlayerSaves {
+            override fun load(player: UUID) = savedPlayers[player]
+
+            override fun save(player: UUID, data: NbtMap) {
+                savedPlayers[player] = data
+            }
+        },
     )
+
+    /** What players saved as they left, by their identity. */
+    private val savedPlayers = HashMap<UUID, NbtMap>()
 
     private val clients = mutableListOf<Client>()
 
@@ -814,6 +825,23 @@ class ContainersTest {
 
         val onCursor = steve.received().filter { it[0] == 0x32.toByte() }.map { Unpooled.wrappedBuffer(it).skipBytes(1).readVarUInt() }
         assertEquals(listOf(UI_WINDOW), onCursor, "what's on the cursor, as Kore made it")
+    }
+
+    @Test
+    fun `a player who leaves picks up where they left off next time, where they were and looked, with their game mode, items and experience`() {
+        config = config.copy(gameMode = GameMode.SURVIVAL)
+        val steve = Client(1, "Steve", "1111")
+        steve.session.give(ItemStack(coal, 5))
+        steve.standsAt(Vec3(10.5f, -63f, 3.5f))
+        steve.session.leave()
+
+        val again = Client(2, "Steve", "1111")
+
+        assertEquals(Vec3(10.5f, -63f + PLAYER_EYE_HEIGHT, 3.5f), again.session.position)
+        assertEquals(ItemStack(coal, 5), again.session.heldStack)
+        assertEquals(GameMode.SURVIVAL, again.session.gameMode)
+        val alex = Client(3, "Alex", "2222")
+        assertNull(alex.session.heldStack, "someone else starts afresh")
     }
 
     /** The data a BlockActorData packet gives a block. */

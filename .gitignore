@@ -78,3 +78,6 @@ permissions.json
 
 # Each run's log, written by Kore (see logback.xml)
 /logs/
+
+# The worlds Kore saves
+/worlds/

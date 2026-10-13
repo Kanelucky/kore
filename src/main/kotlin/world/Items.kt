@@ -85,7 +85,7 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
     var restacked = false
         internal set
 
-    private var age = 0
+    internal var age = 0
 
     /**
      * Whether it can take in more items, or go into another stack: it's

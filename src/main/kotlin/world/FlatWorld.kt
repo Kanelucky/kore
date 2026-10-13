@@ -22,8 +22,9 @@ const val PLAINS_BIOME_ID = 1
  * from the bottom of the world up, air above them, and one biome
  * throughout. Until a player changes a block in a chunk, the chunk is that
  * same column, so the world holds just one of those, plus each chunk that
- * players have changed. Changes last until the server stops, as do the
- * items lying in it, until they're picked up or go.
+ * players have changed, or that [loader] had saved, which it asks for the
+ * first time anything looks at the chunk. The items lying in it stay until
+ * they're picked up or go.
  *
  * Like the sessions that change it, it runs on the UDP event loop.
  */
@@ -32,14 +33,24 @@ class FlatWorld(
     val blocks: BlockPalette,
     layers: List<BlockState>,
     biome: Int = PLAINS_BIOME_ID,
+    private val loader: ChunkLoader = ChunkLoader.NONE,
+    /** Where players appear: by default standing on the top layer, in the corner of chunk 0, 0. */
+    val spawn: BlockPos = BlockPos(0, MIN_Y + layers.size, 0),
 ) {
-    /** Where players appear: standing on the top layer, in the corner of chunk 0, 0. */
-    val spawn = BlockPos(0, MIN_Y + layers.size, 0)
 
     private val generated: Chunk
 
-    /** The chunks players have changed, which no longer match [generated]. */
+    /** The chunks that don't match [generated]: those players changed, and those [loader] had saved. */
     private val changed = HashMap<ChunkPos, Chunk>()
+
+    /** The chunks [loader] has been asked for, each only ever once. */
+    private val asked = HashSet<ChunkPos>()
+
+    /** The chunks whose blocks changed since the world was last saved. */
+    internal val unsaved = HashSet<ChunkPos>()
+
+    /** Every chunk that doesn't match [generated], by where it is. */
+    internal val chunks: Map<ChunkPos, Chunk> get() = changed
 
     /** How many times the world's blocks have ticked, which updates are scheduled by. */
     internal var blockTicks = 0L
@@ -75,7 +86,20 @@ class FlatWorld(
         generated = Chunk(subChunks, List(SUB_CHUNK_COUNT) { biomes })
     }
 
-    fun chunkAt(pos: ChunkPos): Chunk = changed[pos] ?: generated
+    fun chunkAt(pos: ChunkPos): Chunk = changed[pos] ?: load(pos)
+
+    /**
+     * The chunk at [pos] as [loader] had it, the first time it's asked for,
+     * with what it keeps besides its blocks put back once it's in, or the
+     * generated chunk if the loader has none.
+     */
+    private fun load(pos: ChunkPos): Chunk {
+        if (!asked.add(pos)) return generated
+        val loaded = loader.load(pos) ?: return generated
+        loaded.chunk?.let { changed[pos] = it }
+        loaded.restore(this)
+        return changed[pos] ?: generated
+    }
 
     /** The network ID of the block at [pos]. */
     fun blockAt(pos: BlockPos): Int = chunkAt(pos.chunk).blockAt(pos)
@@ -133,6 +157,7 @@ class FlatWorld(
             beacons.remove(pos)
         }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
+        unsaved += pos.chunk
         // A hopper works from the moment it's there, whether anyone opens it or not.
         if (state.name == HOPPER) machines.getOrPut(pos) { Hopper() }
         if (state.isComparator) comparators += pos else comparators -= pos
@@ -196,14 +221,27 @@ class FlatWorld(
     /** The furnaces, brewing stands, dispensers and droppers, by where they are, once something has used them, and every hopper. */
     private val machines = HashMap<BlockPos, Machine>()
 
+    /** The items each chest, barrel, shulker box and lectern keeps, and every machine, by where they are, for saving. */
+    internal val keptContainers: Map<BlockPos, Container> get() = containers
+    internal val keptMachines: Map<BlockPos, Machine> get() = machines
+
+    /** Where every block that keeps data besides its state is. */
+    internal val blockEntityPositions: List<BlockPos> get() = blockEntities.values.flatMap { it.keys }
+
     /** How many times the machines have worked, which hoppers go by to keep in step. */
     private var machineTicks = 0L
 
     /** The items the chest, barrel or shulker box at [pos] keeps. */
-    fun containerAt(pos: BlockPos): Container = containers.getOrPut(pos) { Container(STORAGE_SLOTS) }
+    fun containerAt(pos: BlockPos): Container {
+        chunkAt(pos.chunk) // Which puts back what a saved chunk's containers held, first
+        return containers.getOrPut(pos) { Container(STORAGE_SLOTS) }
+    }
 
     /** The one slot the lectern at [pos] keeps its book in. */
-    internal fun lecternAt(pos: BlockPos): Container = containers.getOrPut(pos) { Container(1) }
+    internal fun lecternAt(pos: BlockPos): Container {
+        chunkAt(pos.chunk)
+        return containers.getOrPut(pos) { Container(1) }
+    }
 
     /** The furnace at [pos], or null if there isn't one. */
     fun furnaceAt(pos: BlockPos): Furnace? {
@@ -305,7 +343,10 @@ class FlatWorld(
     }
 
     /** The data the block at [pos] keeps beyond its state, like a bed's colour, or null for none. */
-    fun blockEntityAt(pos: BlockPos): NbtMap? = blockEntities[pos.chunk]?.get(pos)
+    fun blockEntityAt(pos: BlockPos): NbtMap? {
+        chunkAt(pos.chunk)
+        return blockEntities[pos.chunk]?.get(pos)
+    }
 
     /** Gives the block at [pos] [data] to keep, or forgets what it kept, for null. The data names where it is. */
     fun setBlockEntity(pos: BlockPos, data: NbtMap?) {
@@ -318,18 +359,21 @@ class FlatWorld(
     }
 
     /** The block entities in the chunk at [pos], for sending with it. */
-    fun blockEntitiesIn(pos: ChunkPos): Collection<NbtMap> = blockEntities[pos]?.values.orEmpty()
+    fun blockEntitiesIn(pos: ChunkPos): Collection<NbtMap> {
+        chunkAt(pos)
+        return blockEntities[pos]?.values.orEmpty()
+    }
 
     companion object {
-        /** The vanilla flat world: bedrock, two layers of dirt and grass on top, all plains. */
-        fun vanilla(blocks: BlockPalette) = FlatWorld(
-            blocks,
-            listOf(
-                blocks.stateOf("minecraft:bedrock", mapOf("infiniburn_bit" to 0.toByte())),
-                blocks.stateOf("minecraft:dirt"),
-                blocks.stateOf("minecraft:dirt"),
-                blocks.stateOf("minecraft:grass_block"),
-            ),
+        /** The vanilla flat world's layers, from the bottom up: bedrock, two layers of dirt and grass on top. */
+        fun vanillaLayers(blocks: BlockPalette) = listOf(
+            blocks.stateOf("minecraft:bedrock", mapOf("infiniburn_bit" to 0.toByte())),
+            blocks.stateOf("minecraft:dirt"),
+            blocks.stateOf("minecraft:dirt"),
+            blocks.stateOf("minecraft:grass_block"),
         )
+
+        /** The vanilla flat world, all plains, saved nowhere. */
+        fun vanilla(blocks: BlockPalette) = FlatWorld(blocks, vanillaLayers(blocks))
     }
 }
