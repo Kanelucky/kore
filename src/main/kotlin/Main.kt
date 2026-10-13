@@ -14,6 +14,7 @@ import org.koremc.network.NetherNetRtcHandler
 import org.koremc.network.NetherNetSignalingHandler
 import org.koremc.network.RtcServer
 import org.koremc.network.ServerListPing
+import org.koremc.network.ServerListPingHandler
 import org.koremc.network.SignalingServer
 import org.koremc.network.rtc.DtlsCertificate
 import org.koremc.network.rtc.DtlsContext
@@ -115,6 +116,7 @@ fun main() {
 
     // What the server list, LAN discovery and joining show of the server, as it is now.
     val status = { running.toJoinInfo(onlinePlayers = sessions.playerCount) }
+    val serverList = ServerListPing(serverId = Random.nextLong(), port = config.port, portV6 = config.portV6, status = status)
     // A client's offer, over HTTP or LAN discovery, answered as the peer it'll connect as.
     val answerOffer = { networkId: String, offer: SdpOffer ->
         val clientKey = offer.verifiedClientKey(requireIdentity = config.onlineMode)
@@ -135,7 +137,7 @@ fun main() {
             onConnect = sessions::connect,
             onMessage = sessions::receive,
             onDisconnect = sessions::disconnect,
-            serverList = ServerListPing(serverId = Random.nextLong(), port = config.port, status = status),
+            serverList = serverList,
         ),
     )
 
@@ -145,6 +147,7 @@ fun main() {
         val tcp = signaling.bind()
         rtc.bind()
         log.info("Kore is listening for NetherNet on {} (TCP signaling, UDP gameplay)", tcp.localAddress())
+        if (config.portV6 != config.port) bindServerListV6(loop, config.portV6, serverList)
         if (config.lanVisibility) bindLanDiscovery(loop, LanDiscovery(Random.nextLong(), config.onlineMode, status, answerOffer))
         Console(sessions::runConsole).start()
         tcp.closeFuture().addListener { stopping.complete(Unit) }
@@ -159,6 +162,25 @@ fun main() {
 
 /** How long the last save waits for the sessions' thread before the server stops without it. */
 private const val SAVE_TIMEOUT_SECONDS = 30L
+
+/**
+ * Answers the server list's pings on [port], for players who reach the
+ * server by an IPv6 address, as the game pings those there, on the threads
+ * of [group], which closing it shuts down. If it can't, it carries on
+ * without, as the server list still finds the server by IPv4.
+ */
+private fun bindServerListV6(group: EventLoopGroup, port: Int, ping: ServerListPing) {
+    runCatching {
+        Bootstrap()
+            .group(group)
+            .channelFactory { NioDatagramChannel(InternetProtocolFamily.IPv6) }
+            .handler(ServerListPingHandler(ping))
+            .bind(InetSocketAddress(port))
+            .sync()
+    }.onFailure {
+        log.warn("The server list won't find the server by IPv6: port {} isn't free ({})", port, it.message)
+    }
+}
 
 /**
  * Listens for games looking for others on the local network, on the

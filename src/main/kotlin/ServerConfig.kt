@@ -14,6 +14,8 @@ import java.nio.file.Path
 data class ServerConfig(
     /** TCP port for signaling and UDP port for gameplay. */
     val port: Int = 19132,
+    /** The port the server answers the server list's pings on, besides [port], for players who reach it by an IPv6 address. */
+    val portV6: Int = 19133,
     /**
      * Whether players must prove who they are through Xbox Live. Turn this
      * off only for local testing: offline mode admits anyone as anyone.

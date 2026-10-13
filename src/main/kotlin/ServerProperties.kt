@@ -77,6 +77,11 @@ private val SETTINGS = listOf(
         value.toIntOrNull()?.takeIf { it in 1..65535 }?.let { copy(port = it) }
     },
     Setting(
+        "server-portv6",
+        "The port the server list finds the server on, for players who reach it by an IPv6 address.\nAllowed values: whole numbers from 1 to 65535",
+        { it.portV6.toString() },
+    ) { value -> value.toIntOrNull()?.takeIf { it in 1..65535 }?.let { copy(portV6 = it) } },
+    Setting(
         "enable-lan-visibility",
         "Whether games on the local network find the server, as they find each other's worlds.\nAllowed values: \"true\" or \"false\"",
         { it.lanVisibility.toString() },

@@ -2,6 +2,9 @@ package org.koremc.network
 
 import io.netty.buffer.ByteBuf
 import io.netty.buffer.Unpooled
+import io.netty.channel.ChannelHandlerContext
+import io.netty.channel.SimpleChannelInboundHandler
+import io.netty.channel.socket.DatagramPacket
 import kotlin.text.Charsets.UTF_8
 
 /** The bytes RakNet puts in every message sent outside a connection, which tell its pings apart from STUN and DTLS on the same port. */
@@ -27,9 +30,11 @@ private val GAME_MODE_NAMES = listOf("Survival", "Creative", "Adventure")
  * is what the list shows, rather than "Locating server". A client
  * starting a RakNet connection, which Kore doesn't speak, hears its
  * version won't do, so it doesn't wait on an answer. The server is
- * [serverId] to RakNet, and on [port], and [status] says how it is now.
+ * [serverId] to RakNet, on [port], and on [portV6] for players who reach
+ * it by an IPv6 address, which the game pings there, and [status] says
+ * how it is now.
  */
-class ServerListPing(private val serverId: Long, private val port: Int, private val status: () -> JoinInfo) {
+class ServerListPing(private val serverId: Long, private val port: Int, private val portV6: Int, private val status: () -> JoinInfo) {
     /** The answer to [datagram], if it's a ping or the start of a RakNet connection, or null for anything else. */
     fun answer(datagram: ByteBuf): ByteBuf? {
         val at = datagram.readerIndex()
@@ -69,9 +74,19 @@ class ServerListPing(private val serverId: Long, private val port: Int, private 
         fun field(text: String) = text.replace(';', ' ')
         val gameMode = GAME_MODE_NAMES.getOrElse(info.gameType) { GAME_MODE_NAMES[0] }
         return "MCPE;${field(info.name)};${info.protocol};${info.version};${info.players};${info.maxPlayers};" +
-            "${serverId.toULong()};${field(info.level)};$gameMode;1;$port;${port + 1};0;"
+            "${serverId.toULong()};${field(info.level)};$gameMode;1;$port;$portV6;0;"
     }
 
     private fun ByteBuf.hasMagic(index: Int): Boolean =
         writerIndex() >= index + OFFLINE_MAGIC.size && OFFLINE_MAGIC.indices.all { getByte(index + it) == OFFLINE_MAGIC[it] }
+}
+
+/**
+ * Answers [ping]s on a port of their own, the one for players who reach
+ * the server by an IPv6 address, where nothing else comes.
+ */
+class ServerListPingHandler(private val ping: ServerListPing) : SimpleChannelInboundHandler<DatagramPacket>() {
+    override fun channelRead0(ctx: ChannelHandlerContext, packet: DatagramPacket) {
+        ping.answer(packet.content())?.let { ctx.writeAndFlush(DatagramPacket(it, packet.sender())) }
+    }
 }
