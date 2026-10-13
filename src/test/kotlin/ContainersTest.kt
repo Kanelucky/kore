@@ -400,7 +400,10 @@ class ContainersTest {
 
         alex.clicks(lever)
         steve.received()
-        repeat(5) { clients.map { it.session }.tickMachines(game) }
+        repeat(5) {
+            clients.map { it.session }.tickMachines(game)
+            clients.map { it.session }.tickPower(game)
+        }
 
         val seen = steve.received()
         assertTrue(seen.has(UpdateBlock(here, dispensers[1].networkId).encode()))

@@ -196,6 +196,7 @@ import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
 import org.koremc.world.tickOrbs
 import org.koremc.world.usable
+import org.koremc.world.updatePower
 import org.koremc.world.use
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
@@ -2100,11 +2101,11 @@ internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) 
 
 /**
  * Works the furnaces, brewing stands, hoppers, dispensers and droppers in
- * [game]'s world for a tick, and what redstone powers, for these players
- * to see if they have the chunks: furnaces lighting up and going out, the
- * bottles on brewing stands, the sound of a brew finishing, and dispensers
- * firing. Run once a tick, after items move, so that the items hoppers
- * take in go from the world as players see it.
+ * [game]'s world for a tick, for these players to see if they have the
+ * chunks: furnaces lighting up and going out, the bottles on brewing
+ * stands, the sound of a brew finishing, and dispensers firing. Run once a
+ * tick, after items move, so that the items hoppers take in go from the
+ * world as players see it.
  */
 internal fun Collection<Session>.tickMachines(game: GameData) {
     val world = game.world
@@ -2114,6 +2115,19 @@ internal fun Collection<Session>.tickMachines(game: GameData) {
     showAround(
         changed.map { it to UpdateBlock(it, world.blockAt(it)) } + brewed.map { it to LevelSoundEvent(BREWED, it.centre, -1) } + fired.flatMap(::firing),
     )
+}
+
+/**
+ * Brings what redstone powers in [game]'s world in line with what changed
+ * since it last looked, for these players to see if they have the chunks:
+ * doors, trapdoors and fence gates swinging, with their sounds, and the
+ * states of dispensers, droppers and hoppers. Run once a tick, after the
+ * machines, so a dispenser that power reaches waits its four ticks from
+ * the next.
+ */
+internal fun Collection<Session>.tickPower(game: GameData) {
+    val changes = game.world.updatePower()
+    if (!changes.isEmpty) showAround(game.world.packetsFor(changes))
 }
 
 /** What players see and hear of a dispenser or dropper firing: a click, and smoke out of its front, or a higher click with nothing to fire. */
@@ -2178,6 +2192,7 @@ class Sessions(
         sessions.values.tickBlocks(game, dropItems = config.gameMode != GameMode.CREATIVE)
         game.world.tickItems()
         sessions.values.tickMachines(game)
+        sessions.values.tickPower(game)
         game.world.tickOrbs(sessions.values.mapNotNull { it.orbTarget })
         sessions.values.forEach { it.collectItems() }
         sessions.values.forEach { it.collectOrbs() }

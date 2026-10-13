@@ -51,7 +51,10 @@ class HoppersTest {
     )
     private val fuel = Fuel(recipes, null)
 
-    private fun tick(times: Int = 1) = repeat(times) { world.tickMachines(recipes, fuel) }
+    private fun tick(times: Int = 1) = repeat(times) {
+        world.tickMachines(recipes, fuel)
+        world.updatePower()
+    }
 
     private fun Hopper.holding(vararg stacks: ItemStack) = apply { stacks.forEachIndexed { slot, stack -> slots[slot] = SlotStack(stack, world.newStackId()) } }
 

@@ -125,6 +125,7 @@ class FlatWorld(
             blockEntities[pos.chunk]?.remove(pos)
             containers.remove(pos)
             machines.remove(pos)
+            poweredOpen.remove(pos)
         }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
         // A hopper works from the moment it's there, whether anyone opens it or not.
@@ -134,6 +135,13 @@ class FlatWorld(
 
     /** Where blocks changed since redstone last looked, which may have powered something, or stopped powering it. */
     internal val powerChanges = LinkedHashSet<BlockPos>()
+
+    /**
+     * The doors, trapdoors and fence gates that were powered when redstone
+     * last looked, a door by its lower half, so that only power reaching
+     * them or going opens or shuts them.
+     */
+    internal val poweredOpen = HashSet<BlockPos>()
 
     /** What kind of block [state] is, which a furnace is whether lit or not. */
     private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: state.name
@@ -186,10 +194,9 @@ class FlatWorld(
 
     /**
      * Works every furnace, brewing stand, hopper, dispenser and dropper a
-     * tick, by [recipes], burning [fuel], then brings them in line with the
-     * power around them. Returns where blocks changed: a furnace lit or went
-     * out, a brewing stand's bottles changed, or power reached a block or
-     * left it. Brewing stands that finished a brew are in [brewed], and the
+     * tick, by [recipes], burning [fuel]. Returns where blocks changed how
+     * they look: a furnace lit or went out, or a brewing stand's bottles
+     * changed. Brewing stands that finished a brew are in [brewed], and the
      * dispensers and droppers that fired in [fired].
      */
     fun tickMachines(recipes: Recipes, fuel: Fuel, brewed: MutableList<BlockPos> = mutableListOf(), fired: MutableList<Fired> = mutableListOf()): List<BlockPos> {
@@ -213,7 +220,7 @@ class FlatWorld(
                 is Dispenser -> if (machine.fireIn > 0 && --machine.fireIn == 0) fire(pos, machine, recipes, fuel)?.let(fired::add)
             }
         }
-        return changed + updatePower()
+        return changed
     }
 
     /** The data the block at [pos] keeps beyond its state, like a bed's colour, or null for none. */

@@ -49,8 +49,15 @@ class DispensersTest {
     private val recipes = Recipes(emptyList(), emptyList(), emptyList(), emptyMap())
     private val fuel = Fuel(recipes)
 
-    /** Ticks the world's machines [times], and returns what fired. */
-    private fun tick(times: Int = 1) = mutableListOf<Fired>().also { fired -> repeat(times) { world.tickMachines(recipes, fuel, fired = fired) } }
+    /** Ticks the world's machines and power [times], and returns what fired. */
+    private fun tick(times: Int = 1): List<Fired> {
+        val fired = mutableListOf<Fired>()
+        repeat(times) {
+            world.tickMachines(recipes, fuel, fired = fired)
+            world.updatePower()
+        }
+        return fired
+    }
 
     private fun Dispenser.holding(vararg stacks: ItemStack) = apply { stacks.forEachIndexed { slot, stack -> slots[slot] = SlotStack(stack, world.newStackId()) } }
 

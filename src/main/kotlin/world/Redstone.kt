@@ -32,18 +32,34 @@ internal val BlockState.conductsPower get() = isFullCube && !letsLightThrough
 
 /**
  * Brings what redstone powers in line with the blocks that changed since
- * it last looked: a dispenser or dropper that power has just reached fires
- * a moment later, and a hopper is locked for as long as it's powered.
- * Returns where blocks changed.
+ * it last looked, and those around them. A dispenser or dropper that power
+ * has just reached fires a moment later, and a hopper is locked for as
+ * long as it's powered. A door, trapdoor or fence gate opens as power
+ * reaches it, and shuts as the power goes, a door if either half is
+ * powered. Between times, a player can open or shut a wooden one by hand,
+ * and it stays so until the power changes. Returns where blocks changed,
+ * and the sounds they made.
  */
-internal fun FlatWorld.updatePower(): List<BlockPos> {
-    if (powerChanges.isEmpty()) return emptyList()
+fun FlatWorld.updatePower(): Changes {
+    if (powerChanges.isEmpty()) return Changes(emptyMap(), emptyList())
     val near = powerChanges.flatMapTo(LinkedHashSet()) { it.around(POWER_REACH) }
     powerChanges.clear()
     val changed = mutableListOf<BlockPos>()
+    val sounds = mutableListOf<BlockSound>()
     for (pos in near) {
         if (pos.y !in MIN_Y..MAX_Y) continue
         val state = stateAt(pos) ?: continue
+        if (state.opensWithPower) {
+            // A door goes by its lower half, which keeps both halves' power.
+            val lower = if (state.properties[UPPER_BLOCK] == 1.toByte()) pos.side(Face.DOWN) else pos
+            val powered = isPowered(lower) || (UPPER_BLOCK in state.properties && isPowered(lower.side(Face.UP)))
+            if (powered == lower in poweredOpen) continue
+            if (powered) poweredOpen += lower else poweredOpen -= lower
+            val swung = stateAt(lower)?.let { swingByPower(lower, it, powered) } ?: continue
+            changed += swung.changed
+            swung.sound?.let { sounds += BlockSound(lower, it, swung.soundData) }
+            continue
+        }
         val property = when {
             state.name == HOPPER -> HOPPER_LOCKED
             state.dispenserKind != null -> TRIGGERED
@@ -54,7 +70,7 @@ internal fun FlatWorld.updatePower(): List<BlockPos> {
         blocks.find(state.name, state.properties + (property to bit(powered)))?.let { set(pos, it); changed += pos }
         if (powered) dispenserAt(pos)?.fireIn = DISPENSE_DELAY
     }
-    return changed
+    return Changes(emptyMap(), changed, sounds)
 }
 
 /** The blocks no more than [reach] steps from this one, along the axes, this one among them. */

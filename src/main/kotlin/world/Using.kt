@@ -107,15 +107,33 @@ fun FlatWorld.use(pos: BlockPos, facing: Face): Used? {
             change(pos, state, OPEN to bit(opening), CARDINAL to if (turnsRound) facing.id else state.properties.getValue(CARDINAL))
             Used(listOf(pos), if (opening) "fence_gate.open" else "fence_gate.close", blockAt(pos))
         }
-        else -> {
-            val opening = state.properties[OPEN] == 0.toByte()
-            change(pos, state, OPEN to bit(opening))
-            val other = state.otherHalf(pos)?.takeIf { stateAt(it)?.name == name }
-            other?.let { half -> stateAt(half)?.let { change(half, it, OPEN to bit(opening)) } }
-            val kind = if (name.endsWith("trapdoor")) "trapdoor" else "door"
-            Used(listOfNotNull(pos, other), "$kind.${if (opening) "open" else "close"}", blockAt(pos))
-        }
+        else -> swing(pos, state, opening = state.properties[OPEN] == 0.toByte())
     }
+}
+
+/** Doors, trapdoors and fence gates, which power opens and shuts: iron ones only by power, and the rest by hand too. */
+internal val BlockState.opensWithPower: Boolean
+    get() = name.endsWith("_door") || name.endsWith("trapdoor") || name.endsWith("fence_gate")
+
+/**
+ * Opens the door, trapdoor or fence gate at [pos] as power reaches it, or
+ * shuts it as the power goes, with its sound, unless it's that way
+ * already. A gate keeps facing the way it did. Null if nothing changed.
+ */
+internal fun FlatWorld.swingByPower(pos: BlockPos, state: BlockState, opening: Boolean): Used? {
+    if ((state.properties[OPEN] == 1.toByte()) == opening) return null
+    if (!state.name.endsWith("fence_gate")) return swing(pos, state, opening)
+    change(pos, state, OPEN to bit(opening))
+    return Used(listOf(pos), if (opening) "fence_gate.open" else "fence_gate.close", blockAt(pos))
+}
+
+/** Opens or shuts the door or trapdoor at [pos], a door's two halves together, with the sound of its kind. */
+private fun FlatWorld.swing(pos: BlockPos, state: BlockState, opening: Boolean): Used {
+    change(pos, state, OPEN to bit(opening))
+    val other = state.otherHalf(pos)?.takeIf { stateAt(it)?.name == state.name }
+    other?.let { half -> stateAt(half)?.let { change(half, it, OPEN to bit(opening)) } }
+    val kind = if (state.name.endsWith("trapdoor")) "trapdoor" else "door"
+    return Used(listOfNotNull(pos, other), "$kind.${if (opening) "open" else "close"}", blockAt(pos))
 }
 
 /** Whether this is a source of redstone power that's on: a lever switched on, or a button pressed in. */
