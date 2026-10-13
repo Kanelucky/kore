@@ -129,7 +129,11 @@ class FlatWorld(
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
         // A hopper works from the moment it's there, whether anyone opens it or not.
         if (state.name == HOPPER) machines.getOrPut(pos) { Hopper() }
+        powerChanges += pos
     }
+
+    /** Where blocks changed since redstone last looked, which may have powered something, or stopped powering it. */
+    internal val powerChanges = LinkedHashSet<BlockPos>()
 
     /** What kind of block [state] is, which a furnace is whether lit or not. */
     private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: state.name
@@ -137,7 +141,7 @@ class FlatWorld(
     /** The items each chest, barrel and shulker box keeps, by where it is, once a player has opened it or put something in it. */
     private val containers = HashMap<BlockPos, Container>()
 
-    /** The furnaces and brewing stands, by where they are, once a player or a hopper has used them, and every hopper. */
+    /** The furnaces, brewing stands, dispensers and droppers, by where they are, once something has used them, and every hopper. */
     private val machines = HashMap<BlockPos, Machine>()
 
     /** How many times the machines have worked, which hoppers go by to keep in step. */
@@ -167,6 +171,13 @@ class FlatWorld(
         return Hopper().also { machines[pos] = it }
     }
 
+    /** The dispenser or dropper at [pos], or null if there isn't one. */
+    fun dispenserAt(pos: BlockPos): Dispenser? {
+        (machines[pos] as? Dispenser)?.let { return it }
+        val kind = stateAt(pos)?.dispenserKind ?: return null
+        return Dispenser(kind).also { machines[pos] = it }
+    }
+
     /** Takes out every item the block at [pos] kept, as it breaks, slot by slot. */
     fun emptyContainer(pos: BlockPos): List<ItemStack?> = (containers.remove(pos)?.empty() ?: (machines[pos])?.slots?.empty()).orEmpty()
 
@@ -174,12 +185,14 @@ class FlatWorld(
     fun takeExperience(pos: BlockPos): Float = (machines.remove(pos) as? Furnace)?.takeExperience() ?: 0f
 
     /**
-     * Works every furnace, brewing stand and hopper a tick, by [recipes],
-     * burning [fuel]. Returns where blocks changed how they look: a furnace
-     * lit or went out, or a brewing stand's bottles changed. Brewing stands
-     * that finished a brew are in [brewed].
+     * Works every furnace, brewing stand, hopper, dispenser and dropper a
+     * tick, by [recipes], burning [fuel], then brings them in line with the
+     * power around them. Returns where blocks changed: a furnace lit or went
+     * out, a brewing stand's bottles changed, or power reached a block or
+     * left it. Brewing stands that finished a brew are in [brewed], and the
+     * dispensers and droppers that fired in [fired].
      */
-    fun tickMachines(recipes: Recipes, fuel: Fuel, brewed: MutableList<BlockPos> = mutableListOf()): List<BlockPos> {
+    fun tickMachines(recipes: Recipes, fuel: Fuel, brewed: MutableList<BlockPos> = mutableListOf(), fired: MutableList<Fired> = mutableListOf()): List<BlockPos> {
         val changed = mutableListOf<BlockPos>()
         machineTicks++
         for ((pos, machine) in machines.toList()) {
@@ -197,9 +210,10 @@ class FlatWorld(
                     }
                 }
                 is Hopper -> tickHopper(pos, machine, machineTicks, recipes, fuel)
+                is Dispenser -> if (machine.fireIn > 0 && --machine.fireIn == 0) fire(pos, machine, recipes, fuel)?.let(fired::add)
             }
         }
-        return changed
+        return changed + updatePower()
     }
 
     /** The data the block at [pos] keeps beyond its state, like a bed's colour, or null for none. */

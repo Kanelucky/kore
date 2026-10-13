@@ -53,7 +53,7 @@ fun FlatWorld.isBlockedOpen(pos: BlockPos): Boolean {
 }
 
 /** Blocks that are whole cubes, but see-through, which don't keep a chest shut: glass, leaves and ice. */
-private val BlockState.letsLightThrough: Boolean
+internal val BlockState.letsLightThrough: Boolean
     get() = name.endsWith("glass") || name.endsWith("_leaves") || name.endsWith("ice")
 
 /**

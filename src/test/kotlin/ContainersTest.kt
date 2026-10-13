@@ -20,6 +20,7 @@ import org.koremc.protocol.ContainerType
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.InventoryContent
 import org.koremc.protocol.InventorySlot
+import org.koremc.protocol.LevelEvent
 import org.koremc.protocol.LevelSoundEvent
 import org.koremc.protocol.PlayerEnchantOptions
 import org.koremc.protocol.UI_WINDOW
@@ -86,7 +87,11 @@ class ContainersTest {
     private val litFurnace = state("minecraft:lit_furnace", "minecraft:cardinal_direction" to "south")
     private val enchantingTable = state("minecraft:enchanting_table")
     private val hopper = state("minecraft:hopper", "facing_direction" to 0, "toggle_bit" to 0.toByte())
-    private val palette = BlockPalette(listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable, hopper))
+    private val dispensers = (0..1).map { on -> state("minecraft:dispenser", "facing_direction" to 5, "triggered_bit" to on.toByte()) }
+    private val levers = (0..1).map { on -> state("minecraft:lever", "lever_direction" to "up_east_west", "open_bit" to on.toByte()) }
+    private val palette = BlockPalette(
+        listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable, hopper) + dispensers + levers,
+    )
     private val world = FlatWorld(palette, listOf(stone))
 
     private val stoneItem = ItemDefinition("minecraft:stone", 1, componentBased = false, ItemVersion.NONE)
@@ -378,6 +383,30 @@ class ContainersTest {
         assertEquals(ItemStack(stoneItem, 1, block = stone), passed.stack)
         assertTrue(alex.received().has(InventorySlot(0, passed.stack, passed.id, window = 1).encode()))
         assertTrue(steve.received().has(InventorySlot(0, ItemStack(stoneItem, 1, block = stone), 900, window = 1).encode()))
+    }
+
+    @Test
+    fun `a dispenser opens as a window of its own, and fires when a lever on it is switched on, for everyone around to see`() {
+        val lever = BlockPos(here.x, here.y + 1, here.z)
+        world[here] = dispensers[0]
+        world[lever] = levers[0]
+        world.dispenserAt(here)!!.slots[0] = SlotStack(ItemStack(stoneItem, 2, block = stone), 900)
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+
+        steve.clicks(here)
+        assertTrue(steve.received().has(ContainerOpen(1, ContainerType.DISPENSER, here, entityId = -1).encode()))
+        steve.closes(1)
+
+        alex.clicks(lever)
+        steve.received()
+        repeat(5) { clients.map { it.session }.tickMachines(game) }
+
+        val seen = steve.received()
+        assertTrue(seen.has(UpdateBlock(here, dispensers[1].networkId).encode()))
+        assertTrue(seen.has(LevelEvent(LevelEvent.SOUND_CLICK, here.centre, 1000).encode()))
+        assertTrue(seen.has(LevelEvent(LevelEvent.PARTICLES_SHOOT, here.centre, 5).encode())) // Out of its east side
+        assertEquals(ItemStack(stoneItem, 1, block = stone), world.items.single().stack)
     }
 
     @Test

@@ -20,7 +20,7 @@ internal const val BUCKET = "minecraft:bucket"
 internal const val GLASS_BOTTLE = "minecraft:glass_bottle"
 
 /** A hopper's state for being locked by redstone, which stops it moving items. */
-private const val LOCKED = "toggle_bit"
+internal const val HOPPER_LOCKED = "toggle_bit"
 
 /** How far up a hopper's block the floor of its bowl is, which items land on: eleven sixteenths. */
 internal const val HOPPER_BOWL = 0.6875
@@ -82,8 +82,8 @@ internal class HopperReach(
  * the sides, and takes from below what it made, and the bucket lava leaves.
  * It puts into a brewing stand its reagent from above, and its bottles and
  * blaze powder from the sides, and takes the bottles from below. Shulker
- * boxes don't take shulker boxes. Chests, barrels and hoppers take
- * anything, a double chest as the one window it opens as.
+ * boxes don't take shulker boxes. Chests, barrels, hoppers, dispensers and
+ * droppers take anything, a double chest as the one window it opens as.
  */
 internal fun FlatWorld.hopperReach(pos: BlockPos, face: Face, recipes: Recipes, fuel: Fuel): HopperReach? {
     val state = stateAt(pos) ?: return null
@@ -100,7 +100,7 @@ internal fun FlatWorld.hopperReach(pos: BlockPos, face: Face, recipes: Recipes, 
         Storage.ENDER_CHEST -> return null
         null -> {}
     }
-    val machine: Machine = furnaceAt(pos) ?: brewingStandAt(pos) ?: hopperAt(pos) ?: return null
+    val machine: Machine = furnaceAt(pos) ?: brewingStandAt(pos) ?: hopperAt(pos) ?: dispenserAt(pos) ?: return null
     val limit = { slot: Int, stack: ItemStack -> machine.limit(slot, stack, recipes, fuel) }
     return when (machine) {
         is Furnace -> HopperReach(
@@ -118,6 +118,7 @@ internal fun FlatWorld.hopperReach(pos: BlockPos, face: Face, recipes: Recipes, 
             canTake = { slot, stack -> slot != BREWING_REAGENT || stack.item.name == GLASS_BOTTLE },
         )
         is Hopper -> HopperReach(machine.slots, (0 until HOPPER_SLOTS).toList(), hopper = machine)
+        is Dispenser -> HopperReach(machine.slots, (0 until DISPENSER_SLOTS).toList())
     }
 }
 
@@ -139,7 +140,7 @@ internal fun FlatWorld.tickHopper(pos: BlockPos, hopper: Hopper, tick: Long, rec
     if (hopper.cooldown > 0) return
     hopper.cooldown = 0
     val state = stateAt(pos) ?: return
-    if (state.properties[LOCKED] == 1.toByte()) return
+    if (state.properties[HOPPER_LOCKED] == 1.toByte()) return
     val pushed = push(pos, hopper, state, tick, recipes, fuel)
     val pulled = pull(pos, hopper, recipes, fuel)
     if (pushed || pulled) hopper.cooldown = HOPPER_COOLDOWN
@@ -149,15 +150,26 @@ internal fun FlatWorld.tickHopper(pos: BlockPos, hopper: Hopper, tick: Long, rec
 private fun FlatWorld.push(pos: BlockPos, hopper: Hopper, state: BlockState, tick: Long, recipes: Recipes, fuel: Fuel): Boolean {
     val facing = Face.of(state.properties[FACING_DIRECTION] as? Int ?: Face.DOWN.ordinal)?.takeIf { it != Face.UP } ?: Face.DOWN
     val target = hopperReach(pos.side(facing), facing.opposite, recipes, fuel) ?: return false
-    val wasEmpty = target.hopper?.slots?.contents()?.all { it == null } == true
     for (slot in 0 until HOPPER_SLOTS) {
         val there = hopper.slots[slot] ?: continue
-        if (target.put(there.stack, 1, ::newStackId) == 0) continue
+        if (!passOne(target, there.stack, tick)) continue
         hopper.slots[slot] = there.less(1)
-        target.hopper?.takeIf { wasEmpty }?.let { it.cooldown = HOPPER_COOLDOWN - if (it.tickedAt == tick) 1 else 0 }
         return true
     }
     return false
+}
+
+/**
+ * Puts one of [stack] into [target], as a hopper, or a dropper, passes an
+ * item on, returning whether it went in. A hopper that was empty waits
+ * before passing it on, a tick less if it's worked already this [tick] of
+ * the hopper passing it.
+ */
+internal fun FlatWorld.passOne(target: HopperReach, stack: ItemStack, tick: Long? = null): Boolean {
+    val wasEmpty = target.hopper?.slots?.contents()?.all { it == null } == true
+    if (target.put(stack, 1, ::newStackId) == 0) return false
+    target.hopper?.takeIf { wasEmpty }?.let { it.cooldown = HOPPER_COOLDOWN - if (tick != null && it.tickedAt == tick) 1 else 0 }
+    return true
 }
 
 /** Takes one item into [hopper] from the container above it, or else the items lying on it. */

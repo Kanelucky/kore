@@ -172,6 +172,16 @@ data class LevelEvent(val event: Int, val position: Vec3, val data: Int) : Serve
         /** The burst of particles and the sound of a block breaking. The data is the block's network ID. */
         const val PARTICLES_DESTROY_BLOCK = 2001
 
+        /**
+         * A dispenser's click as it fires, and the higher one with nothing to
+         * fire. The data is the pitch, in thousandths.
+         */
+        const val SOUND_CLICK = 1000
+        const val SOUND_CLICK_FAIL = 1001
+
+        /** Smoke puffing out of a dispenser as it fires. The data is which way, as [org.koremc.world.smokeDirection] has it. */
+        const val PARTICLES_SHOOT = 2000
+
         /** An anvil clanging as a player uses it, or breaking as it wears out. */
         const val SOUND_ANVIL_BREAK = 1020
         const val SOUND_ANVIL_USE = 1021

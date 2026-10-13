@@ -118,6 +118,10 @@ fun FlatWorld.use(pos: BlockPos, facing: Face): Used? {
     }
 }
 
+/** Whether this is a source of redstone power that's on: a lever switched on, or a button pressed in. */
+internal val BlockState.givesPower: Boolean
+    get() = (name == LEVER && properties[OPEN] == 1.toByte()) || (name.endsWith("button") && properties[PRESSED] == 1.toByte())
+
 /** Lets the button at [pos] pop back out, if it's still pressed in. Returns whether it was. */
 fun FlatWorld.releaseButton(pos: BlockPos): Boolean {
     val button = stateAt(pos)?.takeIf { it.name.endsWith("button") && it.properties[PRESSED] == 1.toByte() } ?: return false

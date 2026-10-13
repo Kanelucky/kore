@@ -167,9 +167,14 @@ import org.koremc.world.FURNACE_FUEL
 import org.koremc.world.FURNACE_INPUT
 import org.koremc.world.FURNACE_OUTPUT
 import org.koremc.world.Furnace
+import org.koremc.world.DISPENSER_SLOTS
+import org.koremc.world.Dispenser
+import org.koremc.world.Fired
 import org.koremc.world.HOPPER
 import org.koremc.world.HOPPER_SLOTS
 import org.koremc.world.Hopper
+import org.koremc.world.dispenserKind
+import org.koremc.world.smokeDirection
 import org.koremc.world.Machine
 import org.koremc.world.PlayerExperience
 import org.koremc.world.dropExperience
@@ -287,6 +292,10 @@ private const val LEVEL_UP = "levelup"
 
 /** The sound of a brewing stand finishing a brew. */
 private const val BREWED = "potion.brewed"
+
+/** The pitch of a dispenser's click as it fires, and with nothing to fire, in thousandths. */
+private const val CLICK_PITCH = 1000
+private const val CLICK_FAIL_PITCH = 1200
 
 /**
  * How far players reach to build and break, from their eyes to the
@@ -445,8 +454,8 @@ class Session(
     /**
      * A window open besides the inventory: a container's, which shows the
      * items in [view] of the blocks at [blocks], a furnace's, brewing
-     * stand's or hopper's, which shows its [machine] at work too, or a
-     * workstation's.
+     * stand's, hopper's, dispenser's or dropper's, which shows its
+     * [machine] at work too, or a workstation's.
      */
     private class Window(
         val id: Int,
@@ -957,13 +966,13 @@ class Session(
     }
 
     /**
-     * Opens the furnace, brewing stand or hopper at [pos] for the player,
-     * which they see at work for as long as it's open, whoever else is
-     * looking.
+     * Opens the furnace, brewing stand, hopper, dispenser or dropper at
+     * [pos] for the player, which they see at work for as long as it's
+     * open, whoever else is looking.
      */
     private fun openMachine(pos: BlockPos) {
         if (gameMode == GameMode.SPECTATOR || !inReach(pos)) return
-        val machine: Machine = world.furnaceAt(pos) ?: world.brewingStandAt(pos) ?: world.hopperAt(pos) ?: return
+        val machine: Machine = world.furnaceAt(pos) ?: world.brewingStandAt(pos) ?: world.hopperAt(pos) ?: world.dispenserAt(pos) ?: return
         closeWindow(reply = true)
         val (type, names) = when (machine) {
             is Furnace -> machine.kind.window to mapOf(
@@ -977,6 +986,7 @@ class Session(
                 ContainerName.BREWING_FUEL to BREWING_FUEL..BREWING_FUEL,
             )
             is Hopper -> ContainerType.HOPPER to mapOf(ContainerName.LEVEL_ENTITY to (0 until HOPPER_SLOTS))
+            is Dispenser -> machine.kind.window to mapOf(ContainerName.LEVEL_ENTITY to (0 until DISPENSER_SLOTS))
         }
         val opened = Window(nextWindowId(), type, pos, storage = null, blocks = listOf(pos), view = machine.slots, machine = machine)
         window = opened
@@ -1010,7 +1020,7 @@ class Session(
         val data = when (val machine = open.machine) {
             is Furnace -> listOf(machine.cookTime, machine.litTime, machine.litDuration)
             is BrewingStand -> listOf(machine.brewTime, machine.fuel, BREWS_PER_FUEL)
-            is Hopper, null -> emptyList()
+            is Hopper, is Dispenser, null -> emptyList()
         }
         data.forEachIndexed { property, value -> if (open.shownData.getOrNull(property) != value) packets += ContainerSetData(open.id, property, value) }
         open.shownData = data
@@ -1279,7 +1289,7 @@ class Session(
             // A chest, anvil or the like opens for the client, which Kore can't show yet. Either way, nothing's placed.
             clicked?.storage != null -> openStorage(use.position, clicked.storage!!)
             clicked?.name in WORKSTATIONS -> WORKSTATIONS.getValue(clicked!!.name).let { (workstation, type) -> openWorkstation(use.position, workstation, type) }
-            clicked?.furnaceKind != null || clicked?.name == BREWING_STAND || clicked?.name == HOPPER -> openMachine(use.position)
+            clicked?.furnaceKind != null || clicked?.name == BREWING_STAND || clicked?.name == HOPPER || clicked?.dispenserKind != null -> openMachine(use.position)
             clicked?.opensOnClick == true -> log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
             else -> onPlace(use)
         }
@@ -2089,17 +2099,28 @@ internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) 
 }
 
 /**
- * Works the furnaces, brewing stands and hoppers in [game]'s world for a
- * tick, for these players to see if they have the chunks: furnaces
- * lighting up and going out, the bottles on brewing stands, and the sound
- * of a brew finishing. Run once a tick, after items move, so that the
- * items hoppers take in go from the world as players see it.
+ * Works the furnaces, brewing stands, hoppers, dispensers and droppers in
+ * [game]'s world for a tick, and what redstone powers, for these players
+ * to see if they have the chunks: furnaces lighting up and going out, the
+ * bottles on brewing stands, the sound of a brew finishing, and dispensers
+ * firing. Run once a tick, after items move, so that the items hoppers
+ * take in go from the world as players see it.
  */
 internal fun Collection<Session>.tickMachines(game: GameData) {
     val world = game.world
     val brewed = mutableListOf<BlockPos>()
-    val changed = world.tickMachines(game.recipes, game.fuel, brewed)
-    showAround(changed.map { it to UpdateBlock(it, world.blockAt(it)) } + brewed.map { it to LevelSoundEvent(BREWED, it.centre, -1) })
+    val fired = mutableListOf<Fired>()
+    val changed = world.tickMachines(game.recipes, game.fuel, brewed, fired)
+    showAround(
+        changed.map { it to UpdateBlock(it, world.blockAt(it)) } + brewed.map { it to LevelSoundEvent(BREWED, it.centre, -1) } + fired.flatMap(::firing),
+    )
+}
+
+/** What players see and hear of a dispenser or dropper firing: a click, and smoke out of its front, or a higher click with nothing to fire. */
+private fun firing(fired: Fired): List<Pair<BlockPos, ServerPacket>> {
+    val at = fired.pos.centre
+    if (!fired.dispensed) return listOf(fired.pos to LevelEvent(LevelEvent.SOUND_CLICK_FAIL, at, CLICK_FAIL_PITCH))
+    return listOf(fired.pos to LevelEvent(LevelEvent.SOUND_CLICK, at, CLICK_PITCH), fired.pos to LevelEvent(LevelEvent.PARTICLES_SHOOT, at, smokeDirection(fired.facing)))
 }
 
 /**

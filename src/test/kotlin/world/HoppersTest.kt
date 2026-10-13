@@ -30,7 +30,8 @@ class HoppersTest {
     private val down = hopper(Face.DOWN)
     private val west = hopper(Face.WEST)
     private val locked = hopper(Face.DOWN, locked = true)
-    private val palette = BlockPalette(listOf(state(AIR), stone, chest, enderChest, shulkerBox, furnace, down, west, locked))
+    private val levers = (0..1).map { on -> state("minecraft:lever", "lever_direction" to "up_east_west", "open_bit" to on.toByte()) }
+    private val palette = BlockPalette(listOf(state(AIR), stone, chest, enderChest, shulkerBox, furnace, down, west, locked) + levers)
 
     // One layer of stone at the bottom of the world: blocks go from y -63 up.
     private val world = FlatWorld(palette, listOf(stone))
@@ -161,14 +162,23 @@ class HoppersTest {
     }
 
     @Test
-    fun `a hopper redstone locks moves nothing`() {
+    fun `a powered hopper is locked, and moves nothing until the power goes`() {
+        val lever = BlockPos(1, -62, 0)
         world[ground] = chest
-        world[above] = locked
+        world[above] = down
+        world[lever] = levers[1]
+        tick()
+        assertEquals(locked, world.stateAt(above))
         world.hopperAt(above)!!.holding(ItemStack(cobblestone))
 
         tick(10)
-
         assertTrue(world.containerAt(ground).contents().all { it == null })
+
+        world[lever] = levers[0]
+        tick()
+        assertEquals(down, world.stateAt(above))
+        tick()
+        assertEquals(listOf("cobblestone" to 1), counts(world.containerAt(ground).contents()))
     }
 
     @Test
