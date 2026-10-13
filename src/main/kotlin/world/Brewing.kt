@@ -18,6 +18,9 @@ const val BREWS_PER_FUEL = 20
 internal const val BREWING_STAND = "minecraft:brewing_stand"
 internal const val BLAZE_POWDER = "minecraft:blaze_powder"
 
+/** What a brewing stand's bottle slots hold. */
+internal val BOTTLES = setOf("minecraft:potion", "minecraft:splash_potion", "minecraft:lingering_potion", "minecraft:glass_bottle")
+
 /**
  * The block states that show which of a brewing stand's bottles hold
  * something, by slot: the left one's, the right one's, then the middle

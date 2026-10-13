@@ -243,16 +243,37 @@ fun FlatWorld.isClear(bottom: Vec3, width: Float, height: Float): Boolean {
 /**
  * The heights within a block that items land on and bump into, or null for
  * a block they fall through. Whole cubes fill the block, slabs fill their
- * half, and stairs at least the half they stand on. A big dripleaf's leaf
- * holds items up until it tips right over.
+ * half, and stairs at least the half they stand on. Other blocks that hold
+ * items up, like chests and carpets, do from the floor to their top. A big
+ * dripleaf's leaf holds items up until it tips right over, and a hopper's
+ * bowl holds them in it.
  */
 private fun BlockState.solidHeights(): ClosedFloatingPointRange<Double>? = when {
     isFullCube -> 0.0..1.0
+    name == HOPPER -> 0.0..HOPPER_BOWL
     name == BIG_DRIPLEAF -> leafHeights()
     properties["minecraft:vertical_half"] == "top" -> 0.5..1.0
     properties["minecraft:vertical_half"] == "bottom" -> 0.0..0.5
     "weirdo_direction" in properties -> if (properties["upside_down_bit"] == 1.toByte()) 0.5..1.0 else 0.0..0.5
-    else -> null
+    else -> partialHeight()?.let { 0.0..it }
 }
+
+/**
+ * How high the top of a block that isn't a whole cube, but holds items up
+ * all the same, is, or null for one items fall through. A cauldron's is
+ * the floor inside it.
+ */
+private fun BlockState.partialHeight(): Double? {
+    val name = name.removePrefix("minecraft:")
+    return PARTIAL_HEIGHTS[name] ?: PARTIAL_HEIGHT_ENDINGS.firstNotNullOfOrNull { (ending, height) -> height.takeIf { name.endsWith(ending) } }
+}
+
+/** The heights of blocks that hold items up, by their sixteenths, and of the families whose names end alike. */
+private val PARTIAL_HEIGHTS = mapOf(
+    "enchanting_table" to 12, "end_portal_frame" to 13, "stonecutter_block" to 9, "bed" to 9, "cake" to 8,
+    "daylight_detector" to 6, "daylight_detector_inverted" to 6, "campfire" to 7, "soul_campfire" to 7,
+    "powered_repeater" to 2, "unpowered_repeater" to 2, "powered_comparator" to 2, "unpowered_comparator" to 2, "cauldron" to 4,
+).mapValues { it.value / 16.0 }
+private val PARTIAL_HEIGHT_ENDINGS = listOf("chest" to 14, "carpet" to 1, "anvil" to 16).map { (ending, sixteenths) -> ending to sixteenths / 16.0 }
 
 private fun Vec3.toDoubles() = Triple(x.toDouble(), y.toDouble(), z.toDouble())

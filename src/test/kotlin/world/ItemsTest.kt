@@ -25,7 +25,9 @@ class ItemsTest {
     private val slab = state("minecraft:oak_slab", "minecraft:vertical_half" to "bottom")
     private val doubleSlab = state("minecraft:oak_double_slab", "minecraft:vertical_half" to "bottom")
     private val door = state("minecraft:wooden_door", "upper_block_bit" to 1.toByte())
-    private val palette = BlockPalette(listOf(air, stone, dirt, grass, glass, slab, doubleSlab, door))
+    private val chest = state("minecraft:chest", "minecraft:cardinal_direction" to "south")
+    private val carpet = state("minecraft:white_carpet")
+    private val palette = BlockPalette(listOf(air, stone, dirt, grass, glass, slab, doubleSlab, door, chest, carpet))
 
     private val dirtItem = ItemDefinition("minecraft:dirt", 3, componentBased = false, ItemVersion.NONE)
     private val slabItem = ItemDefinition("minecraft:oak_slab", 158, componentBased = false, ItemVersion.NONE)
@@ -64,6 +66,17 @@ class ItemsTest {
         val onSlab = world.spawnItem(ItemStack(dirtItem), Vec3(5.5f, floor + 2, 5.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
         repeat(40) { world.tickItems() }
         assertEquals(floor + 0.5f, onSlab.position.y)
+    }
+
+    @Test
+    fun `items land on chests and carpets, rather than fall into them`() {
+        world[BlockPos(5, MIN_Y + 1, 5)] = chest
+        world[BlockPos(7, MIN_Y + 1, 5)] = carpet
+        val onChest = world.spawnItem(ItemStack(dirtItem), Vec3(5.5f, floor + 2, 5.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        val onCarpet = world.spawnItem(ItemStack(dirtItem), Vec3(7.5f, floor + 2, 5.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+        repeat(40) { world.tickItems() }
+        assertEquals(floor + 0.875f, onChest.position.y)
+        assertEquals(floor + 0.0625f, onCarpet.position.y)
     }
 
     @Test

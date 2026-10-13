@@ -127,6 +127,8 @@ class FlatWorld(
             machines.remove(pos)
         }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
+        // A hopper works from the moment it's there, whether anyone opens it or not.
+        if (state.name == HOPPER) machines.getOrPut(pos) { Hopper() }
     }
 
     /** What kind of block [state] is, which a furnace is whether lit or not. */
@@ -135,8 +137,11 @@ class FlatWorld(
     /** The items each chest, barrel and shulker box keeps, by where it is, once a player has opened it or put something in it. */
     private val containers = HashMap<BlockPos, Container>()
 
-    /** The furnaces and brewing stands, by where they are, once a player has opened them. */
+    /** The furnaces and brewing stands, by where they are, once a player or a hopper has used them, and every hopper. */
     private val machines = HashMap<BlockPos, Machine>()
+
+    /** How many times the machines have worked, which hoppers go by to keep in step. */
+    private var machineTicks = 0L
 
     /** The items the chest, barrel or shulker box at [pos] keeps. */
     fun containerAt(pos: BlockPos): Container = containers.getOrPut(pos) { Container(STORAGE_SLOTS) }
@@ -155,6 +160,13 @@ class FlatWorld(
         return BrewingStand().also { machines[pos] = it }
     }
 
+    /** The hopper at [pos], or null if there isn't one. */
+    fun hopperAt(pos: BlockPos): Hopper? {
+        (machines[pos] as? Hopper)?.let { return it }
+        if (stateAt(pos)?.name != HOPPER) return null
+        return Hopper().also { machines[pos] = it }
+    }
+
     /** Takes out every item the block at [pos] kept, as it breaks, slot by slot. */
     fun emptyContainer(pos: BlockPos): List<ItemStack?> = (containers.remove(pos)?.empty() ?: (machines[pos])?.slots?.empty()).orEmpty()
 
@@ -162,13 +174,14 @@ class FlatWorld(
     fun takeExperience(pos: BlockPos): Float = (machines.remove(pos) as? Furnace)?.takeExperience() ?: 0f
 
     /**
-     * Works every furnace and brewing stand a tick, by [recipes], burning
-     * [fuel]. Returns where blocks changed how they look: a furnace lit or
-     * went out, or a brewing stand's bottles changed. Brewing stands that
-     * finished a brew are in [brewed].
+     * Works every furnace, brewing stand and hopper a tick, by [recipes],
+     * burning [fuel]. Returns where blocks changed how they look: a furnace
+     * lit or went out, or a brewing stand's bottles changed. Brewing stands
+     * that finished a brew are in [brewed].
      */
     fun tickMachines(recipes: Recipes, fuel: Fuel, brewed: MutableList<BlockPos> = mutableListOf()): List<BlockPos> {
         val changed = mutableListOf<BlockPos>()
+        machineTicks++
         for ((pos, machine) in machines.toList()) {
             val state = stateAt(pos) ?: continue
             when (machine) {
@@ -183,6 +196,7 @@ class FlatWorld(
                         blocks.find(state.name, state.properties + bits)?.let { set(pos, it); changed += pos }
                     }
                 }
+                is Hopper -> tickHopper(pos, machine, machineTicks, recipes, fuel)
             }
         }
         return changed

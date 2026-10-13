@@ -23,6 +23,7 @@ object ContainerType {
     const val ENCHANTMENT = 3
     const val BREWING_STAND = 4
     const val ANVIL = 5
+    const val HOPPER = 8
     const val LOOM = 24
     const val GRINDSTONE = 26
     const val BLAST_FURNACE = 27

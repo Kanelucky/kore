@@ -155,7 +155,6 @@ import org.koremc.world.wearFromBreaking
 import org.koremc.world.opensOnClick
 import org.koremc.world.BARREL
 import org.koremc.world.BARREL_OPEN
-import org.koremc.world.BLAZE_POWDER
 import org.koremc.world.BREWING_BOTTLES
 import org.koremc.world.BREWING_FUEL
 import org.koremc.world.BREWING_REAGENT
@@ -168,6 +167,9 @@ import org.koremc.world.FURNACE_FUEL
 import org.koremc.world.FURNACE_INPUT
 import org.koremc.world.FURNACE_OUTPUT
 import org.koremc.world.Furnace
+import org.koremc.world.HOPPER
+import org.koremc.world.HOPPER_SLOTS
+import org.koremc.world.Hopper
 import org.koremc.world.Machine
 import org.koremc.world.PlayerExperience
 import org.koremc.world.dropExperience
@@ -274,9 +276,6 @@ private val WORN_ANVILS = mapOf("minecraft:anvil" to "minecraft:chipped_anvil", 
 
 /** The chance an anvil wears each time a player outside creative uses it. */
 private const val ANVIL_WEAR_CHANCE = 0.12f
-
-/** What a brewing stand's bottle slots hold. */
-private val BOTTLES = setOf("minecraft:potion", "minecraft:splash_potion", "minecraft:lingering_potion", "minecraft:glass_bottle")
 
 private const val BOOKSHELF = "minecraft:bookshelf"
 
@@ -445,8 +444,9 @@ class Session(
 
     /**
      * A window open besides the inventory: a container's, which shows the
-     * items in [view] of the blocks at [blocks], a furnace's or brewing
-     * stand's, which shows its [machine] at work too, or a workstation's.
+     * items in [view] of the blocks at [blocks], a furnace's, brewing
+     * stand's or hopper's, which shows its [machine] at work too, or a
+     * workstation's.
      */
     private class Window(
         val id: Int,
@@ -457,7 +457,7 @@ class Session(
         val view: Container?,
         val machine: Machine? = null,
     ) {
-        /** What the client was last shown of the machine: each slot, and each number its screen shows. */
+        /** What the client was last shown of the container: each slot, and each number a machine's screen shows. */
         var shownSlots: List<SlotStack?>? = null
         var shownData: List<Int> = emptyList()
     }
@@ -890,13 +890,15 @@ class Session(
      * the change.
      */
     private fun onStackRequests(requests: List<StackRequest>) {
+        val before = window?.view?.contents()
         val responses = requests.map(stackRequests::handle)
         send(ItemStackResponse(responses))
         crafts.toList().also { crafts.clear() }.forEach(::afterCraft)
         val open = window ?: return
+        // The client knows what its requests changed already, though not what else did since it last saw, like a hopper.
+        val shown = open.shownSlots
+        if (before != null && shown != null) open.shownSlots = open.view!!.contents().mapIndexed { slot, now -> if (now != before[slot]) now else shown[slot] }
         open.machine?.let { machine ->
-            // The client knows what its requests changed already.
-            open.shownSlots = machine.slots.contents()
             // Taking what a furnace made takes the experience it earned.
             val tookOutput = responses.any { response -> response.accepted && response.containers.any { it.container == ContainerName.FURNACE_RESULT } }
             if (machine is Furnace && tookOutput) wholeExperience(machine.takeExperience()).takeIf { it > 0 }?.let { world.dropExperience(position, it) }
@@ -929,6 +931,7 @@ class Session(
         }
         val first = blocks.none(::seenByOthers)
         val opened = Window(nextWindowId(), ContainerType.CONTAINER, pos, storage, blocks, view)
+        opened.shownSlots = view.contents()
         window = opened
         inventory.opened = OpenContainer.named(storage.containerName, view)
         send(ContainerOpen(opened.id, ContainerType.CONTAINER, pos, entityId = -1), contentsOf(opened))
@@ -954,12 +957,13 @@ class Session(
     }
 
     /**
-     * Opens the furnace or brewing stand at [pos] for the player, which they
-     * see at work for as long as it's open, whoever else is looking.
+     * Opens the furnace, brewing stand or hopper at [pos] for the player,
+     * which they see at work for as long as it's open, whoever else is
+     * looking.
      */
     private fun openMachine(pos: BlockPos) {
         if (gameMode == GameMode.SPECTATOR || !inReach(pos)) return
-        val machine: Machine = world.furnaceAt(pos) ?: world.brewingStandAt(pos) ?: return
+        val machine: Machine = world.furnaceAt(pos) ?: world.brewingStandAt(pos) ?: world.hopperAt(pos) ?: return
         closeWindow(reply = true)
         val (type, names) = when (machine) {
             is Furnace -> machine.kind.window to mapOf(
@@ -972,6 +976,7 @@ class Session(
                 ContainerName.BREWING_RESULT to BREWING_BOTTLES,
                 ContainerName.BREWING_FUEL to BREWING_FUEL..BREWING_FUEL,
             )
+            is Hopper -> ContainerType.HOPPER to mapOf(ContainerName.LEVEL_ENTITY to (0 until HOPPER_SLOTS))
         }
         val opened = Window(nextWindowId(), type, pos, storage = null, blocks = listOf(pos), view = machine.slots, machine = machine)
         window = opened
@@ -981,39 +986,19 @@ class Session(
         log.debug("{} opened {} at {}", name, world.stateAt(pos)?.name, pos)
     }
 
-    /**
-     * How much of each stack each of [machine]'s slots holds. Nothing goes
-     * into what a furnace made, and only fuel under it. A brewing stand's
-     * bottles hold one potion or bottle each, its reagent slot only what
-     * brews, and its fuel slot only blaze powder.
-     */
-    private fun limitsOf(machine: Machine): (Int, ItemStack) -> Int = when (machine) {
-        is Furnace -> { slot, stack ->
-            when (slot) {
-                FURNACE_OUTPUT -> 0
-                FURNACE_FUEL -> if (game.fuel.burnTicks(stack) != null) stack.item.maxStackSize else 0
-                else -> stack.item.maxStackSize
-            }
-        }
-        is BrewingStand -> { slot, stack ->
-            when (slot) {
-                in BREWING_BOTTLES -> if (stack.item.name in BOTTLES) 1 else 0
-                BREWING_REAGENT -> if (game.recipes.isReagent(stack)) stack.item.maxStackSize else 0
-                else -> if (stack.item.name == BLAZE_POWDER) stack.item.maxStackSize else 0
-            }
-        }
-    }
+    /** How much of each stack each of [machine]'s slots holds, as the game's rules for it say. */
+    private fun limitsOf(machine: Machine): (Int, ItemStack) -> Int = { slot, stack -> machine.limit(slot, stack, game.recipes, game.fuel) }
 
     /**
-     * Shows the client how the furnace or brewing stand it has open is
-     * getting on: what's in the slots that changed since it last saw, and
-     * the numbers its screen shows, like how far along cooking is. Run once
-     * a tick.
+     * Shows the client how the container it has open is getting on: what's
+     * in the slots that changed since it last saw, whoever changed them,
+     * like a hopper, and for a furnace or brewing stand, the numbers its
+     * screen shows, like how far along cooking is. Run once a tick.
      */
     fun syncWindow() {
         val open = window ?: return
-        val machine = open.machine ?: return
-        val slots = machine.slots.contents()
+        val view = open.view ?: return
+        val slots = view.contents()
         val shown = open.shownSlots
         val packets = mutableListOf<ServerPacket>()
         if (shown == null) {
@@ -1022,9 +1007,10 @@ class Session(
             slots.forEachIndexed { slot, stack -> if (stack != shown[slot]) packets += InventorySlot(slot, stack?.stack, stack?.id ?: 0, open.id) }
         }
         open.shownSlots = slots
-        val data = when (machine) {
+        val data = when (val machine = open.machine) {
             is Furnace -> listOf(machine.cookTime, machine.litTime, machine.litDuration)
             is BrewingStand -> listOf(machine.brewTime, machine.fuel, BREWS_PER_FUEL)
+            is Hopper, null -> emptyList()
         }
         data.forEachIndexed { property, value -> if (open.shownData.getOrNull(property) != value) packets += ContainerSetData(open.id, property, value) }
         open.shownData = data
@@ -1162,7 +1148,9 @@ class Session(
     /** Shows the client what the container it has open holds now, if it shows a block at [blocks]. */
     private fun refreshWindow(blocks: List<BlockPos>) {
         val open = window ?: return
-        if (open.view != null && open.blocks.any { it in blocks }) send(contentsOf(open))
+        if (open.view == null || open.blocks.none { it in blocks }) return
+        send(contentsOf(open))
+        open.shownSlots = open.view.contents()
     }
 
     /** Closes the player's window if it shows a block that broke, at one of [positions]. */
@@ -1291,7 +1279,7 @@ class Session(
             // A chest, anvil or the like opens for the client, which Kore can't show yet. Either way, nothing's placed.
             clicked?.storage != null -> openStorage(use.position, clicked.storage!!)
             clicked?.name in WORKSTATIONS -> WORKSTATIONS.getValue(clicked!!.name).let { (workstation, type) -> openWorkstation(use.position, workstation, type) }
-            clicked?.furnaceKind != null || clicked?.name == BREWING_STAND -> openMachine(use.position)
+            clicked?.furnaceKind != null || clicked?.name == BREWING_STAND || clicked?.name == HOPPER -> openMachine(use.position)
             clicked?.opensOnClick == true -> log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
             else -> onPlace(use)
         }
@@ -2101,10 +2089,11 @@ internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) 
 }
 
 /**
- * Works the furnaces and brewing stands in [game]'s world for a tick, for
- * these players to see if they have the chunks: furnaces lighting up and
- * going out, the bottles on brewing stands, and the sound of a brew
- * finishing. Run once a tick.
+ * Works the furnaces, brewing stands and hoppers in [game]'s world for a
+ * tick, for these players to see if they have the chunks: furnaces
+ * lighting up and going out, the bottles on brewing stands, and the sound
+ * of a brew finishing. Run once a tick, after items move, so that the
+ * items hoppers take in go from the world as players see it.
  */
 internal fun Collection<Session>.tickMachines(game: GameData) {
     val world = game.world
@@ -2166,8 +2155,8 @@ class Sessions(
 
     private fun tick() {
         sessions.values.tickBlocks(game, dropItems = config.gameMode != GameMode.CREATIVE)
-        sessions.values.tickMachines(game)
         game.world.tickItems()
+        sessions.values.tickMachines(game)
         game.world.tickOrbs(sessions.values.mapNotNull { it.orbTarget })
         sessions.values.forEach { it.collectItems() }
         sessions.values.forEach { it.collectOrbs() }

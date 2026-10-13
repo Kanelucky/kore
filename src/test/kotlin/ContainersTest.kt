@@ -85,7 +85,8 @@ class ContainersTest {
     private val furnace = state("minecraft:furnace", "minecraft:cardinal_direction" to "south")
     private val litFurnace = state("minecraft:lit_furnace", "minecraft:cardinal_direction" to "south")
     private val enchantingTable = state("minecraft:enchanting_table")
-    private val palette = BlockPalette(listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable))
+    private val hopper = state("minecraft:hopper", "facing_direction" to 0, "toggle_bit" to 0.toByte())
+    private val palette = BlockPalette(listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable, hopper))
     private val world = FlatWorld(palette, listOf(stone))
 
     private val stoneItem = ItemDefinition("minecraft:stone", 1, componentBased = false, ItemVersion.NONE)
@@ -352,6 +353,31 @@ class ContainersTest {
         assertNull(world.furnaceAt(here)!!.slots[2])
         // Two iron ingots earn 1.4 experience: one orb, or two.
         assertTrue(world.orbs.sumOf { it.value } in 1..2)
+    }
+
+    @Test
+    fun `a hopper opens as a window of its own, and those looking into a chest see what a hopper passes into it`() {
+        val above = BlockPos(here.x, here.y + 1, here.z)
+        world[here] = chest
+        world[above] = hopper
+        world.hopperAt(above)!!.slots[0] = SlotStack(ItemStack(stoneItem, 2, block = stone), 900)
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+
+        steve.clicks(above)
+        val opened = steve.received()
+        assertTrue(opened.has(ContainerOpen(1, ContainerType.HOPPER, above, entityId = -1).encode()))
+        assertTrue(opened.has(InventoryContent(1, listOf(ItemStack(stoneItem, 2, block = stone) to 900) + List(4) { null }).encode()))
+        alex.clicks(here)
+        alex.received()
+
+        clients.map { it.session }.tickMachines(game)
+        clients.forEach { it.session.syncWindow() }
+
+        val passed = world.containerAt(here)[0]!!
+        assertEquals(ItemStack(stoneItem, 1, block = stone), passed.stack)
+        assertTrue(alex.received().has(InventorySlot(0, passed.stack, passed.id, window = 1).encode()))
+        assertTrue(steve.received().has(InventorySlot(0, ItemStack(stoneItem, 1, block = stone), 900, window = 1).encode()))
     }
 
     @Test
