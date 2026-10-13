@@ -195,6 +195,7 @@ import org.koremc.world.settle
 import org.koremc.world.side
 import org.koremc.world.movingFrom
 import org.koremc.world.pistonMotions
+import org.koremc.world.pressPlates
 import org.koremc.world.snapsUp
 import org.koremc.world.stepOn
 import org.koremc.world.tickBlocks
@@ -2166,16 +2167,18 @@ private fun Collection<Session>.showAround(packets: List<Pair<BlockPos, ServerPa
  * Ticks the blocks in [game]'s world, for these players to see if they
  * have the chunks: blocks that lost what held them up a tick ago break,
  * scaffolding moves along, coral out of water dies, big dripleaves tip
- * under the players and items standing on them, and pistons move, and
- * push or carry the players in the way of what they move, or on top of
- * it. What breaks drops what it drops, if [dropItems], and what it held
- * either way. Run once a tick.
+ * under the players and items standing on them, pressure plates press
+ * under the players, items and orbs on them, and pistons move, and push
+ * or carry the players in the way of what they move, or on top of it.
+ * Spectators press nothing. What breaks drops what it drops, if
+ * [dropItems], and what it held either way. Run once a tick.
  */
 internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) {
     val world = game.world
     val stood = world.stepOn(mapNotNull { it.standingAt } + world.items.filter { it.onGround }.map { it.position })
+    val pressed = world.pressPlates(filter { it.isInGame && it.gameMode != GameMode.SPECTATOR }.map { it.feet })
     val ticked = world.tickBlocks()
-    val changes = Changes(ticked.broken, (stood + ticked.reshaped).distinct(), ticked.sounds, ticked.data)
+    val changes = Changes(ticked.broken, (stood + pressed.reshaped + ticked.reshaped).distinct(), pressed.sounds + ticked.sounds, ticked.data)
     val packets = if (changes.isEmpty) emptyList() else world.packetsFor(changes)
     forEach { listOf(it).showAround(it.pistonView(packets)) }
     if (ticked.broken.isNotEmpty() || ticked.moved.isNotEmpty()) forEach { it.containerBroke(ticked.broken.keys + ticked.moved) }

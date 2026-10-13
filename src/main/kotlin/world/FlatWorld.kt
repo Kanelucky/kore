@@ -160,15 +160,23 @@ class FlatWorld(
     /** What each comparator that gives any power gives out of its front, by where it is. */
     internal val comparatorPower = HashMap<BlockPos, Int>()
 
+    /** What was on each pressure plate anything was on, when the plates last looked, by where they are. */
+    internal var plateLoads: Map<BlockPos, PlateLoad> = emptyMap()
+
     /** The arms of the pistons that have moved, or are moving, by where the pistons are. */
     internal val pistonArms = HashMap<BlockPos, PistonArm>()
 
     /** The arm of the piston [state] at [pos], in, if it's never moved. */
     internal fun pistonArm(pos: BlockPos, state: BlockState): PistonArm = pistonArms.getOrPut(pos) { PistonArm(state.name == STICKY_PISTON) }
 
-    /** What kind of block [state] is, which a furnace or redstone torch is whether lit or not, and a repeater or comparator whether powered or not. */
+    /**
+     * What kind of block [state] is, which a furnace, redstone torch or
+     * redstone lamp is whether lit or not, and a repeater or comparator
+     * whether powered or not.
+     */
     private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: when (state.name) {
         UNLIT_REDSTONE_TORCH -> REDSTONE_TORCH
+        LIT_REDSTONE_LAMP -> REDSTONE_LAMP
         POWERED_REPEATER -> UNPOWERED_REPEATER
         POWERED_COMPARATOR -> UNPOWERED_COMPARATOR
         else -> state.name

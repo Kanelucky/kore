@@ -19,6 +19,12 @@ internal const val POWERED_COMPARATOR = "minecraft:powered_comparator"
 /** A comparator's state for giving any power, which lights its torches. */
 private const val OUTPUT_LIT = "output_lit_bit"
 
+internal const val REDSTONE_LAMP = "minecraft:redstone_lamp"
+internal const val LIT_REDSTONE_LAMP = "minecraft:lit_redstone_lamp"
+
+/** How long a redstone lamp stays lit once its power goes, in ticks, as in Bedrock. */
+private const val LAMP_DELAY = 6
+
 internal const val OBSERVER = "minecraft:observer"
 private const val OBSERVER_FACING = "minecraft:facing_direction"
 private const val OBSERVER_POWERED = "powered_bit"
@@ -77,6 +83,8 @@ private val BlockState.isDiode get() = isRepeater || isComparator
 
 internal val BlockState.isObserver get() = name == OBSERVER
 
+private val BlockState.isLamp get() = name == REDSTONE_LAMP || name == LIT_REDSTONE_LAMP
+
 /** The side an observer watches, out of its face. It gives power out of its back, across from it. */
 private val BlockState.observerFace: Face get() = Face.entries.find { it.id == properties[OBSERVER_FACING] } ?: Face.UP
 
@@ -113,6 +121,7 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
     if (state.conductsPower) return strongestInto(from, withWire)
     return when {
         state.givesPower || state.name == REDSTONE_BLOCK -> MAX_POWER
+        state.isPressurePlate -> state.platePower
         state.name == REDSTONE_TORCH -> if (towards == state.torchHeldFrom) 0 else MAX_POWER
         state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
         state.isObserver -> observerGives(state, towards)
@@ -123,9 +132,10 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
 
 /**
  * The strongest power going straight into the block at [pos], which it
- * passes on to what's beside it: from a lever or button fixed to it, a lit
- * redstone torch under it, a powered repeater, a comparator or a pulsing
- * observer facing it, or, [withWire], dust on it or pointing into it.
+ * passes on to what's beside it: from a lever or button fixed to it, a
+ * pressure plate pressed on it, a lit redstone torch under it, a powered
+ * repeater, a comparator or a pulsing observer facing it, or, [withWire],
+ * dust on it or pointing into it.
  */
 private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Face.entries.maxOf { face ->
     val from = pos.side(face)
@@ -134,6 +144,7 @@ private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Fac
     when {
         state == null -> 0
         state.givesPower -> if (state.heldFrom == towards) MAX_POWER else 0
+        state.isPressurePlate -> if (towards == Face.DOWN) state.platePower else 0
         state.name == REDSTONE_TORCH -> if (towards == Face.UP) MAX_POWER else 0
         state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
         state.isObserver -> observerGives(state, towards)
@@ -313,6 +324,18 @@ internal fun FlatWorld.landObserver(pos: BlockPos, state: BlockState) {
 }
 
 /**
+ * Puts out the redstone lamp at [pos], [state], a moment after its power
+ * went, unless power's back. Returns whether it went out.
+ */
+internal fun FlatWorld.tickLamp(pos: BlockPos, state: BlockState): Boolean {
+    if (!state.isLamp) return false
+    redstoneDue -= pos
+    if (state.name != LIT_REDSTONE_LAMP || isPowered(pos)) return false
+    blocks.find(REDSTONE_LAMP, state.properties)?.let { set(pos, it) } ?: return false
+    return true
+}
+
+/**
  * Turns the observer at [pos] on, for its pulse, or off again once the
  * pulse is over. Returns whether it changed.
  */
@@ -360,6 +383,16 @@ private fun FlatWorld.answerPower(pos: BlockPos, changed: MutableSet<BlockPos>, 
             val settled = works == (comparatorPower[pos] ?: 0) && (works > 0) == (state.name == POWERED_COMPARATOR)
             if (settled || !redstoneDue.add(pos)) return
             schedule(pos, COMPARATOR_DELAY, BlockUpdate.COMPARATOR)
+        }
+        state.isLamp -> {
+            // A lamp lights as soon as power reaches it, but goes out a moment after the power goes.
+            val powered = isPowered(pos)
+            if (powered == (state.name == LIT_REDSTONE_LAMP)) return
+            if (!powered) {
+                if (redstoneDue.add(pos)) schedule(pos, LAMP_DELAY, BlockUpdate.LAMP)
+                return
+            }
+            blocks.find(LIT_REDSTONE_LAMP, state.properties)?.let { set(pos, it); changed += pos }
         }
         state.name == HOPPER || state.dispenserKind != null -> {
             val property = if (state.name == HOPPER) HOPPER_LOCKED else TRIGGERED

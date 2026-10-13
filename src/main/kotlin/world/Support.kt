@@ -56,6 +56,12 @@ enum class BlockUpdate {
 
     /** An observer's pulse starting, or ending. */
     OBSERVER,
+
+    /** A redstone lamp going out, a moment after its power went. */
+    LAMP,
+
+    /** A pressed pressure plate looking again at what's on it. */
+    PLATE,
 }
 
 /** Looks at the block at [pos] again for [update], [ticks] from now. */
@@ -273,6 +279,8 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.COMPARATOR -> if (tickComparator(at, state)) reshaped += at
             BlockUpdate.PISTON -> movePiston(at, state, broken, reshaped, sounds, moved)
             BlockUpdate.OBSERVER -> if (tickObserver(at, state)) reshaped += at
+            BlockUpdate.LAMP -> if (tickLamp(at, state)) reshaped += at
+            BlockUpdate.PLATE -> if (checkPlate(at, state, sounds)) reshaped += at
         }
     }
     reshaped += settle(changed).reshaped

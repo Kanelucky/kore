@@ -33,6 +33,7 @@ private val DROPS_INSTEAD = buildMap {
     put("minecraft:ender_chest", "minecraft:obsidian" to 8)
     for (kind in FurnaceKind.entries) put(kind.litBlock, kind.block to 1)
     put(UNLIT_REDSTONE_TORCH, REDSTONE_TORCH to 1)
+    put(LIT_REDSTONE_LAMP, REDSTONE_LAMP to 1)
 }
 
 /** Blocks that drop nothing, not even themselves, without Silk Touch, which nothing gives yet. */

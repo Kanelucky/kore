@@ -455,10 +455,7 @@ internal fun FlatWorld.movingFrom(pos: BlockPos, feet: Vec3): Pair<BlockPos, Nbt
 }
 
 /** The box of a player standing at [feet]. */
-private fun playerBox(feet: Vec3): Box {
-    val half = PLAYER_WIDTH / 2.0
-    return Box(doubleArrayOf(feet.x - half, feet.y.toDouble(), feet.z - half), doubleArrayOf(feet.x + half, feet.y + PLAYER_HEIGHT.toDouble(), feet.z + half))
-}
+private fun playerBox(feet: Vec3) = Box.player(feet)
 
 /** The box of the block at [pos], as solid as [heights] say. */
 private fun blockBox(pos: BlockPos, heights: ClosedFloatingPointRange<Double>) =

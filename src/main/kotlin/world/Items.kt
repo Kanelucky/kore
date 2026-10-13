@@ -223,6 +223,12 @@ internal class Box(val min: DoubleArray, val max: DoubleArray) {
             doubleArrayOf(bottom.x - HALF_WIDTH, bottom.y.toDouble(), bottom.z - HALF_WIDTH),
             doubleArrayOf(bottom.x + HALF_WIDTH, bottom.y + HEIGHT, bottom.z + HALF_WIDTH),
         )
+
+        /** The box of a player standing at [feet]. */
+        fun player(feet: Vec3): Box {
+            val half = PLAYER_WIDTH / 2.0
+            return Box(doubleArrayOf(feet.x - half, feet.y.toDouble(), feet.z - half), doubleArrayOf(feet.x + half, feet.y + PLAYER_HEIGHT.toDouble(), feet.z + half))
+        }
     }
 }
 
