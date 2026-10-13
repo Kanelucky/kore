@@ -3,6 +3,7 @@ package org.koremc.inventory
 import org.cloudburstmc.nbt.NbtMap
 import org.cloudburstmc.nbt.NbtType
 import org.koremc.protocol.ContainerName
+import org.koremc.protocol.SlotChange
 import org.koremc.protocol.SlotRef
 import org.koremc.protocol.StackAction
 import org.koremc.protocol.StackRequest
@@ -27,6 +28,11 @@ import org.koremc.registry.withCustomName
 import org.koremc.registry.withDamage
 import org.koremc.registry.withEnchantments
 import org.koremc.registry.withRepairCost
+import org.koremc.world.Effect
+import org.koremc.world.MapData
+import org.koremc.world.Maps
+import org.koremc.world.mapId
+import org.koremc.world.showing
 import java.util.UUID
 import kotlin.random.Random
 import kotlin.test.Test
@@ -56,6 +62,10 @@ class WorkstationsTest {
     private val redDye = item("red_dye", 14)
     private val creeperPattern = item("creeper_banner_pattern", 15, stack = 1)
     private val lapis = item("lapis_lazuli", 16)
+    private val ironIngot = item("iron_ingot", 17)
+    private val paper = item("paper", 18)
+    private val emptyMap = item("empty_map", 19)
+    private val filledMap = item("filled_map", 20)
 
     private val sharpness = Enchantment(9, "sharpness", 5, Cost(11, -10), Cost(11, 10), 10, treasure = false, curse = false, setOf("smite"), { "sharp_weapon" in it.enchantCategories })
     private val unbreaking = Enchantment(17, "unbreaking", 3, Cost(8, -3), Cost(10, 51), 5, treasure = false, curse = false, emptySet(), { "durability" in it.enchantCategories })
@@ -68,6 +78,7 @@ class WorkstationsTest {
             ShapelessRecipe("slabs", listOf(Ingredient.Item(stone.name, null, 1)), listOf(ItemStack(slab, 2)), "stonecutter", 0, UUID(0, 1), keepsData = false, 1),
             SmithingTransformRecipe("upgrade", Ingredient.Item(upgrade.name, null, 1), Ingredient.Item(sword.name, null, 1), Ingredient.Item(netherite.name, null, 1), ItemStack(netheriteSword), "smithing_table", 2),
             SmithingTrimRecipe("trim", Ingredient.Tag("minecraft:trim_templates", 1), Ingredient.Tag("minecraft:trimmable_armors", 1), Ingredient.Tag("minecraft:trim_materials", 1), "smithing_table", 3),
+            ShapelessRecipe("map", listOf(Ingredient.Item(paper.name, null, 1)), listOf(ItemStack(emptyMap)), "cartography_table", 0, UUID(0, 4), keepsData = false, 4),
         ),
         potionMixes = emptyList(),
         containerMixes = emptyList(),
@@ -78,10 +89,22 @@ class WorkstationsTest {
     private var creativeMode = false
     private var level = 30
     private val crafted = mutableListOf<Crafted>()
+
+    /** How many layers of pyramid the open beacon stands on. */
+    private var beaconLevel = 1
+
+    /** The maps players have drawn. */
+    private val maps = Maps()
+
     private val crafter = object : Crafter {
         override val experienceLevel get() = level
 
         override fun enchantingOffers(stack: ItemStack) = enchantments.offersFor(stack, bookshelves = 15, seed = 42)
+
+        override fun beaconGives(primary: Int, secondary: Int) = org.koremc.world.beaconGives(beaconLevel, primary, secondary)
+
+        override fun cartograph(input: ItemStack?, additional: ItemStack?, name: String?) =
+            org.koremc.world.cartograph(input, additional, name, maps)
     }
     private val handler = StackRequestHandler(
         inventory, CreativeInventory(emptyList(), emptyList()), creativeMode = { creativeMode }, onDrop = {}, recipes = recipes,
@@ -296,6 +319,92 @@ class WorkstationsTest {
         assertEquals(ItemStack(enchantedBook).withEnchantments(offer.enchantments), inSlot(ContainerName.ENCHANTING_INPUT))
         assertEquals(2, inSlot(ContainerName.ENCHANTING_MATERIAL)?.count)
         assertEquals(listOf(Crafted(Workstation.ENCHANTING_TABLE, levels = 3)), crafted)
+    }
+
+    /** Pays the open beacon for the powers [primary] and [secondary], followed by [then]. */
+    private fun pays(primary: Int, secondary: Int = 0, then: List<StackAction> = emptyList(), requestId: Int = -1) =
+        handler.handle(StackRequest(requestId, listOf(StackAction.BeaconPayment(primary, secondary)) + then))
+
+    @Test
+    fun `a beacon takes one of what pays it for the powers its pyramid gives, outside creative too, as the client destroys it`() {
+        open(Workstation.BEACON, ContainerName.BEACON_PAYMENT to ItemStack(ironIngot))
+        val payment = SlotRef(ContainerName.BEACON_PAYMENT, BEACON_PAYMENT_SLOT, inventory.ui[BEACON_PAYMENT_SLOT]!!.id)
+
+        assertTrue(pays(Effect.HASTE, then = listOf(StackAction.Destroy(1, payment))).accepted)
+
+        assertNull(inSlot(ContainerName.BEACON_PAYMENT))
+        assertEquals(listOf(Crafted(Workstation.BEACON, beaconPowers = Effect.HASTE to 0)), crafted)
+    }
+
+    @Test
+    fun `a beacon the client doesn't take the payment from takes it itself`() {
+        open(Workstation.BEACON, ContainerName.BEACON_PAYMENT to ItemStack(ironIngot))
+
+        val response = pays(Effect.SPEED)
+
+        assertTrue(response.accepted)
+        assertNull(inSlot(ContainerName.BEACON_PAYMENT))
+        assertEquals(listOf(SlotChange(BEACON_PAYMENT_SLOT, 0, 0)), response.containers.single { it.container == ContainerName.BEACON_PAYMENT }.slots)
+    }
+
+    @Test
+    fun `a beacon gives no power for nothing, nor for what doesn't pay it, nor one beyond its pyramid, and holds one of what pays`() {
+        open(Workstation.BEACON)
+        assertFalse(pays(Effect.SPEED).accepted)
+        inventory.ui[BEACON_PAYMENT_SLOT] = SlotStack(ItemStack(stone), inventory.newStackId())
+        assertFalse(pays(Effect.SPEED, requestId = -3).accepted)
+        inventory.ui[BEACON_PAYMENT_SLOT] = SlotStack(ItemStack(ironIngot), inventory.newStackId())
+        assertFalse(pays(Effect.STRENGTH, requestId = -5).accepted)
+        assertFalse(pays(Effect.SPEED, Effect.REGENERATION, requestId = -7).accepted)
+        beaconLevel = 4
+        assertTrue(pays(Effect.STRENGTH, Effect.REGENERATION, requestId = -9).accepted)
+
+        val slot = Location(inventory.ui, BEACON_PAYMENT_SLOT)
+        assertEquals(1, inventory.limit(slot, ItemStack(ironIngot, 64)))
+        assertEquals(0, inventory.limit(slot, ItemStack(stone)))
+    }
+
+    /** A map item showing a map numbered [id], which the cartography table knows. */
+    private fun mapItem(id: Long = 7, count: Int = 1): ItemStack {
+        val map = maps[id] ?: MapData(id, scale = 0, centreX = 0, centreZ = 0).also(maps::add)
+        return ItemStack(filledMap, count).showing(map)
+    }
+
+    @Test
+    fun `a cartography table copies a map onto an empty map, naming it for free`() {
+        open(Workstation.CARTOGRAPHY_TABLE, ContainerName.CARTOGRAPHY_INPUT to mapItem(), ContainerName.CARTOGRAPHY_ADDITIONAL to ItemStack(emptyMap, 3))
+
+        assertTrue(crafts(StackAction.CraftOptional(0, 0), count = 2, names = listOf("Home")))
+
+        assertEquals(mapItem(count = 2).withCustomName("Home"), made)
+        assertNull(inSlot(ContainerName.CARTOGRAPHY_INPUT))
+        assertEquals(2, inSlot(ContainerName.CARTOGRAPHY_ADDITIONAL)?.count)
+        assertEquals(listOf(Crafted(Workstation.CARTOGRAPHY_TABLE, made = made)), crafted)
+    }
+
+    @Test
+    fun `a cartography table zooms a map out to its parent, and the player hears what it made`() {
+        val map = maps.start(0, 0)
+        open(Workstation.CARTOGRAPHY_TABLE, ContainerName.CARTOGRAPHY_INPUT to ItemStack(filledMap).showing(map), ContainerName.CARTOGRAPHY_ADDITIONAL to ItemStack(paper))
+
+        assertTrue(crafts(StackAction.CraftOptional(0, 0)))
+
+        assertEquals(map.parentId, made?.mapId)
+        assertEquals(listOf(Crafted(Workstation.CARTOGRAPHY_TABLE, made = made)), crafted)
+        assertNull(inSlot(ContainerName.CARTOGRAPHY_ADDITIONAL))
+    }
+
+    @Test
+    fun `paper makes an empty map at a cartography table, by the table's own recipe, and the table holds only maps and what works them`() {
+        open(Workstation.CARTOGRAPHY_TABLE, ContainerName.CARTOGRAPHY_INPUT to ItemStack(paper, 3))
+
+        assertTrue(crafts(StackAction.Craft(4, 2), count = 2))
+
+        assertEquals(ItemStack(emptyMap, 2), made)
+        assertEquals(1, inSlot(ContainerName.CARTOGRAPHY_INPUT)?.count)
+        assertEquals(0, inventory.limit(Location(inventory.ui, CARTOGRAPHY_INPUT_SLOT), ItemStack(stone)))
+        assertEquals(64, inventory.limit(Location(inventory.ui, CARTOGRAPHY_INPUT_SLOT), ItemStack(paper)))
+        assertEquals(64, inventory.limit(Location(inventory.ui, CARTOGRAPHY_ADDITIONAL_SLOT), ItemStack(paper)))
     }
 
     @Test

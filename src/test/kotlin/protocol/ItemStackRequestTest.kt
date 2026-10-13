@@ -32,6 +32,7 @@ class ItemStackRequestTest {
             action(3, legacy = 3) { writeByte(1); slot(28, 1, 3); writeBoolean(false) } // Drop
             action(4, legacy = 4) { writeByte(2); slot(59, 0, 4) } // Destroy
             action(5, legacy = 5) { writeByte(1); slot(13, 28, 5) } // Consume
+            action(8, legacy = 10) { writeVarInt(1).writeVarInt(10) } // Pay a beacon for Speed and Regeneration
             action(10, legacy = 12) { writeVarUInt(9).writeByte(1) } // Craft a recipe
             action(17, legacy = 19) { // The deprecated results: one named item
                 writeVarUInt(1).writeVarUInt(1).writeByte(1).writeString("minecraft:stick").writeVarInt(0)
@@ -47,6 +48,7 @@ class ItemStackRequestTest {
                 StackAction.Drop(1, SlotRef(28, 1, 3)),
                 StackAction.Destroy(2, SlotRef(59, 0, 4)),
                 StackAction.Consume(1, SlotRef(13, 28, 5)),
+                StackAction.BeaconPayment(primary = 1, secondary = 10),
                 StackAction.Craft(recipe = 9, times = 1),
                 StackAction.Informational(17),
             ),

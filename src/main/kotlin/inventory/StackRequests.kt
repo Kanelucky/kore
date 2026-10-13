@@ -22,6 +22,9 @@ import org.koremc.registry.customName
 import org.koremc.registry.damage
 import org.koremc.registry.sameKindAs
 import org.koremc.registry.withEnchantments
+import org.koremc.world.Cartographed
+import org.koremc.world.MapData
+import org.koremc.world.paysBeacon
 import org.slf4j.LoggerFactory
 
 private val log = LoggerFactory.getLogger(StackRequestHandler::class.java)
@@ -34,13 +37,20 @@ private class Rejection(message: String) : Exception(message)
 
 /**
  * What crafting at workstations takes besides items: the player's
- * experience level, which anvils and enchanting cost, and what the
- * enchanting table they have open offers for an item.
+ * experience level, which anvils and enchanting cost, what the enchanting
+ * table they have open offers for an item, the powers the beacon they
+ * have open can give, and what the cartography table they have open makes.
  */
 interface Crafter {
     val experienceLevel: Int
 
     fun enchantingOffers(stack: ItemStack): List<EnchantingOffer>
+
+    /** Whether the beacon the player has open can give [primary], and [secondary] with it, or 0 for none, on the pyramid it stands on. */
+    fun beaconGives(primary: Int, secondary: Int): Boolean = false
+
+    /** What the cartography table the player has open makes of what's in its slots, [input] and [additional], named [name], if anything. */
+    fun cartograph(input: ItemStack?, additional: ItemStack?, name: String?): Cartographed? = null
 
     companion object {
         /** A player with no levels, and no enchanting table. */
@@ -54,11 +64,22 @@ interface Crafter {
 
 /**
  * A craft at a workstation that a request made, once it's accepted:
- * where, the levels it cost the player, and the experience it gave back.
+ * where, the levels it cost the player, the experience it gave back, the
+ * powers a beacon was paid for, and what a cartography table made, with
+ * the maps it started, if any. The client works out a cartography table's
+ * maps its own way, so it hears what Kore made of them.
  */
-data class Crafted(val workstation: Workstation, val levels: Int = 0, val experience: Int = 0)
+data class Crafted(
+    val workstation: Workstation,
+    val levels: Int = 0,
+    val experience: Int = 0,
+    val beaconPowers: Pair<Int, Int>? = null,
+    val made: ItemStack? = null,
+    val newMaps: List<MapData> = emptyList(),
+)
 
 private const val STONECUTTER = "stonecutter"
+private const val CARTOGRAPHY_TABLE = "cartography_table"
 private const val LAPIS_LAZULI = "minecraft:lapis_lazuli"
 
 /**
@@ -82,8 +103,9 @@ private const val LAPIS_LAZULI = "minecraft:lapis_lazuli"
  * Workstations craft from slots of their own, which Kore uses up as the
  * craft needs: a stonecutter's recipe, a smithing table's upgrade or trim,
  * an anvil's mending, enchanting and naming, a grindstone's disenchanting,
- * a loom's pattern, and an enchanting table's offer. What they make goes
- * in the created output too.
+ * a loom's pattern, an enchanting table's offer, and a cartography table's
+ * recipes and maps. What they make goes in the created output too. Paying
+ * a beacon uses up what's in its payment slot.
  */
 class StackRequestHandler(
     private val inventory: PlayerInventory,
@@ -113,10 +135,11 @@ class StackRequestHandler(
     }
 
     fun handle(request: StackRequest): StackResponse {
-        val transaction = Transaction(request.id, request.filterStrings)
+        val transaction = Transaction(request.id, request.filterStrings, paysBeacon = request.actions.any { it is StackAction.BeaconPayment })
         return try {
             request.actions.forEach(transaction::apply)
             transaction.settleCraft()
+            transaction.settlePayment()
             recent[request.id] = transaction.stackIds()
             transaction.dropped.forEach(onDrop)
             transaction.crafted?.let(onCrafted)
@@ -128,7 +151,12 @@ class StackRequestHandler(
         }
     }
 
-    private inner class Transaction(private val requestId: Int, private val filterStrings: List<String>) {
+    private inner class Transaction(
+        private val requestId: Int,
+        private val filterStrings: List<String>,
+        /** Whether the request pays a beacon, which uses up what's in its payment slot, outside creative too. */
+        private val paysBeacon: Boolean,
+    ) {
         /** What each changed slot held before, to put back if the request fails. */
         private val before = LinkedHashMap<Location, SlotStack?>()
 
@@ -145,6 +173,12 @@ class StackRequestHandler(
         var crafted: Crafted? = null
             private set
 
+        /** What the request took from a beacon's payment slot, which the client does by destroying it or using it up. */
+        private var payment: ItemStack? = null
+
+        /** Whether the request paid a beacon without taking anything from its payment slot yet. */
+        private var paymentDue = false
+
         fun apply(action: StackAction) {
             when (action) {
                 is StackAction.Transfer -> transfer(action)
@@ -154,9 +188,10 @@ class StackRequestHandler(
                 is StackAction.Craft -> startCraft(action)
                 is StackAction.Consume -> consume(action)
                 is StackAction.Create -> create(action)
-                is StackAction.CraftOptional -> anvil(action)
+                is StackAction.CraftOptional -> if (inventory.workstation == Workstation.CARTOGRAPHY_TABLE) cartography(action) else anvil(action)
                 is StackAction.CraftLoom -> loom(action)
                 is StackAction.CraftGrindstone -> grindstone()
+                is StackAction.BeaconPayment -> payBeacon(action)
                 is StackAction.Drop -> drop(action)
                 is StackAction.Informational -> {}
                 is StackAction.Unsupported -> throw Rejection("action ${action.type} isn't supported yet")
@@ -205,6 +240,7 @@ class StackRequestHandler(
         }
 
         private fun destroy(action: StackAction.Destroy) {
+            if (paysBeacon && action.source.container == ContainerName.BEACON_PAYMENT) return takePayment(action.source, action.count)
             if (!creativeMode()) throw Rejection("only creative players can destroy items")
             val source = verified(action.source)
             val stack = source.content() ?: throw Rejection("${action.source} is empty")
@@ -233,6 +269,7 @@ class StackRequestHandler(
                 Workstation.STONECUTTER -> return stonecut(action)
                 Workstation.SMITHING_TABLE -> return smith(action)
                 Workstation.ENCHANTING_TABLE -> return enchant(action)
+                Workstation.CARTOGRAPHY_TABLE -> return cartographyRecipe(action)
                 null, Workstation.CRAFTING_TABLE -> {}
                 else -> throw Rejection("${inventory.workstation} crafts no recipes")
             }
@@ -359,6 +396,72 @@ class StackRequestHandler(
             made(ground.output, Crafted(Workstation.GRINDSTONE, experience = ground.experience))
         }
 
+        /**
+         * Makes what the cartography table's own recipe [action] names, like
+         * an empty map from paper, as many times over as it says, using up
+         * what it takes from the table's two slots.
+         */
+        private fun cartographyRecipe(action: StackAction.Craft) {
+            val recipe = recipes[action.recipe] as? ShapelessRecipe ?: throw Rejection("there's no recipe ${action.recipe}")
+            if (recipe.block != CARTOGRAPHY_TABLE) throw Rejection("recipe ${action.recipe} isn't a cartography table's")
+            checkTimes(action.times)
+            val slots = listOf(ContainerName.CARTOGRAPHY_INPUT, ContainerName.CARTOGRAPHY_ADDITIONAL).mapNotNull { name -> inSlot(name)?.let { name to it } }
+            val uses = recipes.shapelessUses(recipe.inputs, slots, action.times) ?: throw Rejection("the cartography table doesn't hold recipe ${action.recipe}")
+            for ((name, count) in uses) useUp(name, count)
+            val output = recipe.outputs[0]
+            made(output.copy(count = output.count * action.times), Crafted(Workstation.CARTOGRAPHY_TABLE))
+        }
+
+        /**
+         * Works the map in the cartography table, naming what it makes by the
+         * filter string [action] points at, if there is one: zooming it out,
+         * copying it, locking it, making it a locator map, or just naming it.
+         */
+        private fun cartography(action: StackAction.CraftOptional) {
+            if (craft != null) throw Rejection("one request crafts once")
+            val input = inSlot(ContainerName.CARTOGRAPHY_INPUT)
+            val additional = inSlot(ContainerName.CARTOGRAPHY_ADDITIONAL)
+            val worked = crafter.cartograph(input, additional, filterStrings.getOrNull(action.nameIndex))
+                ?: throw Rejection("the cartography table does nothing with ${input?.item?.name} and ${additional?.item?.name}")
+            if (worked.inputUsed > 0) useUp(ContainerName.CARTOGRAPHY_INPUT, worked.inputUsed)
+            if (worked.additionalUsed > 0) useUp(ContainerName.CARTOGRAPHY_ADDITIONAL, worked.additionalUsed)
+            made(worked.output, Crafted(Workstation.CARTOGRAPHY_TABLE, made = worked.output, newMaps = worked.newMaps))
+        }
+
+        /**
+         * Pays the beacon the player has open for the powers [action] names,
+         * which it must give on the pyramid it stands on, with what's in its
+         * payment slot. The client takes that from the slot itself, by
+         * destroying it, or Kore does once the request's done.
+         */
+        private fun payBeacon(action: StackAction.BeaconPayment) {
+            if (inventory.workstation != Workstation.BEACON) throw Rejection("there's no beacon open")
+            if (crafted != null) throw Rejection("one request pays once")
+            val paid = payment ?: inSlot(ContainerName.BEACON_PAYMENT)
+            if (paid?.paysBeacon != true) throw Rejection("the beacon hasn't been paid")
+            if (!crafter.beaconGives(action.primary, action.secondary)) throw Rejection("the beacon doesn't give ${action.primary} and ${action.secondary}")
+            paymentDue = payment == null
+            crafted = Crafted(Workstation.BEACON, beaconPowers = action.primary to action.secondary)
+        }
+
+        /** Takes [count] from the beacon's payment slot at [source] to pay it with, which must be one of something that does. */
+        private fun takePayment(source: SlotRef, count: Int) {
+            if (payment != null) throw Rejection("the beacon's been paid already")
+            val location = verified(source)
+            val there = location.content() ?: throw Rejection("$source is empty")
+            if (count != 1 || !there.stack.paysBeacon) throw Rejection("can't pay a beacon with $count of ${there.stack.item.name}")
+            payment = there.stack.copy(count = 1)
+            paymentDue = false
+            set(source, location, there.withCount(there.stack.count - 1))
+        }
+
+        /** Takes what pays the beacon from its slot, if the request paid it without the client doing so. */
+        fun settlePayment() {
+            if (!paymentDue) return
+            paymentDue = false
+            useUp(ContainerName.BEACON_PAYMENT, 1)
+        }
+
         /** What's in the open workstation's slot that the client calls [name]. */
         private fun inSlot(name: Int): ItemStack? = inventory.ui[inventory.workstation!!.slots.getValue(name)]?.stack
 
@@ -382,6 +485,7 @@ class StackRequestHandler(
 
         /** Uses up what [action] says for a craft from the recipe book. From the grid, Kore has used up what the recipe takes already. */
         private fun consume(action: StackAction.Consume) {
+            if (paysBeacon && action.source.container == ContainerName.BEACON_PAYMENT) return takePayment(action.source, action.count)
             val pending = craft ?: throw Rejection("nothing's being crafted to use up ${action.source} for")
             if (!pending.auto) return
             if (pending.settled) throw Rejection("the craft's ingredients were all used up already")

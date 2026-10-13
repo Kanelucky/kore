@@ -52,6 +52,8 @@ fun ByteBuf.writeVarULong(value: Long): ByteBuf {
 
 fun ByteBuf.writeVarLong(value: Long): ByteBuf = writeVarULong((value shl 1) xor (value shr 63))
 
+fun ByteBuf.readVarLong(): Long = readVarULong().let { (it ushr 1) xor -(it and 1) }
+
 /** A signed varint, zigzag-encoded so small negative numbers stay short. */
 fun ByteBuf.readVarInt(): Int = readVarUInt().let { (it ushr 1) xor -(it and 1) }
 

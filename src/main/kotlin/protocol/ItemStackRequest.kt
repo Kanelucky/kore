@@ -14,6 +14,8 @@ object ContainerName {
     const val ARMOR = 6
     /** A chest's or an ender chest's items. */
     const val LEVEL_ENTITY = 7
+    /** What a player pays a beacon with. */
+    const val BEACON_PAYMENT = 8
     /** A brewing stand's reagent, its three bottles, and its blaze powder. */
     const val BREWING_INPUT = 9
     const val BREWING_RESULT = 10
@@ -39,6 +41,9 @@ object ContainerName {
     const val GRINDSTONE_INPUT = 50
     const val GRINDSTONE_ADDITIONAL = 51
     const val STONECUTTER_INPUT = 53
+    /** A cartography table's map, and what goes with it. */
+    const val CARTOGRAPHY_INPUT = 55
+    const val CARTOGRAPHY_ADDITIONAL = 56
     const val BARREL = 58
     const val CURSOR = 59
     /** Where crafted and creative items appear, before the client moves them somewhere. */
@@ -83,9 +88,9 @@ sealed interface StackAction {
     data class Create(val result: Int) : StackAction
 
     /**
-     * Works the items in an anvil, as the recipe numbered [recipe], naming
-     * what it makes by the request's filter string numbered [nameIndex], if
-     * it has any.
+     * Works the items in an anvil or a cartography table, as the recipe
+     * numbered [recipe], naming what it makes by the request's filter string
+     * numbered [nameIndex], if it has any.
      */
     data class CraftOptional(val recipe: Int, val nameIndex: Int) : StackAction
 
@@ -95,10 +100,16 @@ sealed interface StackAction {
     /** Takes the enchantments off, and mends, what's in a grindstone. */
     data class CraftGrindstone(val recipe: Int, val times: Int) : StackAction
 
+    /**
+     * Pays the beacon the player has open for its powers: the effect
+     * numbered [primary], and the one numbered [secondary], or 0 for none.
+     */
+    data class BeaconPayment(val primary: Int, val secondary: Int) : StackAction
+
     /** An action that only describes what others do, like a craft's results. It changes nothing itself. */
     data class Informational(val type: Int) : StackAction
 
-    /** An action Kore can't carry out yet, like paying a beacon, which fails its request. */
+    /** An action Kore can't carry out yet, like combining elements at a lab table, which fails its request. */
     data class Unsupported(val type: Int) : StackAction
 }
 
@@ -205,7 +216,7 @@ private fun ByteBuf.readStackAction(): StackAction {
         CONSUME -> StackAction.Consume(readUnsignedByte().toInt(), readSlotRef())
         CREATE -> StackAction.Create(readUnsignedByte().toInt())
         LAB_TABLE_COMBINE, CRAFT_NON_IMPLEMENTED -> StackAction.Unsupported(type)
-        BEACON_PAYMENT -> StackAction.Unsupported(type).also { readVarInt(); readVarInt() }
+        BEACON_PAYMENT -> StackAction.BeaconPayment(readVarInt(), readVarInt())
         MINE_BLOCK -> StackAction.Unsupported(type).also { readVarInt(); readVarInt(); readIntLE() }
         CRAFT_RECIPE -> StackAction.Craft(readVarUInt(), readUnsignedByte().toInt())
         CRAFT_RECIPE_AUTO -> StackAction.Craft(readVarUInt(), readUnsignedByte().toInt(), auto = true).also { readList { skipIngredient() } }

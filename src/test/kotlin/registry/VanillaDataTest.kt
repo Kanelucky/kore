@@ -231,12 +231,35 @@ class VanillaDataTest {
         assertEquals(ToolKind.SHEARS, vanilla.mining["minecraft:white_wool_stairs"]?.tool)
         assertTrue(vanilla.mining.getValue("minecraft:bedrock").unbreakable)
 
+        // Every block state's map colour and the light it stops, by the same network IDs Kore hashes.
+        val missing = vanilla.blocks.states.filter { it.networkId !in vanilla.traits }
+        assertEquals(emptyList(), missing.map { it.name }.distinct())
+        assertEquals(BlockTrait(0xFF707070.toInt(), Tint.NONE, 15), vanilla.traits[blockStateHash("minecraft:stone", emptyMap())])
+        assertEquals(Tint.GRASS, vanilla.traits[blockStateHash("minecraft:grass_block", emptyMap())].tint)
+        assertEquals(0, vanilla.traits[blockStateHash("minecraft:glass", emptyMap())].mapColour)
+
         // Recent additions, which a creative inventory from older data would be missing.
         val creative = vanilla.creative.items.map { it.stack.item.name }.toSet()
         assertTrue(vanilla.creative.items.size > 1000)
         for (name in listOf("minecraft:shelf_mushroom", "minecraft:poplar_shelf", "minecraft:white_wool_stairs", "minecraft:red_concrete_slab")) {
             assertTrue(name in creative, "$name is missing from the creative inventory")
         }
+    }
+
+    @Test
+    fun `block states' map colours come as RGBA hex, and their network IDs unsigned`() {
+        val traits = readBlockTraits(
+            """
+            [
+                {"blockStateHash": 4121722107, "mapColor": "#707070ff", "name": "minecraft:bedrock", "tintMethod": "None", "lightDampening": 15, "friction": 0.6},
+                {"blockStateHash": 1211861802, "mapColor": "#00000000", "name": "minecraft:water", "tintMethod": "Water", "lightDampening": 1}
+            ]
+            """,
+        )
+
+        assertEquals(BlockTrait(0xFF707070.toInt(), Tint.NONE, 15), traits[4121722107L.toInt()])
+        assertEquals(BlockTrait(0, Tint.WATER, 1), traits[1211861802])
+        assertEquals(BlockTrait(0, Tint.NONE, 0), traits[5])
     }
 
     @Test

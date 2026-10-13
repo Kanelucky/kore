@@ -19,7 +19,9 @@ private val json = Json { ignoreUnknownKeys = true }
  * enchantments. They're dumped from the game by CloudburstMC, with how
  * blocks take to mining, how many of each item stack, what items are made
  * of and the enchantments, from PrismarineJS's minecraft-data, and which
- * items each tag takes in from PocketMine's BedrockData, kept apart from
+ * items each tag takes in from PocketMine's BedrockData, and the colour
+ * each block state shows on maps and the light it stops from AllayMC's
+ * BedrockData, kept apart from
  * Kore's code in https://github.com/KoreMC/data, and read once, on start.
  */
 data class VanillaData(
@@ -33,6 +35,8 @@ data class VanillaData(
     val mining: Map<String, Mining>,
     val recipes: Recipes = Recipes.NONE,
     val enchantments: Enchantments = Enchantments.NONE,
+    /** The colour each block state shows on maps, and the light it stops, by network ID. */
+    val traits: BlockTraits = BlockTraits.NONE,
 ) {
     companion object {
         /**
@@ -59,6 +63,7 @@ data class VanillaData(
                 mining = withNewerBlocks(mining, blocks),
                 recipes = readRecipes(directory.resolve("recipes.json").readText(), ItemStacks(items, creative, blocks), blocks, tags),
                 enchantments = readEnchantments(directory.resolve("enchantments.json").readText(), items),
+                traits = readBlockTraits(directory.resolve("block_states.json").readText()),
             )
         }
     }

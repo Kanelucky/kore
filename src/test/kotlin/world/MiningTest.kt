@@ -31,6 +31,12 @@ class MiningTest {
     }
 
     @Test
+    fun `each level of Haste makes a player mine a fifth faster`() {
+        assertEquals(17, breakTicks(stone, "minecraft:wooden_pickaxe", haste = 2))
+        assertEquals(125, breakTicks(stone, held = null, haste = 1))
+    }
+
+    @Test
     fun `some blocks break at once, and some never outside creative`() {
         assertEquals(0, breakTicks(Mining(0.0), held = null))
         assertEquals(0, breakTicks(Mining(0.2, ToolKind.HOE), "minecraft:golden_hoe")) // Leaves before a gold hoe

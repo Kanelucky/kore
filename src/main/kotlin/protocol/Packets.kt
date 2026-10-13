@@ -466,6 +466,8 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             LECTERN_UPDATE -> decodeLecternUpdate(buffer)
             BOOK_EDIT -> decodeBookEdit(buffer)
             PLAYER_TOGGLE_CRAFTER_SLOT_REQUEST -> decodeToggleCrafterSlot(buffer)
+            MAP_INFO_REQUEST -> decodeMapInfoRequest(buffer)
+            MAP_CREATE_LOCKED_COPY -> decodeMapCreateLockedCopy(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
         }

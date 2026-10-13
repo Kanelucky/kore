@@ -6,6 +6,7 @@ import org.koremc.protocol.CraftingData
 import org.koremc.protocol.CreativeContent
 import org.koremc.protocol.ItemRegistry
 import org.koremc.protocol.ServerPacket
+import org.koremc.registry.BlockTraits
 import org.koremc.registry.CreativeInventory
 import org.koremc.registry.Enchantments
 import org.koremc.registry.Fuel
@@ -21,7 +22,8 @@ import org.koremc.world.FlatWorld
  * definitions they're sent as they join, encoded once, the creative
  * inventory their requests are checked against, how blocks take to mining,
  * the items there are, to hand out, the recipes that make them, what
- * burns in a furnace, and the enchantments there are.
+ * burns in a furnace, the enchantments there are, and the colours blocks
+ * show on maps.
  */
 class GameData(
     val world: FlatWorld,
@@ -42,6 +44,8 @@ class GameData(
     val fuel: Fuel = Fuel(recipes, items.of("minecraft:bucket")),
     /** Every enchantment, for anvils, grindstones and enchanting tables. */
     val enchantments: Enchantments = Enchantments.NONE,
+    /** The colour each block state shows on maps, and the light it stops, which beacons' beams need through. */
+    val traits: BlockTraits = BlockTraits.NONE,
 ) {
     companion object {
         fun of(vanilla: VanillaData, world: FlatWorld) = GameData(
@@ -54,6 +58,7 @@ class GameData(
             items = ItemStacks(vanilla.items, vanilla.creative, vanilla.blocks),
             recipes = vanilla.recipes,
             enchantments = vanilla.enchantments,
+            traits = vanilla.traits,
         )
     }
 }

@@ -19,6 +19,8 @@ enum class ActorDataId(val id: Int) {
     HEIGHT(54),
     /** Whether the name shows even when the actor is hidden from view, as a byte. */
     ALWAYS_SHOW_NAME(81),
+    /** The effects whose particles show around an actor, packed into a long. */
+    VISIBLE_MOB_EFFECTS(131),
 }
 
 /** Bits in an actor's [ActorDataId.FLAGS]: what it's doing, and what the game should do with it. */

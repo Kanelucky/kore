@@ -3,6 +3,8 @@ package org.koremc.inventory
 import org.koremc.protocol.ContainerName
 import org.koremc.registry.ItemStack
 import org.koremc.registry.sameKindAs
+import org.koremc.world.fitsCartographyTable
+import org.koremc.world.paysBeacon
 
 /** A stack in a slot, with the ID the server gave it. The client names stacks by these IDs in its requests. */
 data class SlotStack(val stack: ItemStack, val id: Int)
@@ -73,12 +75,21 @@ enum class Workstation(val slots: Map<Int, Int>) {
     GRINDSTONE(mapOf(ContainerName.GRINDSTONE_INPUT to 16, ContainerName.GRINDSTONE_ADDITIONAL to 17)),
     LOOM(mapOf(ContainerName.LOOM_INPUT to 9, ContainerName.LOOM_DYE to 10, ContainerName.LOOM_MATERIAL to 11)),
     ENCHANTING_TABLE(mapOf(ContainerName.ENCHANTING_INPUT to ENCHANTING_INPUT_SLOT, ContainerName.ENCHANTING_MATERIAL to ENCHANTING_LAPIS_SLOT)),
+    BEACON(mapOf(ContainerName.BEACON_PAYMENT to BEACON_PAYMENT_SLOT)),
+    CARTOGRAPHY_TABLE(mapOf(ContainerName.CARTOGRAPHY_INPUT to CARTOGRAPHY_INPUT_SLOT, ContainerName.CARTOGRAPHY_ADDITIONAL to CARTOGRAPHY_ADDITIONAL_SLOT)),
 }
 
 /** The slots of an enchanting table's item, which holds one, and its lapis lazuli, which holds nothing else. */
 const val ENCHANTING_INPUT_SLOT = 14
 const val ENCHANTING_LAPIS_SLOT = 15
 private const val LAPIS_LAZULI = "minecraft:lapis_lazuli"
+
+/** The slot of what a player pays a beacon with, which holds one of it. */
+const val BEACON_PAYMENT_SLOT = 27
+
+/** The slots of a cartography table's map, and what goes with it. */
+const val CARTOGRAPHY_INPUT_SLOT = 12
+const val CARTOGRAPHY_ADDITIONAL_SLOT = 13
 
 /** How many slots the hotbar has: the first of the player's items. */
 const val HOTBAR_SIZE = 9
@@ -191,16 +202,21 @@ class PlayerInventory(private val newStackIds: () -> Int = LocalStackIds()) {
      * The most of [stack] [location] can hold: a stack's worth, or less, or
      * none, in the slots of a container or workstation that hold only some
      * things. An enchanting table holds one item to enchant, and only lapis
-     * lazuli beside it.
+     * lazuli beside it. A beacon holds one of what pays it, and a
+     * cartography table only maps and what works them.
      */
     fun limit(location: Location, stack: ItemStack): Int {
         val open = opened
-        return when {
-            open != null && location.container === open.container -> open.limit(location.slot, stack)
-            location.container !== ui || workstation != Workstation.ENCHANTING_TABLE -> stack.item.maxStackSize
-            location.slot == ENCHANTING_INPUT_SLOT -> 1
-            location.slot == ENCHANTING_LAPIS_SLOT -> if (stack.item.name == LAPIS_LAZULI) stack.item.maxStackSize else 0
-            else -> stack.item.maxStackSize
+        if (open != null && location.container === open.container) return open.limit(location.slot, stack)
+        val most = stack.item.maxStackSize
+        if (location.container !== ui) return most
+        return when (workstation to location.slot) {
+            Workstation.ENCHANTING_TABLE to ENCHANTING_INPUT_SLOT -> 1
+            Workstation.ENCHANTING_TABLE to ENCHANTING_LAPIS_SLOT -> if (stack.item.name == LAPIS_LAZULI) most else 0
+            Workstation.BEACON to BEACON_PAYMENT_SLOT -> if (stack.paysBeacon) 1 else 0
+            Workstation.CARTOGRAPHY_TABLE to CARTOGRAPHY_INPUT_SLOT, Workstation.CARTOGRAPHY_TABLE to CARTOGRAPHY_ADDITIONAL_SLOT ->
+                if (stack.fitsCartographyTable) most else 0
+            else -> most
         }
     }
 }

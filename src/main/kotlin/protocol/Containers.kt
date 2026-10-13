@@ -27,6 +27,7 @@ object ContainerType {
     const val DISPENSER = 6
     const val DROPPER = 7
     const val HOPPER = 8
+    const val BEACON = 13
     const val LOOM = 24
 
     /** A lectern's book, open to read, which has no window of its own. */
@@ -35,6 +36,7 @@ object ContainerType {
     const val BLAST_FURNACE = 27
     const val SMOKER = 28
     const val STONECUTTER = 29
+    const val CARTOGRAPHY = 30
     const val SMITHING_TABLE = 33
     const val CRAFTER = 36
 }

@@ -130,11 +130,13 @@ class FlatWorld(
             redstoneDue.remove(pos)
             comparatorPower.remove(pos)
             pistonArms.remove(pos)
+            beacons.remove(pos)
         }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
         // A hopper works from the moment it's there, whether anyone opens it or not.
         if (state.name == HOPPER) machines.getOrPut(pos) { Hopper() }
         if (state.isComparator) comparators += pos else comparators -= pos
+        if (state.name == BEACON) beacons.putIfAbsent(pos, 0)
         powerChanges += pos
     }
 
@@ -162,6 +164,12 @@ class FlatWorld(
 
     /** What was on each pressure plate anything was on, when the plates last looked, by where they are. */
     internal var plateLoads: Map<BlockPos, PlateLoad> = emptyMap()
+
+    /** Every beacon, by where it is, with how many layers of pyramid its beam last shone on, or 0 if it didn't. */
+    internal val beacons = HashMap<BlockPos, Int>()
+
+    /** The maps players have drawn. */
+    val maps = Maps()
 
     /** The arms of the pistons that have moved, or are moving, by where the pistons are. */
     internal val pistonArms = HashMap<BlockPos, PistonArm>()

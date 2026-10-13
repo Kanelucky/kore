@@ -116,7 +116,8 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 - **World:** the vanilla flat world, streamed to players as they move. Changes last as long as the server runs.
 - **Building and mining:** placing blocks with the game's rules for slabs, stairs, doors, rails, fences, walls, scaffolding and the like; survival mining at the right pace, tool wear, and drops.
 - **Items and inventory:** dropped items, picking up and merging, the creative inventory, and server-authoritative inventories.
-- **Containers and workstations:** chests, barrels, shulker boxes and ender chests; crafting; furnaces and brewing stands; stonecutters, smithing tables, anvils, grindstones, looms and enchanting tables; hoppers, dispensers, droppers and crafters; lecterns, and writing and signing books; experience.
+- **Containers and workstations:** chests, barrels, shulker boxes and ender chests; crafting; furnaces and brewing stands; stonecutters, smithing tables, anvils, grindstones, looms, enchanting tables and cartography tables; hoppers, dispensers, droppers and crafters; lecterns, and writing and signing books; beacons and their powers; experience.
+- **Maps:** drawn as players explore, locator maps, and zooming out, copying and locking them.
 - **Redstone:** levers, buttons, pressure plates, redstone blocks, torches, dust, repeaters, comparators and observers, powering doors, trapdoors, fence gates, lamps, hoppers, dispensers and droppers.
 - **Pistons:** pushing and pulling blocks, slime and honey, flying machines, chests and furnaces with their contents, and the players, items and orbs in the way or on top.
 - **Players:** seeing each other, skins, chat, and joining and leaving messages in each player's language.
@@ -164,7 +165,7 @@ Packages leave out the common root, so `org.koremc.network` lives in `src/main/k
 - [x] Lecterns, and writing and signing books
 - [x] Redstone, pistons, pressure plates and lamps
 - [x] Players seeing each other, chat and commands
-- [ ] Beacons and cartography tables
+- [x] Beacons, maps and cartography tables
 - [ ] Mobs
 - [ ] The rest of the game's commands
 

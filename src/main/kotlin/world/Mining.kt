@@ -28,20 +28,22 @@ private enum class Tier(val speed: Double, val level: Int) {
  * breaks once the ticks add up to a whole. Swords and shears dig what
  * suits them at one speed each, whatever they're made of. Efficiency adds
  * the square of its level, and one, to the speed of a tool that suits.
+ * Each level of [haste] then makes it a fifth faster.
  *
  * Kore doesn't count what slows a player down, like digging off the
- * ground or under water, nor Haste, which nothing gives them yet.
+ * ground or under water.
  */
-fun breakTicks(mining: Mining, held: String?, efficiency: Int = 0): Int? {
+fun breakTicks(mining: Mining, held: String?, efficiency: Int = 0, haste: Int = 0): Int? {
     if (mining.unbreakable) return null
     val (kind, tier) = toolOf(held)
     val suited = kind != null && kind == mining.tool
-    val speed = when {
+    val toolSpeed = when {
         !suited -> 1.0
         kind == ToolKind.SWORD -> 15.0
         kind == ToolKind.SHEARS -> 5.0
         else -> tier?.speed ?: 1.0
     } + if (suited && efficiency > 0) efficiency * efficiency + 1 else 0
+    val speed = toolSpeed * (1 + haste * HASTE_PER_LEVEL)
     val ticks = mining.hardness * (if (harvests(mining, held)) 30 else 100) / speed
     // Some hardness comes as a float, a hair over its true value, which mustn't round up to another tick.
     return if (ticks < 1) 0 else ceil(ticks - 1e-4).toInt()

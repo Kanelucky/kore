@@ -14,6 +14,7 @@ import org.koremc.inventory.SlotStack
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.BlockDefinitions
 import org.koremc.protocol.BlockEvent
+import org.koremc.protocol.ClientboundMapItemData
 import org.koremc.protocol.ContainerClose
 import org.koremc.protocol.ContainerName
 import org.koremc.protocol.ContainerOpen
@@ -24,6 +25,7 @@ import org.koremc.protocol.InventoryContent
 import org.koremc.protocol.InventorySlot
 import org.koremc.protocol.LevelEvent
 import org.koremc.protocol.LevelSoundEvent
+import org.koremc.protocol.MobEffect
 import org.koremc.protocol.PlayerEnchantOptions
 import org.koremc.protocol.SetActorMotion
 import org.koremc.protocol.UI_WINDOW
@@ -39,12 +41,20 @@ import org.koremc.protocol.writeBlockPos
 import org.koremc.protocol.writeByteArray
 import org.koremc.protocol.writeString
 import org.koremc.protocol.writeVarInt
+import org.koremc.protocol.writeVarLong
 import org.koremc.protocol.writeVarUInt
 import org.koremc.protocol.writeVarULong
 import org.koremc.registry.AIR
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
+import org.koremc.registry.BlockTrait
+import org.koremc.registry.BlockTraits
+import org.koremc.registry.Tint
+import org.koremc.inventory.BEACON_PAYMENT_SLOT
+import org.koremc.inventory.CARTOGRAPHY_ADDITIONAL_SLOT
+import org.koremc.inventory.CARTOGRAPHY_INPUT_SLOT
+import org.koremc.inventory.CREATED_OUTPUT_SLOT
 import org.koremc.registry.CreativeCategory
 import org.koremc.registry.CreativeGroup
 import org.koremc.registry.CreativeInventory
@@ -62,6 +72,10 @@ import org.koremc.registry.ShapelessRecipe
 import org.koremc.world.BlockPos
 import org.koremc.world.Drops
 import org.koremc.world.BOOK_PUT
+import org.koremc.world.Effect
+import org.koremc.world.beaconPowers
+import org.koremc.world.mapId
+import org.koremc.world.setBeaconPowers
 import org.koremc.world.FlatWorld
 import org.koremc.world.lecternBook
 import org.koremc.world.PLAYER_EYE_HEIGHT
@@ -106,9 +120,12 @@ class ContainersTest {
     private val movingBlock = state("minecraft:moving_block")
     private val lectern = state("minecraft:lectern", "minecraft:cardinal_direction" to "south", "powered_bit" to 0.toByte())
     private val crafter = state("minecraft:crafter", "orientation" to "north_up", "crafting" to 0.toByte(), "triggered_bit" to 0.toByte())
+    private val beacon = state("minecraft:beacon")
+    private val ironBlock = state("minecraft:iron_block")
+    private val cartographyTable = state("minecraft:cartography_table")
     private val palette = BlockPalette(
         listOf(state(AIR), stone, chest, enderChest, barrel, openBarrel, shulkerBox, craftingTable, furnace, litFurnace, enchantingTable, hopper) + dispensers + levers +
-            listOf(piston, pistonHead, upPiston, upPistonHead, movingBlock, lectern, crafter),
+            listOf(piston, pistonHead, upPiston, upPistonHead, movingBlock, lectern, crafter, beacon, ironBlock, cartographyTable),
     )
     private val world = FlatWorld(palette, listOf(stone))
 
@@ -119,7 +136,10 @@ class ContainersTest {
     private val coal = ItemDefinition("minecraft:coal", 4, componentBased = false, ItemVersion.NONE)
     private val sword = ItemDefinition("minecraft:diamond_sword", 5, componentBased = false, ItemVersion.NONE, maxStackSize = 1, enchantCategories = setOf("durability"), enchantability = 10)
     private val writtenBook = ItemDefinition("minecraft:written_book", 6, componentBased = false, ItemVersion.NONE, maxStackSize = 16)
-    private val items = listOf(stoneItem, shulkerItem, rawIron, ironIngot, coal, sword, writtenBook)
+    private val emptyMap = ItemDefinition("minecraft:empty_map", 7, componentBased = false, ItemVersion.NONE)
+    private val filledMap = ItemDefinition("minecraft:filled_map", 8, componentBased = false, ItemVersion.NONE)
+    private val glassPane = ItemDefinition("minecraft:glass_pane", 9, componentBased = false, ItemVersion.NONE)
+    private val items = listOf(stoneItem, shulkerItem, rawIron, ironIngot, coal, sword, writtenBook, emptyMap, filledMap, glassPane)
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
         listOf(CreativeItem(ItemStack(stoneItem, block = stone), group = 0), CreativeItem(ItemStack(shulkerItem, block = shulkerBox), group = 0)),
@@ -133,6 +153,8 @@ class ContainersTest {
     private val game = GameData(
         world, emptyList(), BlockDefinitions(emptyList()), creative, emptyMap(), Drops(items, creative, palette), ItemStacks(items, creative, palette),
         recipes = recipes, enchantments = Enchantments(listOf(unbreaking)),
+        // Stone shows grey on maps, and stops all light.
+        traits = BlockTraits(mapOf(stone.networkId to BlockTrait(0xFF707070.toInt(), Tint.NONE, 15))),
     )
 
     private val clients = mutableListOf<Client>()
@@ -188,6 +210,50 @@ class ContainersTest {
         )
 
         fun closes(window: Int) = sends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(47).writeByte(window).writeByte(0).writeBoolean(false)))
+
+        /** Uses the item numbered [held] in the hotbar's first slot in the air. */
+        fun usesInAir(held: Int) = sends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(30).writeVarInt(0).writeBoolean(false).writeVarUInt(2).writeVarUInt(0)
+                    .writeVarInt(1).writeByte(1).writeBlockPos(BlockPos(0, 0, 0)).writeByte(255).writeVarInt(0).writeByte(0)
+                    .item(held, 0)
+                    .writeFloatLE(0.5f).writeFloatLE(-61.38f).writeFloatLE(0.5f)
+                    .writeZero(12).writeVarUInt(0).writeBoolean(true).writeByte(0),
+            ),
+        )
+
+        /** Picks [copyId] as the number of the locked copy of the map numbered [id], as a glass pane going in beside it does. */
+        fun picksLockedCopy(id: Long, copyId: Long) = sends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(131).writeVarLong(id).writeVarLong(copyId)))
+
+        /**
+         * Works the map [mapStack] and what goes with it, [withStack], in the
+         * open cartography table, taking what it makes onto the cursor, in one
+         * request, as taking a cartography table's result does.
+         */
+        fun cartographs(mapStack: Int, withStack: Int) = sends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(-11).writeVarUInt(4)
+                    .writeVarUInt(13).writeByte(15).writeVarUInt(3288).writeIntLE(0)
+                    .writeVarUInt(5).writeByte(5).writeByte(1).slot(Triple(ContainerName.CARTOGRAPHY_INPUT, CARTOGRAPHY_INPUT_SLOT, mapStack))
+                    .writeVarUInt(5).writeByte(5).writeByte(1).slot(Triple(ContainerName.CARTOGRAPHY_ADDITIONAL, CARTOGRAPHY_ADDITIONAL_SLOT, withStack))
+                    .writeVarUInt(0).writeByte(0).writeByte(1).slot(Triple(ContainerName.CREATED_OUTPUT, CREATED_OUTPUT_SLOT, -11)).slot(Triple(ContainerName.CURSOR, 0, 0))
+                    .writeVarUInt(0).writeIntLE(0),
+            ),
+        )
+
+        /** Asks what the map numbered [id] shows, as the client does when the player holds one it hasn't seen. */
+        fun asksAboutMap(id: Long) = sends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(68).writeVarLong(id).writeIntLE(0)))
+
+        /** Puts the stack [stackId] in the hotbar's first slot in the open beacon, pays it for [primary], and destroys the payment, in one request. */
+        fun paysBeacon(stackId: Int, primary: Int) = sends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(-1).writeVarUInt(3)
+                    .writeVarUInt(1).writeByte(1).writeByte(1).slot(Triple(ContainerName.HOTBAR, 0, stackId)).slot(Triple(ContainerName.BEACON_PAYMENT, BEACON_PAYMENT_SLOT, 0))
+                    .writeVarUInt(8).writeByte(10).writeVarInt(primary).writeVarInt(0)
+                    .writeVarUInt(4).writeByte(4).writeByte(1).slot(Triple(ContainerName.BEACON_PAYMENT, BEACON_PAYMENT_SLOT, stackId))
+                    .writeVarUInt(0).writeIntLE(0),
+            ),
+        )
 
         /** Switches [slot] of the crafter at [pos] off, if [disabled], or back on, as clicking it empty in the crafter's window does. */
         fun togglesCrafterSlot(pos: BlockPos, slot: Int, disabled: Boolean) = sends(
@@ -631,6 +697,123 @@ class ContainersTest {
         steve.togglesCrafterSlot(here, 4, disabled = true)
         assertEquals(1 shl 4, world.crafterAt(here)?.disabled)
         assertTrue(alex.received().any { it[0] == 0x38.toByte() && dataIn(it).getShort("disabled_slots").toInt() == 1 shl 4 })
+    }
+
+    /** Where a beacon stands, on a pyramid of one layer of iron. */
+    private val beaconAt = BlockPos(2, -62, 0)
+
+    private fun buildBeacon() {
+        for (x in -1..1) for (z in -1..1) world[BlockPos(beaconAt.x + x, beaconAt.y - 1, beaconAt.z + z)] = ironBlock
+        world[beaconAt] = beacon
+    }
+
+    @Test
+    fun `a beacon opens for its powers, and paying for one shows everyone with the chunk the beacon's new powers, with their sound`() {
+        config = config.copy(gameMode = GameMode.SURVIVAL)
+        buildBeacon()
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        val payment = world.newStackId() + 1
+        steve.session.give(ItemStack(ironIngot))
+        steve.clicks(beaconAt)
+        assertTrue(steve.received().has(ContainerOpen(1, ContainerType.BEACON, beaconAt, entityId = -1).encode()))
+        alex.received()
+
+        steve.paysBeacon(payment, Effect.SPEED)
+
+        assertEquals(Effect.SPEED to 0, world.beaconPowers(beaconAt))
+        val shown = alex.received()
+        assertTrue(shown.any { it[0] == 0x38.toByte() && dataIn(it).getString("id") == "Beacon" && dataIn(it).getInt("primary") == Effect.SPEED })
+        assertTrue(shown.has(LevelSoundEvent("beacon.power", beaconAt.centre, -1).encode()))
+    }
+
+    @Test
+    fun `players a shining beacon reaches get its powers, which the client moves them by itself, and the powers wear off away from it`() {
+        buildBeacon()
+        world.setBeaconPowers(beaconAt, Effect.SPEED, 0)
+        val steve = Client(1, "Steve", "1111")
+        val sessions = clients.map { it.session }
+
+        sessions.tickBeacons(game)
+
+        val got = steve.received()
+        assertTrue(got.has(LevelSoundEvent("beacon.activate", beaconAt.centre, -1).encode()))
+        assertTrue(got.has(MobEffect(1, MobEffect.ADD, Effect.SPEED, duration = 200, ambient = true).encode()))
+        assertTrue(got.none { it[0] == 29.toByte() }, "no walking speed, which would undo sprinting")
+        repeat(200) { steve.session.tickEffects() }
+        assertTrue(steve.received().has(MobEffect(1, MobEffect.REMOVE, Effect.SPEED).encode()))
+    }
+
+    @Test
+    fun `a cartography table opens its own screen`() {
+        world[here] = cartographyTable
+        val steve = Client(1, "Steve", "1111")
+        steve.clicks(here)
+        assertTrue(steve.received().has(ContainerOpen(1, ContainerType.CARTOGRAPHY, here, entityId = -1).encode()))
+    }
+
+    @Test
+    fun `an empty map used in the air becomes a map of where the player is, drawn at once, which the client asks to see, and they draw as they hold it`() {
+        config = config.copy(gameMode = GameMode.SURVIVAL)
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        steve.session.give(ItemStack(emptyMap))
+
+        steve.usesInAir(emptyMap.runtimeId)
+
+        val map = world.maps[steve.session.heldStack?.mapId!!]!!
+        assertEquals(listOf(0, 0, 0, 1), listOf(map.scale, map.centreX, map.centreZ, map.nameIndex))
+        assertEquals(5, world.maps.all.size, "with a parent at each scale above it")
+        assertTrue(map.pixels.all { it == 0xFF707070.toInt() })
+        steve.received()
+        steve.asksAboutMap(map.id)
+        val lineage = world.maps.lineage(map)
+        assertTrue(steve.received().has(ClientboundMapItemData(map.id, BlockPos(0, 0, 0), 0, locked = false, patch = map.patch(), partOf = lineage).encode()))
+
+        // Something changing within reach shows as the player holds the map, once, and only to clients that asked about it.
+        world[BlockPos(5, -63, 5)] = stone
+        val sessions = clients.map { it.session }
+        steve.session.drawHeldMaps()
+        sessions.syncMaps(world)
+        assertEquals(1, steve.received().count { it[0] == 0x43.toByte() })
+        steve.session.drawHeldMaps()
+        sessions.syncMaps(world)
+        assertEquals(0, steve.received().count { it[0] == 0x43.toByte() })
+        assertTrue(alex.received().none { it[0] == 0x43.toByte() })
+
+        // The client learned of the maps it zooms out to with it, and hears them drawn without asking.
+        val parent = world.maps[map.parentId!!]!!
+        parent[0, 0] = 1
+        sessions.syncMaps(world)
+        assertEquals(1, steve.received().count { it[0] == 0x43.toByte() })
+    }
+
+    @Test
+    fun `a glass pane locks a map at a cartography table as the copy the client numbers as it goes in, which it sees then, and gets`() {
+        config = config.copy(gameMode = GameMode.SURVIVAL)
+        world[here] = cartographyTable
+        val steve = Client(1, "Steve", "1111")
+        val first = world.newStackId()
+        steve.session.give(ItemStack(emptyMap))
+        steve.usesInAir(emptyMap.runtimeId)
+        steve.session.give(ItemStack(glassPane))
+        val (mapStack, paneStack) = first + 2 to first + 3
+        val map = world.maps[steve.session.heldStack?.mapId!!]!!
+        steve.clicks(here)
+        steve.moves(1, from = Triple(ContainerName.HOTBAR, 0, mapStack), to = Triple(ContainerName.CARTOGRAPHY_INPUT, CARTOGRAPHY_INPUT_SLOT, 0), requestId = -3)
+        steve.moves(1, from = Triple(ContainerName.HOTBAR, 1, paneStack), to = Triple(ContainerName.CARTOGRAPHY_ADDITIONAL, CARTOGRAPHY_ADDITIONAL_SLOT, 0), requestId = -5)
+        steve.received()
+
+        steve.picksLockedCopy(map.id, 1971533702)
+
+        val locked = world.maps[1971533702]
+        assertTrue(locked != null && locked.locked && locked.nameIndex == map.nameIndex)
+        assertTrue(steve.received().has(ClientboundMapItemData(locked.id, BlockPos(0, 0, 0), 0, locked = true, patch = locked.patch()).encode()))
+
+        steve.cartographs(mapStack, paneStack)
+
+        val onCursor = steve.received().filter { it[0] == 0x32.toByte() }.map { Unpooled.wrappedBuffer(it).skipBytes(1).readVarUInt() }
+        assertEquals(listOf(UI_WINDOW), onCursor, "what's on the cursor, as Kore made it")
     }
 
     /** The data a BlockActorData packet gives a block. */

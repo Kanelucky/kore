@@ -11,6 +11,7 @@ import org.koremc.command.logOutput
 import org.koremc.inventory.Container
 import org.koremc.inventory.Crafted
 import org.koremc.inventory.Crafter
+import org.koremc.inventory.CURSOR_SLOT
 import org.koremc.inventory.ENCHANTING_INPUT_SLOT
 import org.koremc.inventory.EnchantingOffer
 import org.koremc.inventory.HOTBAR_SIZE
@@ -48,6 +49,7 @@ import org.koremc.protocol.ByteItem
 import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
 import org.koremc.protocol.ClientPacket
+import org.koremc.protocol.ClientboundMapItemData
 import org.koremc.protocol.CommandOutput
 import org.koremc.protocol.CommandPermission
 import org.koremc.protocol.CommandRequest
@@ -77,6 +79,11 @@ import org.koremc.protocol.LevelSoundEvent
 import org.koremc.protocol.LoadingScreen
 import org.koremc.protocol.Login
 import org.koremc.protocol.LoginRequest
+import org.koremc.protocol.LongItem
+import org.koremc.protocol.MapCreateLockedCopy
+import org.koremc.protocol.MapInfoRequest
+import org.koremc.protocol.MapPatch
+import org.koremc.protocol.MobEffect
 import org.koremc.protocol.MobEquipment
 import org.koremc.protocol.MoveActorAbsolute
 import org.koremc.protocol.MovePlayer
@@ -131,6 +138,7 @@ import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.MENDING
 import org.koremc.registry.damage
+import org.koremc.registry.sameKindAs
 import org.koremc.registry.levelOf
 import org.koremc.registry.mendedBy
 import org.koremc.registry.worn
@@ -218,6 +226,22 @@ import org.koremc.world.pistonMotions
 import org.koremc.world.pressPlates
 import org.koremc.world.snapsUp
 import org.koremc.world.stepOn
+import org.koremc.world.BEACON_INTERVAL
+import org.koremc.world.Cartographed
+import org.koremc.world.EMPTY_MAP
+import org.koremc.world.Effect
+import org.koremc.world.EffectLevel
+import org.koremc.world.Effects
+import org.koremc.world.FILLED_MAP
+import org.koremc.world.LOCATOR
+import org.koremc.world.MapData
+
+import org.koremc.world.beaconLevel
+import org.koremc.world.drawMap
+import org.koremc.world.lookAtBeacons
+import org.koremc.world.mapId
+import org.koremc.world.setBeaconPowers
+import org.koremc.world.showing
 import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
 import org.koremc.world.tickOrbs
@@ -231,6 +255,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -307,6 +332,8 @@ private val WORKSTATIONS = mapOf(
     "grindstone" to (Workstation.GRINDSTONE to ContainerType.GRINDSTONE),
     "loom" to (Workstation.LOOM to ContainerType.LOOM),
     "enchanting_table" to (Workstation.ENCHANTING_TABLE to ContainerType.ENCHANTMENT),
+    "beacon" to (Workstation.BEACON to ContainerType.BEACON),
+    "cartography_table" to (Workstation.CARTOGRAPHY_TABLE to ContainerType.CARTOGRAPHY),
 ).mapKeys { "minecraft:${it.key}" }
 
 /** What an anvil wears into each time it does, until a damaged one breaks. */
@@ -325,6 +352,9 @@ private const val LEVEL_UP = "levelup"
 
 /** The sound of a brewing stand finishing a brew. */
 private const val BREWED = "potion.brewed"
+
+/** The sound of a beacon taking the powers a player paid for. */
+private const val BEACON_POWER = "beacon.power"
 
 /** The pitch of a dispenser's click as it fires, and with nothing to fire, in thousandths. */
 private const val CLICK_PITCH = 1000
@@ -423,8 +453,10 @@ private val PLAYER_FLAGS = setOf(ActorFlag.BREATHING, ActorFlag.HAS_GRAVITY, Act
  * the items others move in and out of it, and its lid stays open until the
  * last of them closes it. They open furnaces and brewing stands, and watch
  * them work, and the workstations: stonecutters, smithing tables, anvils,
- * grindstones, looms and enchanting tables. They pick up the experience
- * orbs that fly to them, and spend levels at anvils and enchanting tables.
+ * grindstones, looms, enchanting tables and cartography tables. They pick
+ * up the experience orbs that fly to them, and spend levels at anvils and
+ * enchanting tables. They pay beacons for powers, which beacons give them
+ * as effects, and draw maps of the world as they hold them.
  *
  * Players run commands from the chat, as themselves. Each has their own
  * game mode, which starts as the world's and commands can change, and is
@@ -472,6 +504,16 @@ class Session(
             override val experienceLevel get() = experience.level
 
             override fun enchantingOffers(stack: ItemStack) = this@Session.enchantingOffers(stack)
+
+            override fun beaconGives(primary: Int, secondary: Int): Boolean {
+                val beacon = window?.pos?.takeIf { inventory.workstation == Workstation.BEACON } ?: return false
+                return org.koremc.world.beaconGives(world.beaconLevel(beacon), primary, secondary)
+            }
+
+            override fun cartograph(input: ItemStack?, additional: ItemStack?, name: String?): Cartographed? {
+                val copy = lockedCopy?.takeIf { (mapId, _) -> mapId == input?.mapId || mapId == additional?.mapId }?.second
+                return org.koremc.world.cartograph(input, additional, name, world.maps, copy)
+            }
         },
         onCrafted = crafts::add,
     )
@@ -581,6 +623,15 @@ class Session(
 
     /** Whether the player has a lectern's book open, which closes with no window of its own. */
     private var reading = false
+
+    /** The effects on the player, like the powers of a beacon they're near. */
+    private val effects = Effects()
+
+    /** The maps the client has asked about, which it hears of whenever they change. */
+    internal val knownMaps = HashSet<Long>()
+
+    /** The map the client last picked a number for a locked copy of, at a cartography table, with that number. */
+    private var lockedCopy: Pair<Long, Long>? = null
 
     /** How pistons last moved the player, until they're done with them. */
     private var pistonMotion: Vec3? = null
@@ -696,6 +747,8 @@ class Session(
                 is LecternUpdate -> onLecternUpdate(packet)
                 is BookEdit -> onBookEdit(packet)
                 is ToggleCrafterSlot -> onToggleCrafterSlot(packet)
+                is MapInfoRequest -> onMapInfoRequest(packet)
+                is MapCreateLockedCopy -> onLockedCopy(packet)
                 is Text -> onChat(packet)
                 is CommandRequest -> onCommand(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
@@ -1015,8 +1068,8 @@ class Session(
     /**
      * Opens the [workstation] at [pos] for the player, whose screen the
      * client shows as [type]: a crafting table's grid, three by three, or a
-     * stonecutter, smithing table, anvil, grindstone, loom or enchanting
-     * table.
+     * stonecutter, smithing table, anvil, grindstone, loom, enchanting
+     * table, beacon or cartography table.
      */
     private fun openWorkstation(pos: BlockPos, workstation: Workstation, type: Int) {
         if (gameMode == GameMode.SPECTATOR || !inReach(pos)) return
@@ -1139,7 +1192,9 @@ class Session(
      * Carries out what a craft at a workstation did besides moving items,
      * once its request has been answered: the levels it cost, the
      * experience it gave back, and an anvil's clang and wear. Enchanting
-     * changes what tables offer the player next.
+     * changes what tables offer the player next, paying a beacon gives it
+     * its powers, and a map a cartography table zoomed out or locked is a
+     * new map.
      */
     private fun afterCraft(crafted: Crafted) {
         if (crafted.levels > 0) addLevels(-crafted.levels)
@@ -1147,9 +1202,35 @@ class Session(
         when (crafted.workstation) {
             Workstation.ANVIL -> useAnvil()
             Workstation.ENCHANTING_TABLE -> enchantmentSeed = Random.nextInt()
+            Workstation.BEACON -> crafted.beaconPowers?.let { (primary, secondary) -> powerBeacon(primary, secondary) }
+            Workstation.CARTOGRAPHY_TABLE -> {
+                crafted.newMaps.forEach(world.maps::add)
+                crafted.made?.let(::showMade)
+            }
             else -> {}
         }
         log.debug("{} crafted at {}, for {} levels", name, crafted.workstation, crafted.levels)
+    }
+
+    /**
+     * Shows the client the items like [made] it has, wherever the request
+     * that made them put them: on the cursor or among the player's items.
+     * The client makes a cartography table's maps its own way, and those
+     * Kore made, with numbers of their own, are the ones that count.
+     */
+    private fun showMade(made: ItemStack) {
+        val packets = mutableListOf<ServerPacket>()
+        inventory.items.contents().forEachIndexed { slot, there -> if (there != null && there.stack.sameKindAs(made)) packets += slotOf(slot) }
+        inventory.ui[CURSOR_SLOT]?.takeIf { it.stack.sameKindAs(made) }?.let { packets += InventorySlot(CURSOR_SLOT, it.stack, it.id, UI_WINDOW) }
+        if (packets.isNotEmpty()) send(*packets.toTypedArray())
+    }
+
+    /** Gives the beacon the player has open the powers they paid for, which everyone with its chunk sees in its data, and hears. */
+    private fun powerBeacon(primary: Int, secondary: Int) {
+        val pos = window?.pos ?: return
+        world.setBeaconPowers(pos, primary, secondary)
+        showAround(pos, BlockActorData(pos, world.blockEntityAt(pos)!!), LevelSoundEvent(BEACON_POWER, pos.centre, -1))
+        log.debug("{} gave the beacon at {} the powers {} and {}", player?.displayName, pos, primary, secondary)
     }
 
     /**
@@ -1327,10 +1408,100 @@ class Session(
         when (use.action) {
             ItemUseAction.PLACE -> onClick(use)
             ItemUseAction.DESTROY -> onBreak(use.position, creativeOnly = false, tick)
-            // Using an item in the air, like eating, and attacking with one are for later.
-            ItemUseAction.USE, ItemUseAction.USE_AS_ATTACK -> {}
+            ItemUseAction.USE -> useInAir(use)
+            // Attacking with an item is for later.
+            ItemUseAction.USE_AS_ATTACK -> {}
         }
     }
+
+    /**
+     * The player using what they hold in the air. An empty map becomes a
+     * map of the square of the world they're in, which they draw as they
+     * hold it, and an empty locator map a locator map, in creative too.
+     * With more than one empty map, the map goes among their items, or
+     * drops at their feet if there's no room.
+     */
+    private fun useInAir(use: ItemUse) {
+        if (use.hotbarSlot in 0 until HOTBAR_SIZE) heldSlot = use.hotbarSlot
+        val held = inventory.items[heldSlot]?.takeIf { use.hotbarSlot == heldSlot && it.stack.item.runtimeId == use.heldItem } ?: return
+        if (held.stack.item.name != EMPTY_MAP || gameMode == GameMode.SPECTATOR) return
+        val blank = game.items.of(FILLED_MAP) ?: return
+        val map = world.maps.start(floor(position.x).toInt(), floor(position.z).toInt(), showsPlayers = held.stack.aux == LOCATOR)
+        val drawn = blank.showing(map)
+        world.drawMap(map, position.x, position.z, game.traits)
+        if (held.stack.count == 1) {
+            inventory.items[heldSlot] = SlotStack(drawn, inventory.newStackId())
+            send(slotOf(heldSlot))
+        } else {
+            inventory.items[heldSlot] = held.less(1)
+            val (filled, left) = inventory.add(drawn)
+            send(*(filled + heldSlot).distinct().map(::slotOf).toTypedArray())
+            if (left > 0) throwItem(drawn)
+        }
+        log.debug("{} started map {}, around {}, {}", player?.displayName, map.id, map.centreX, map.centreZ)
+    }
+
+    /**
+     * The client picking the number of the locked copy of a map a
+     * cartography table would make, as a glass pane goes in beside the map.
+     * The copy is made then, for the client to show as what the table makes,
+     * and to give the player if they take it.
+     */
+    private fun onLockedCopy(packet: MapCreateLockedCopy) {
+        val map = world.maps[packet.mapId]?.takeIf { !it.locked } ?: return
+        if (packet.copyId == 0L || packet.copyId == -1L || packet.copyId in world.maps) return
+        val copy = map.lockedCopy(packet.copyId)
+        world.maps.add(copy)
+        lockedCopy = map.id to copy.id
+        knownMaps += copy.id
+        send(world.mapData(copy, copy.patch()))
+    }
+
+    /**
+     * The client asking what a map shows, which it hears whole, and of every
+     * change to it from then on. It learns of the maps it zooms out to with
+     * it, and never asks about those, so it hears of their changes too.
+     */
+    private fun onMapInfoRequest(packet: MapInfoRequest) {
+        val map = world.maps[packet.mapId] ?: return
+        knownMaps += world.maps.lineage(map)
+        send(world.mapData(map, map.patch()))
+    }
+
+    /** Sends [packets] about a map the client has asked about. */
+    internal fun showMap(packets: List<ServerPacket>) = send(*packets.toTypedArray())
+
+    /** Draws the maps the player holds, in either hand, as they go. Run once a tick. */
+    fun drawHeldMaps() {
+        if (!isInGame) return
+        val held = listOfNotNull(inventory.items[heldSlot]?.stack?.mapId, inventory.offhand[0]?.stack?.mapId).distinct().mapNotNull(world.maps::get)
+        held.forEach { world.drawMap(it, position.x, position.z, game.traits) }
+    }
+
+    /**
+     * Gives the player [given] for [ticks], as a beacon does, unless they
+     * have as much of it already. They see it start, or change. The client
+     * moves its player by its effects itself: Speed quickens their walk,
+     * sprinting or not, which the walking speed Kore gives them would undo.
+     */
+    internal fun giveEffect(given: EffectLevel, ticks: Int, ambient: Boolean) {
+        val had = effects[given.effect] != null
+        val visible = effects.visible()
+        if (!effects.give(given, ticks, ambient)) return
+        send(MobEffect(entityId, if (had) MobEffect.MODIFY else MobEffect.ADD, given.effect, given.amplifier, ticks, ambient))
+        if (effects.visible() != visible) send(visibleEffects())
+    }
+
+    /** Wears the player's effects down a tick. They see those that wear off end. Run once a tick. */
+    fun tickEffects() {
+        val ended = effects.tick()
+        for (effect in ended) send(MobEffect(entityId, MobEffect.REMOVE, effect))
+        if (ended.isNotEmpty()) send(visibleEffects())
+    }
+
+    /** The particles of the effects on the player, which everyone else sees as the player list syncs. */
+    private fun visibleEffects() = SetActorData(entityId, listOf(LongItem(ActorDataId.VISIBLE_MOB_EFFECTS, effects.visible())))
+
 
     /**
      * A click on a block, with whatever the player holds, which the client
@@ -1769,9 +1940,11 @@ class Session(
         val sprinting: Boolean,
         val heldSlot: Int,
         val held: ItemStack?,
+        /** The effects whose particles show around them. */
+        val effects: Long,
     )
 
-    private fun look() = Look(position, pitch, yaw, headYaw, onGround, sneaking, sprinting, heldSlot, inventory.items[heldSlot]?.stack)
+    private fun look() = Look(position, pitch, yaw, headYaw, onGround, sneaking, sprinting, heldSlot, inventory.items[heldSlot]?.stack, effects.visible())
 
     /**
      * Shows the client the other players. Everyone in the game is on its
@@ -1816,6 +1989,7 @@ class Session(
                 packets += SetActorData(other.entityId, listOf(flagsItem(shownFlags(now)), FloatItem(ActorDataId.HEIGHT, heightOf(now))))
             }
             if (now.held != before.held || now.heldSlot != before.heldSlot) packets += ShowEquipment(other.entityId, now.held, now.heldSlot)
+            if (now.effects != before.effects) packets += SetActorData(other.entityId, listOf(LongItem(ActorDataId.VISIBLE_MOB_EFFECTS, now.effects)))
         }
         if (packets.isNotEmpty()) send(*packets.toTypedArray())
     }
@@ -1840,6 +2014,7 @@ class Session(
             FloatItem(ActorDataId.SCALE, 1f),
             FloatItem(ActorDataId.WIDTH, PLAYER_WIDTH),
             FloatItem(ActorDataId.HEIGHT, heightOf(look)),
+            LongItem(ActorDataId.VISIBLE_MOB_EFFECTS, look.effects),
         )
         val feet = Vec3(look.position.x, look.position.y - PLAYER_EYE_HEIGHT, look.position.z)
         return AddPlayer(
@@ -1920,7 +2095,8 @@ class Session(
     }
 
     /** How many ticks the player takes to break the block called [name], with what they hold, if Kore knows. */
-    private fun ticksToBreak(name: String): Int? = game.mining[name]?.let { breakTicks(it, heldItem(), heldStack?.levelOf(EFFICIENCY) ?: 0) }
+    private fun ticksToBreak(name: String): Int? =
+        game.mining[name]?.let { breakTicks(it, heldItem(), heldStack?.levelOf(EFFICIENCY) ?: 0, effects.level(Effect.HASTE)) }
 
     private fun canBuild() = gameMode == GameMode.SURVIVAL || gameMode == GameMode.CREATIVE
 
@@ -2328,6 +2504,50 @@ internal fun Collection<Session>.tickMachines(game: GameData) {
 }
 
 /**
+ * Every [BEACON_INTERVAL] ticks, looks at the beacons in [game]'s world:
+ * everyone with the chunk hears those whose beams come on or go out, and
+ * the players those shining reach, spectators aside, get their powers.
+ */
+internal fun Collection<Session>.tickBeacons(game: GameData) {
+    val world = game.world
+    if (world.blockTicks % BEACON_INTERVAL != 0L) return
+    val looked = world.lookAtBeacons(game.traits)
+    showAround(looked.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) })
+    val players = filter { it.isInGame && it.gameMode != GameMode.SPECTATOR }
+    for (beacon in looked.shining) {
+        for (player in players.filter { beacon.reaches(it.feet) }) beacon.effects.forEach { player.giveEffect(it, beacon.ticks, ambient = true) }
+    }
+}
+
+/**
+ * Shows the players who've asked about each map in [world] what changed on
+ * it since they last saw, and on a locator map, where the players on it,
+ * spectators aside, are now. Run once a tick, after the players holding
+ * maps have drawn on them.
+ */
+internal fun Collection<Session>.syncMaps(world: FlatWorld) {
+    val players = filter { it.isInGame && it.gameMode != GameMode.SPECTATOR }
+    for (map in world.maps.all) {
+        val patches = map.takeChanges()
+        val markers = if (map.showsPlayers) players.mapNotNull { map.markerFor(it.feet.x, it.feet.z, it.yaw) } else emptyList()
+        if (patches.isEmpty() && markers == map.shownMarkers) continue
+        map.shownMarkers = markers
+        val viewers = filter { map.id in it.knownMaps }
+        if (viewers.isEmpty()) continue
+        val packets = patches.map { world.mapData(map, it) }.ifEmpty { listOf(world.mapData(map, patch = null)) }
+        viewers.forEach { it.showMap(packets) }
+    }
+}
+
+/**
+ * What [map] shows: the pixels in [patch], if any, where the players on it
+ * are, if it shows them, and the maps it zooms out to.
+ */
+private fun FlatWorld.mapData(map: MapData, patch: MapPatch?) = ClientboundMapItemData(
+    map.id, BlockPos(map.centreX, 0, map.centreZ), map.scale, map.locked, map.shownMarkers.takeIf { map.showsPlayers }, patch, maps.lineage(map),
+)
+
+/**
  * Brings what redstone powers in [game]'s world in line with what changed
  * since it last looked, for these players to see if they have the chunks:
  * doors, trapdoors and fence gates swinging, with their sounds, and the
@@ -2405,6 +2625,8 @@ class Sessions(
         game.world.tickItems()
         sessions.values.tickMachines(game)
         sessions.values.tickPower(game)
+        sessions.values.forEach { it.tickEffects() }
+        sessions.values.tickBeacons(game)
         game.world.tickOrbs(sessions.values.mapNotNull { it.orbTarget })
         sessions.values.forEach { it.collectItems() }
         sessions.values.forEach { it.collectOrbs() }
@@ -2412,6 +2634,8 @@ class Sessions(
         sessions.values.forEach { it.syncOrbs() }
         sessions.values.forEach { it.syncWindow() }
         sessions.values.forEach { it.syncPlayers() }
+        sessions.values.forEach { it.drawHeldMaps() }
+        sessions.values.syncMaps(game.world)
     }
 
     fun connect(connection: NetherNetConnection) {
