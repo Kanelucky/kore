@@ -21,6 +21,7 @@ class PistonsTest {
     private val levers = (0..1).map { on -> state("minecraft:lever", "lever_direction" to "up_east_west", "open_bit" to on.toByte()) }
     private val observers = listOf(false, true).map { state(OBSERVER, "minecraft:facing_direction" to "up", "powered_bit" to bit(it)) }
     private val westObservers = listOf(false, true).map { state(OBSERVER, "minecraft:facing_direction" to "west", "powered_bit" to bit(it)) }
+    private val eastObservers = listOf(false, true).map { state(OBSERVER, "minecraft:facing_direction" to "east", "powered_bit" to bit(it)) }
 
     /** Facings as pistons store them, sideways the wrong way round. */
     private fun stored(facing: Face) = if (facing.horizontal) facing.opposite.ordinal else facing.ordinal
@@ -29,7 +30,7 @@ class PistonsTest {
         state(if (sticky) "minecraft:sticky_piston_arm_collision" else "minecraft:piston_arm_collision", FACING_DIRECTION to stored(facing))
 
     private val palette = BlockPalette(
-        listOf(air, stone, obsidian, slime, torch, movingBlock) + levers + observers + westObservers +
+        listOf(air, stone, obsidian, slime, torch, movingBlock) + levers + observers + westObservers + eastObservers +
             Face.entries.flatMap { facing -> listOf(false, true).flatMap { sticky -> listOf(piston(facing, sticky), head(facing, sticky)) } },
     )
 
@@ -61,7 +62,7 @@ class PistonsTest {
     }
 
     @Test
-    fun `a piston pushes the blocks in front of it, two ticks after power reaches it, and they slide out over two more`() {
+    fun `a piston pushes the blocks in front of it, two ticks after power reaches it, and they slide out over two more, as in Bedrock`() {
         placePiston()
         world[east(1)] = stone
         world[east(2)] = stone
@@ -74,8 +75,8 @@ class PistonsTest {
         assertEquals(1.toByte(), world.blockEntityAt(at)?.getByte("State")) // Moving out
         assertEquals("minecraft:stone", world.blockEntityAt(east(3))?.getCompound("movingBlock")?.getString("name"))
 
-        val progress = (1..3).map { tick(); world.blockEntityAt(at)!!.getFloat("Progress") to world.blockEntityAt(at)!!.getFloat("LastProgress") }
-        assertEquals(listOf(0.5f to 0f, 1f to 0.5f, 1f to 1f), progress)
+        val progress = (1..2).map { tick(); world.blockEntityAt(at)!!.getFloat("Progress") to world.blockEntityAt(at)!!.getFloat("LastProgress") }
+        assertEquals(listOf(0.5f to 0f, 1f to 1f), progress)
         assertEquals(2.toByte(), world.blockEntityAt(at)?.getByte("State"))
         assertEquals(listOf(stone, stone), listOf(world.stateAt(east(2)), world.stateAt(east(3))))
         assertNull(world.blockEntityAt(east(3)))
@@ -176,6 +177,32 @@ class PistonsTest {
         val out = (1..15).map { tick(); world.stateAt(east(1)) == head(Face.EAST) }
         assertTrue(out.any { it })
         assertEquals(air, world.stateAt(east(1)))
+    }
+
+    @Test
+    fun `a flying machine flies, its observers pulsing as they land, though one's pulled back mid-pulse`() {
+        // Up in the air, two halves, one pushing the other along, and the other pulling it after.
+        fun up(x: Int, z: Int) = BlockPos(x, -58, z)
+        val trigger = up(0, 2)
+        world[trigger] = stone
+        world[up(1, 2)] = westObservers[0]
+        world[up(2, 2)] = piston(Face.EAST, sticky = true)
+        world[up(3, 2)] = slime
+        world[up(4, 2)] = slime
+        world[up(1, 1)] = slime
+        world[up(2, 1)] = slime
+        world[up(3, 1)] = piston(Face.WEST)
+        world[up(4, 1)] = eastObservers[0]
+        world.updatePower()
+        tick(10)
+
+        world[trigger] = air
+        world.updatePower()
+
+        // Where the sticky piston is each tick it isn't moving, which goes west a block at a time.
+        val stops = (1..160).mapNotNull { tick(); (-50..2).firstOrNull { world.stateAt(up(it, 2))?.name == STICKY_PISTON } }.distinct()
+        assertEquals((2 downTo stops.last()).toList(), stops)
+        assertTrue(stops.last() < -5, "the sticky piston got to x ${stops.last()}")
     }
 
     @Test

@@ -302,12 +302,23 @@ internal fun FlatWorld.observe(pos: BlockPos, state: BlockState) {
 }
 
 /**
+ * Puts down the observer [state] a piston moved at [pos], off, even if it
+ * was pulsing as it went, since that pulse was where it came from, and
+ * sets it to pulse, as in Bedrock.
+ */
+internal fun FlatWorld.landObserver(pos: BlockPos, state: BlockState) {
+    val off = blocks.find(state.name, state.properties + (OBSERVER_POWERED to bit(false))) ?: state
+    set(pos, off)
+    observe(pos, off)
+}
+
+/**
  * Turns the observer at [pos] on, for its pulse, or off again once the
  * pulse is over. Returns whether it changed.
  */
 internal fun FlatWorld.tickObserver(pos: BlockPos, state: BlockState): Boolean {
-    redstoneDue -= pos
     if (!state.isObserver) return false
+    redstoneDue -= pos
     val powered = state.observerPowered
     blocks.find(state.name, state.properties + (OBSERVER_POWERED to bit(!powered)))?.let { set(pos, it) } ?: return false
     if (!powered && redstoneDue.add(pos)) schedule(pos, OBSERVER_PULSE, BlockUpdate.OBSERVER)
@@ -374,8 +385,8 @@ private fun FlatWorld.torchLit(pos: BlockPos, state: BlockState): Boolean {
  * Returns whether it changed.
  */
 internal fun FlatWorld.tickTorch(pos: BlockPos, state: BlockState, sounds: MutableList<BlockSound>): Boolean {
-    redstoneDue -= pos
     if (!state.isRedstoneTorch) return false
+    redstoneDue -= pos
     val toggles = torchToggles.getOrPut(pos) { mutableListOf() }.apply { removeAll { blockTicks - it > TOGGLE_MEMORY } }
     val lit = state.name == REDSTONE_TORCH
     val lighting = torchLit(pos, state)
@@ -435,8 +446,9 @@ private fun FlatWorld.repeaterLocked(pos: BlockPos, state: BlockState): Boolean 
  * however short the power behind it was. Returns whether it changed.
  */
 internal fun FlatWorld.tickRepeater(pos: BlockPos, state: BlockState): Boolean {
+    if (!state.isRepeater) return false
     redstoneDue -= pos
-    if (!state.isRepeater || repeaterLocked(pos, state)) return false
+    if (repeaterLocked(pos, state)) return false
     val input = diodeInput(pos, state) > 0
     if (state.name == POWERED_REPEATER) {
         if (input) return false
@@ -516,8 +528,8 @@ internal fun FlatWorld.fullness(pos: BlockPos): Int? {
  * while that's anything. Returns whether its state changed.
  */
 internal fun FlatWorld.tickComparator(pos: BlockPos, state: BlockState): Boolean {
-    redstoneDue -= pos
     if (!state.isComparator) return false
+    redstoneDue -= pos
     val works = comparatorWorks(pos, state)
     if (works != (comparatorPower[pos] ?: 0)) {
         if (works == 0) comparatorPower -= pos else comparatorPower[pos] = works

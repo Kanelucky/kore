@@ -437,7 +437,7 @@ class ContainersTest {
         }
 
         val progress = alex.received().filter { it[0] == 0x38.toByte() }.map { dataIn(it).getFloat("Progress") }
-        assertEquals(listOf(0f, 0.5f, 1f, 1f), progress)
+        assertEquals(listOf(0f, 0.5f, 1f), progress)
         assertEquals(pistonHead, world.stateAt(BlockPos(here.x + 1, here.y, here.z)))
     }
 

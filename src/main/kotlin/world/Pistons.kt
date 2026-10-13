@@ -3,6 +3,9 @@ package org.koremc.world
 import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
+import org.slf4j.LoggerFactory
+
+private val log = LoggerFactory.getLogger("org.koremc.world.Pistons")
 
 internal const val PISTON = "minecraft:piston"
 internal const val STICKY_PISTON = "minecraft:sticky_piston"
@@ -115,12 +118,12 @@ internal fun FlatWorld.pistonPowered(pos: BlockPos, state: BlockState): Boolean 
  * be moved but breaks. Nothing moves, and it stays in, if something in the
  * way won't move. A sticky piston pulls back the block in front of its
  * arm, and whatever that drags along, unless it can't. The blocks it moves
- * are moving blocks until it's done, two ticks later. What broke is in
- * [broken], and where blocks changed in [reshaped].
+ * are moving blocks until it's done, two ticks later, as in Bedrock. What
+ * broke is in [broken], and where blocks changed in [reshaped].
  */
 internal fun FlatWorld.movePiston(pos: BlockPos, state: BlockState, broken: MutableMap<BlockPos, BrokenBlock>, reshaped: MutableCollection<BlockPos>, sounds: MutableList<BlockSound>) {
-    redstoneDue -= pos
     if (!state.isPiston) return
+    redstoneDue -= pos
     val arm = pistonArm(pos, state)
     val powered = arm.pending ?: pistonPowered(pos, state)
     arm.pending = null
@@ -133,7 +136,14 @@ internal fun FlatWorld.movePiston(pos: BlockPos, state: BlockState, broken: Muta
         reshaped += front
     }
     val push = resolvePush(pos, facing, extending = powered)
-    if (powered && push == null) return
+    if (powered && push == null) {
+        log.debug("Piston at {} facing {} can't push out: something in front won't move", pos, facing)
+        return
+    }
+    log.debug(
+        "Piston at {} facing {} {}, moving {} and breaking {}", pos, facing, if (powered) "pushes out" else "pulls in",
+        push?.moved?.takeIf { powered || arm.sticky }?.map { "${stateAt(it)?.name} at $it" }.orEmpty(), push?.broken.orEmpty(),
+    )
     if (push != null && (powered || arm.sticky)) {
         for (at in push.broken.asReversed()) stateAt(at)?.let { breakAt(at, it, broken) }
         moveBlocks(pos, if (powered) facing else facing.opposite, push.moved, powered, arm, reshaped)
@@ -194,16 +204,17 @@ private fun BlockState.stateData(): NbtMap = NbtMap.builder().putString("name", 
 
 /**
  * Moves every piston's arm along a tick, as far as it goes in a tick: half
- * a block, so a move takes two ticks, and lands what it moved on the
- * third. Where blocks changed goes in [reshaped], and where only an arm's
- * data did in [data].
+ * a block, so a move takes two ticks, as in Bedrock, and lands what it
+ * moved as the arm gets there. Where blocks changed goes in [reshaped],
+ * and where only an arm's data did in [data].
  */
 internal fun FlatWorld.movePistonArms(reshaped: MutableCollection<BlockPos>, data: MutableCollection<BlockPos>) {
     for ((pos, arm) in pistonArms) {
         if (!arm.moving) continue
         arm.lastProgress = arm.progress
         arm.progress = if (arm.extending) minOf(1f, arm.progress + ARM_STEP) else maxOf(0f, arm.progress - ARM_STEP)
-        if (arm.progress == arm.lastProgress) {
+        if (arm.progress == if (arm.extending) 1f else 0f) {
+            arm.lastProgress = arm.progress
             land(arm, reshaped)
             // The power may have changed while it moved.
             powerChanges += pos
@@ -220,9 +231,8 @@ internal fun FlatWorld.movePistonArms(reshaped: MutableCollection<BlockPos>, dat
 private fun FlatWorld.land(arm: PistonArm, reshaped: MutableCollection<BlockPos>) {
     for ((at, state) in arm.landing) {
         if (stateAt(at)?.name != MOVING_BLOCK) continue
-        set(at, state)
+        if (state.isObserver) landObserver(at, state) else set(at, state)
         if (state.isPiston) setBlockEntity(at, pistonArm(at, state).data())
-        if (state.isObserver) observe(at, state)
         reshaped += at
     }
     arm.landing.clear()

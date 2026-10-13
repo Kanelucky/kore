@@ -1373,7 +1373,7 @@ class Session(
             showAround(placed.flatMap(world::withData) + sound + world.packetsFor(changes))
             if (world.stateAt(first)?.storage == Storage.SHULKER_BOX) fillShulkerBox(first, stack!!)
             if (!creative) inventory.remove(heldSlot)
-            log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.name, first)
+            log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.let { it.name + it.properties }, first)
         }
         val corrections = (listOf(use.position, use.position.side(face)) - placed.toSet()).map { UpdateBlock(it, world.blockAt(it)) }
         if (corrections.isNotEmpty()) send(*corrections.toTypedArray())
