@@ -128,7 +128,8 @@ private val PIECES = mapOf(
  * chance. A double slab drops two slabs, and a door, bed or tall plant
  * drops once. Blocks placed by an item of another name, like crops and
  * repeaters, drop that item, and beds and banners drop in the colour they
- * kept. What an item frame or flower pot holds drops with it.
+ * kept. What an item frame, flower pot or jukebox holds drops with it, as
+ * does a ready composter's bone meal.
  *
  * The tool a player breaks a block with counts: Silk Touch takes a block
  * whole, as it is, shears take leaves, grasses and vines whole, and
@@ -156,7 +157,7 @@ class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: Bl
             whole -> listOfNotNull(stacks.of(UNLIT_ORE[name] ?: itemPlacing(name) ?: name))
             else -> byChance(name, fortune) ?: own(state, blockEntity, contents)
         }
-        return dropped + held(blockEntity)
+        return dropped + held(state, blockEntity)
     }
 
     /**
@@ -215,12 +216,17 @@ class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: Bl
         }
     }
 
-    /** What an item frame or flower pot, [blockEntity], held, which drops along with it. */
-    private fun held(blockEntity: NbtMap?): List<ItemStack> {
-        blockEntity ?: return emptyList()
+    /**
+     * What an item frame, flower pot or jukebox, [blockEntity], held, which
+     * drops along with it, and the bone meal in a ready composter, [state].
+     */
+    private fun held(state: BlockState, blockEntity: NbtMap?): List<ItemStack> {
+        val compost = if (state.isComposter && state.properties["composter_fill_level"] == READY) stacks.of(BONE_MEAL) else null
+        blockEntity ?: return listOfNotNull(compost)
         val inFrame = blockEntity.getCompound("Item", null)?.let(stacks::fromNbt)?.second
         val inPot = blockEntity.getCompound("PlantBlock", null)?.getString("name", null)?.let { stacks.of(itemPlacing(it) ?: it) }
-        return listOfNotNull(inFrame, inPot)
+        val inJukebox = blockEntity.getCompound("RecordItem", null)?.let(stacks::fromNbt)?.second
+        return listOfNotNull(inFrame, inPot, inJukebox, compost)
     }
 
     private fun dropsNothing(name: String) = name in DROPS_NOTHING || name.endsWith("_leaves") ||

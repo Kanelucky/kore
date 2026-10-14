@@ -130,8 +130,16 @@ class StackRequestHandler(
      * the stacks in [slots] of the player's items by [requestId]: the ID of a
      * transaction from before item stack requests, which changed them.
      */
-    fun rememberLegacy(requestId: Int, slots: Collection<Int>) {
-        recent[requestId] = slots.mapNotNull { slot -> inventory.items[slot]?.let { Location(inventory.items, slot) to it.id } }.toMap()
+    fun rememberLegacy(requestId: Int, slots: Collection<Int>) = rememberLegacyAt(requestId, slots.map { Location(inventory.items, it) })
+
+    /**
+     * Remembers, as [rememberLegacy] does, the stacks at [places], which
+     * can be among the player's armour too, as well as any it remembers by
+     * [requestId] already: a transaction can change both.
+     */
+    fun rememberLegacyAt(requestId: Int, places: Collection<Location>) {
+        val named = places.mapNotNull { place -> place.container[place.slot]?.let { place to it.id } }
+        recent[requestId] = recent[requestId].orEmpty() + named
     }
 
     fun handle(request: StackRequest): StackResponse {

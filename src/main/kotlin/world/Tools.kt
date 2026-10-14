@@ -5,14 +5,21 @@ import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
 
-/** What becomes of what a player used on a block: nothing, one of it used up, as honeycomb is, or one use of it worn off, as a hoe's is. */
-enum class HeldAfter { KEPT, USED_UP, WORN }
+/**
+ * What becomes of what a player used on a block: nothing, one of it used
+ * up, as honeycomb is, one use of it worn off, as a hoe's is, one of it
+ * swapped for what the player's handed, as a bucket emptied is, or it
+ * changed into what they're handed, as leather dyed is, in creative too.
+ */
+enum class HeldAfter { KEPT, USED_UP, WORN, SWAPPED, CHANGED }
 
 /**
  * What using what a player holds on a block did: where blocks, or the
  * data they keep, changed, the sound it made, what became of the held
- * item, items that came out of the block, to drop beside it, and one
- * handed to the player, like a flower out of a pot.
+ * item, and how many of it, items that came out of the block, to drop
+ * beside it, or at [dropAt], and one handed to the player, like a flower
+ * out of a pot, the notes it played, the songs it started or stopped, and
+ * what else happened there.
  */
 class ItemUsedOn(
     val changed: List<BlockPos>,
@@ -21,6 +28,10 @@ class ItemUsedOn(
     val dropped: List<ItemStack> = emptyList(),
     val given: ItemStack? = null,
     val events: List<WorldEvent> = emptyList(),
+    val count: Int = 1,
+    val dropAt: BlockPos? = null,
+    val notes: List<NotePlayed> = emptyList(),
+    val songs: List<SongChange> = emptyList(),
 )
 
 /** The sound a block makes as something's used on it, by its own sound set: grass for grass, wood for logs, and so on. */

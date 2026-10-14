@@ -21,16 +21,6 @@ private const val BLACK_TEXT = 0xFF000000.toInt()
 /** The most a player can write on a side of a sign, which is more than fits. */
 private const val MOST_TEXT = 512
 
-/**
- * The colour each dye turns a sign's text, as the game colours it, by
- * the dye's name.
- */
-private val DYES = mapOf(
-    "white" to 0xF0F0F0, "orange" to 0xF9801D, "magenta" to 0xC74EBD, "light_blue" to 0x3AB3DA, "yellow" to 0xFED83D, "lime" to 0x80C71F,
-    "pink" to 0xF38BAA, "gray" to 0x474F52, "light_gray" to 0x9D9D97, "cyan" to 0x169C9C, "purple" to 0x8932B8, "blue" to 0x3C44AA,
-    "brown" to 0x835432, "green" to 0x5E7C16, "red" to 0xB02E26, "black" to 0x1D1D21,
-).entries.associate { (dye, rgb) -> "minecraft:${dye}_dye" to (0xFF000000.toInt() or rgb) }
-
 /** Whether this is a sign: standing, on a wall, or hanging. */
 val BlockState.isSign get() = name.endsWith("standing_sign") || name.endsWith("wall_sign") || name.endsWith("_hanging_sign")
 
@@ -108,7 +98,7 @@ fun FlatWorld.markSign(pos: BlockPos, front: Boolean, held: ItemStack?): ItemUse
     val sideKey = if (front) FRONT else BACK
     val side = sign.getCompound(sideKey, null) ?: blankSide()
     val (changed, sound) = when {
-        name in DYES -> side.toBuilder().putInt(COLOUR, DYES.getValue(name)).build() to "sign.dye.use"
+        name in DYE_COLOURS -> side.toBuilder().putInt(COLOUR, opaque(DYE_COLOURS.getValue(name))).build() to "sign.dye.use"
         name == "minecraft:glow_ink_sac" -> side.toBuilder().putBoolean(GLOWING, true).build() to "sign.ink_sac.use"
         name == "minecraft:ink_sac" -> side.toBuilder().putBoolean(GLOWING, false).build() to "sign.ink_sac.use"
         name == "minecraft:honeycomb" -> {

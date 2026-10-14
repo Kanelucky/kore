@@ -9,6 +9,7 @@ import org.koremc.registry.BlockState
 import org.koremc.registry.BlockTraits
 import org.koremc.registry.Fuel
 import org.koremc.registry.ItemStack
+import org.koremc.registry.ItemStacks
 import org.koremc.registry.Recipes
 import java.util.TreeMap
 
@@ -209,6 +210,7 @@ class FlatWorld(
             comparatorPower.remove(pos)
             pistonArms.remove(pos)
             beacons.remove(pos)
+            playing.remove(pos)
         }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
         unsaved += pos.chunk
@@ -247,6 +249,14 @@ class FlatWorld(
 
     /** Every beacon, by where it is, with how many layers of pyramid its beam last shone on, or 0 if it didn't. */
     internal val beacons = HashMap<BlockPos, Int>()
+
+    /** The jukeboxes playing a song, by where they are, with when each song ends and the handle clients know it by. */
+    internal val playing = HashMap<BlockPos, PlayingSong>()
+
+    private var nextSoundHandle = 1L
+
+    /** A handle for a new sound, like a jukebox's song, unique in the world, by which clients can be told to stop it. */
+    internal fun newSoundHandle() = nextSoundHandle++
 
     /** The maps players have drawn. */
     val maps = Maps()
@@ -362,9 +372,12 @@ class FlatWorld(
      * Works every furnace, brewing stand, hopper, dispenser, dropper and
      * crafter a tick, by [recipes], burning [fuel]. Returns where blocks
      * changed how they look: a furnace lit or went out, a brewing stand's
-     * bottles changed, or a crafter crafted. Brewing stands that finished a
-     * brew are in [brewed], the dispensers and droppers that fired in
-     * [fired], and the sounds crafters made in [sounds].
+     * bottles changed, a crafter crafted, or a hopper filled or emptied a
+     * composter. Brewing stands that finished a brew are in [brewed], the
+     * dispensers and droppers that fired in [fired], the sounds crafters and
+     * composters made in [sounds], and the songs of the jukeboxes hoppers put
+     * a disc in, in [songs]. Hoppers take bone meal out of composters made
+     * with [items].
      */
     fun tickMachines(
         recipes: Recipes,
@@ -372,6 +385,8 @@ class FlatWorld(
         brewed: MutableList<BlockPos> = mutableListOf(),
         fired: MutableList<Fired> = mutableListOf(),
         sounds: MutableList<BlockSound> = mutableListOf(),
+        items: ItemStacks? = null,
+        songs: MutableList<SongChange> = mutableListOf(),
     ): List<BlockPos> {
         val changed = mutableListOf<BlockPos>()
         machineTicks++
@@ -389,7 +404,7 @@ class FlatWorld(
                         blocks.find(state.name, state.properties + bits)?.let { set(pos, it); changed += pos }
                     }
                 }
-                is Hopper -> tickHopper(pos, machine, machineTicks, recipes, fuel)
+                is Hopper -> tickHopper(pos, machine, machineTicks, recipes, fuel, items, changed, sounds, songs)
                 is Dispenser -> if (machine.fireIn > 0 && --machine.fireIn == 0) fire(pos, machine, recipes, fuel)?.let(fired::add)
                 is Crafter -> if (tickCrafter(pos, machine, state, recipes, fuel, sounds)) changed += pos
             }

@@ -257,20 +257,22 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
  * don't break. Blocks around it that join their neighbours take their
  * new shape, and anything that can no longer stand where it is, like a
  * torch on its side or a flower on its top, breaks next tick, as [settle]
- * explains. An end portal's frame closes the portal. Returns what broke,
- * and what changed shape.
+ * explains. An end portal's frame closes the portal, and a jukebox's song
+ * stops. Returns what broke, what changed shape, and the song stopped.
  */
 fun FlatWorld.breakBlock(pos: BlockPos): Changes {
     val state = stateAt(pos)?.takeIf { it.name != AIR && it.liquid == null } ?: return Changes(emptyMap(), emptyList())
     val broken = linkedMapOf<BlockPos, BrokenBlock>()
     val partner = pistonPartner(pos, state)
+    // A jukebox's song stops as it goes: taken now, while the world still knows the handle it plays by.
+    val stopped = stopSong(pos)
     val unpaired = listOfNotNull(breakAt(pos, state, broken))
     state.otherHalf(pos)?.let { other -> stateAt(other)?.takeIf { it.name == state.name }?.let { breakAt(other, it, broken) } }
     // A piston that's out and its head break together.
     partner?.let { other -> stateAt(other)?.let { breakAt(other, it, broken) } }
     val closed = closePortalBy(pos, state)
     val settled = settle(broken.keys)
-    return Changes(broken + settled.broken, (unpaired + closed + settled.reshaped).distinct())
+    return Changes(broken + settled.broken, (unpaired + closed + settled.reshaped).distinct(), songs = listOfNotNull(stopped))
 }
 
 /** Where the other half of a door, bed or tall plant at [pos] is, or null for a block that's one block. */

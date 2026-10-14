@@ -117,10 +117,11 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 - **World:** the vanilla flat world, streamed to players as they move, and saved every minute and on stop in the game's own format, in `worlds/`, so it opens in the game too. Players keep where they were and what they had.
 - **Building and mining:** placing blocks with the game's rules for slabs, stairs, doors, rails, fences, walls, scaffolding and the like; sand, gravel, concrete powder, anvils, snow and hanging dripstone falling; survival mining at the right pace, tool wear, and drops, with Silk Touch, Fortune and shears.
 - **Using items on blocks:** hoes, shovels and axes, waxing and scraping copper, carving pumpkins, writing on, dyeing and waxing signs, item frames, flower pots, and eyes of ender opening end portals.
+- **Note blocks, jukeboxes, composters and cauldrons:** tuning and playing notes by the block below, discs and their songs, put in by hand or hopper, composting with hoppers, and cauldrons of water, lava, powder snow, potions and dye.
 - **Items and inventory:** dropped items, picking up and merging, the creative inventory, and server-authoritative inventories.
 - **Containers and workstations:** chests, barrels, shulker boxes and ender chests; crafting; furnaces and brewing stands; stonecutters, smithing tables, anvils, grindstones, looms, enchanting tables and cartography tables; hoppers, dispensers, droppers and crafters; lecterns, and writing and signing books; beacons and their powers; experience.
 - **Maps:** drawn as players explore, locator maps, and zooming out, copying and locking them.
-- **Redstone:** levers, buttons, pressure plates, redstone blocks, torches, dust, repeaters, comparators and observers, powering doors, trapdoors, fence gates, lamps, hoppers, dispensers and droppers.
+- **Redstone:** levers, buttons, pressure plates, redstone blocks, torches, dust, repeaters, comparators and observers, powering doors, trapdoors, fence gates, lamps, note blocks, hoppers, dispensers and droppers.
 - **Water and lava:** flowing as in the game, buckets, water inside blocks like fences and stairs, lava and water making obsidian, cobblestone and stone, and concrete powder hardening.
 - **Pistons:** pushing and pulling blocks, slime and honey, flying machines, chests and furnaces with their contents, and the players, items and orbs in the way or on top.
 - **Finding the server:** its name and players in the server list, and listed with LAN games on the local network.

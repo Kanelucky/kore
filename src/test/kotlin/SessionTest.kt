@@ -15,12 +15,14 @@ import org.koremc.auth.XUID
 import org.koremc.auth.ecKeyPair
 import org.koremc.protocol.Animate
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.ARMOUR_WINDOW
 import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorEvent
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.BiomeDefinitionList
 import org.koremc.protocol.BlockActorData
 import org.koremc.protocol.BlockDefinitions
+import org.koremc.protocol.BlockEvent
 import org.koremc.protocol.ContainerClose
 import org.koremc.protocol.ContainerOpen
 import org.koremc.protocol.FloatItem
@@ -29,6 +31,9 @@ import org.koremc.protocol.LevelEvent
 import org.koremc.protocol.InventorySlot
 import org.koremc.protocol.LevelSoundEvent
 import org.koremc.protocol.OpenSign
+import org.koremc.protocol.UpdateSoundData
+import org.koremc.protocol.RecordStarted
+import org.koremc.protocol.PlaySound
 import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateBlock
@@ -68,6 +73,7 @@ import org.koremc.registry.MENDING
 import org.koremc.registry.Mining
 import org.koremc.registry.ToolKind
 import org.koremc.registry.damage
+import org.koremc.registry.dyedColour
 import org.koremc.registry.withDamage
 import org.koremc.registry.withEnchantments
 import org.koremc.world.BlockPos
@@ -105,13 +111,17 @@ private const val START_SPRINTING = 25
 private const val STOP_SPRINTING = 26
 private const val START_FLYING = 42
 
-/** The runtime IDs of the oak planks, oak door, oak fence, wooden pickaxe, stone hoe and poppy items. */
+/** The runtime IDs of the oak planks, oak door, oak fence, wooden pickaxe, stone hoe, poppy, bucket, music disc and leather cap items. */
 private const val PLANKS_ITEM = 5
 private const val DOOR_ITEM = 324
 private const val FENCE_ITEM = 85
 private const val PICKAXE_ITEM = 310
 private const val HOE_ITEM = 333
 private const val POPPY_ITEM = 38
+private const val WATER_BUCKET_ITEM = 362
+private const val BUCKET_ITEM = 361
+private const val DISC_ITEM = 545
+private const val HELMET_ITEM = 338
 
 /** The PlayerAction for breaking a block in creative. */
 private const val CREATIVE_DESTROY_BLOCK = 13
@@ -171,7 +181,11 @@ class SessionTest {
     private val frame = state("minecraft:frame", "facing_direction" to 1, "item_frame_map_bit" to 0.toByte(), "item_frame_photo_bit" to 0.toByte())
     private val pots = (0..1).map { full -> state("minecraft:flower_pot", "update_bit" to full.toByte()) }
     private val poppy = BlockState("minecraft:poppy", NbtMap.EMPTY, version = 18168865)
-    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, frame, poppy) + pots + levers + buttons + doors + fences + water)
+    /** A cauldron at each level of water, by level, a jukebox and a note block. */
+    private val cauldrons = (0..6).map { level -> state("minecraft:cauldron", "cauldron_liquid" to "water", "fill_level" to level) }
+    private val jukebox = BlockState("minecraft:jukebox", NbtMap.EMPTY, version = 18168865)
+    private val noteBlock = BlockState("minecraft:noteblock", NbtMap.EMPTY, version = 18168865)
+    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, frame, poppy, jukebox, noteBlock) + pots + cauldrons + levers + buttons + doors + fences + water)
     private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
@@ -186,6 +200,10 @@ class SessionTest {
     private val pickaxe = ItemDefinition("minecraft:wooden_pickaxe", PICKAXE_ITEM, componentBased = false, ItemVersion.NONE, maxDurability = 59)
     private val hoe = ItemDefinition("minecraft:stone_hoe", HOE_ITEM, componentBased = false, ItemVersion.NONE, maxDurability = 131)
     private val poppyItem = ItemDefinition("minecraft:poppy", POPPY_ITEM, componentBased = false, ItemVersion.NONE)
+    private val waterBucket = ItemDefinition("minecraft:water_bucket", WATER_BUCKET_ITEM, componentBased = false, ItemVersion.NONE, maxStackSize = 1)
+    private val bucket = ItemDefinition("minecraft:bucket", BUCKET_ITEM, componentBased = false, ItemVersion.NONE, maxStackSize = 16)
+    private val disc = ItemDefinition("minecraft:music_disc_cat", DISC_ITEM, componentBased = true, ItemVersion.NONE, maxStackSize = 1)
+    private val helmet = ItemDefinition("minecraft:leather_helmet", HELMET_ITEM, componentBased = false, ItemVersion.NONE, maxStackSize = 1, maxDurability = 55)
 
     private val sent = mutableListOf<ByteArray>()
 
@@ -196,7 +214,7 @@ class SessionTest {
     private val mining = mapOf(stone.name to Mining(1.5, ToolKind.PICKAXE, harvestTier = 0))
     private val game = GameData(
         world, listOf(itemRegistry, biomes), blockDefinitions, creative, mining, Drops(creative.items.map { it.stack.item }, creative, palette),
-        ItemStacks(creative.items.map { it.stack.item } + pickaxe + hoe + poppyItem, creative, palette),
+        ItemStacks(creative.items.map { it.stack.item } + pickaxe + hoe + poppyItem + waterBucket + bucket + disc + helmet, creative, palette),
     )
     private val session: Session by lazy {
         // The only player, so the only one to see what they change.
@@ -750,6 +768,114 @@ class SessionTest {
     }
 
     @Test
+    fun `a water bucket emptied into a cauldron swaps for an empty one in the player's hand`() {
+        spawn()
+        session.give(ItemStack(waterBucket))
+        val at = BlockPos(1, -63, 0)
+        world[at] = cauldrons[0]
+        sent.clear()
+
+        clientSends(placeBlock(against = at, face = 1, slot = 0, held = WATER_BUCKET_ITEM))
+
+        assertEquals(cauldrons[6], world.stateAt(at))
+        assertEquals("minecraft:bucket", session.heldStack?.item?.name)
+        val packets = receivedPackets()
+        assertTrue(packets.any { it.contentEquals(LevelEvent(3506, Vec3(1.5f, -62.5f, 0.5f), 0).encode()) }) // The sound of it filling
+        assertTrue(packets.any { it.contentEquals(InventorySlot(0, ItemStack(bucket), stackId = 2).encode()) })
+    }
+
+    @Test
+    fun `leather dipped in dyed water comes out dyed, in creative too, and the client sees the cauldron afresh`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        session.give(ItemStack(helmet))
+        val at = BlockPos(1, -63, 0)
+        world[at] = cauldrons[6]
+        val red = 0xFFB02E26.toInt()
+        world.setBlockEntity(at, NbtMap.builder().putString("id", "Cauldron").putShort("PotionId", -1).putShort("PotionType", -1).putInt("CustomColor", red).build())
+        sent.clear()
+
+        clientSends(placeBlock(against = at, face = 1, slot = 0, held = HELMET_ITEM))
+
+        assertEquals(red, session.heldStack?.dyedColour)
+        assertEquals(cauldrons[5], world.stateAt(at))
+        // The client draws the water afresh only as the block changes, so it sees it change twice.
+        val updates = receivedPackets().filter { it[0].toInt() == 21 }
+        assertContentEquals(UpdateBlock(at, cauldrons[6].networkId).encode(), updates[0])
+        assertContentEquals(UpdateBlock(at, cauldrons[5].networkId).encode(), updates[1])
+    }
+
+    @Test
+    fun `a disc put in a jukebox plays, and everyone around is told what's playing`() {
+        spawn()
+        session.give(ItemStack(disc))
+        val at = BlockPos(1, -63, 0)
+        world[at] = jukebox
+        sent.clear()
+
+        clientSends(placeBlock(against = at, face = 1, slot = 0, held = DISC_ITEM))
+
+        assertNull(session.heldStack)
+        val packets = receivedPackets()
+        // The song plays by a handle, the world's first, tied to the jukebox, as songs play since 26.50.
+        assertTrue(packets.any { it.contentEquals(PlaySound("record.cat", Vec3(1.5f, -62.5f, 0.5f), 4f, 1f, handle = 1).encode()) })
+        assertTrue(packets.any { it.contentEquals(RecordStarted(at, 1).encode()) })
+        val popup = Text(Text.JUKEBOX_POPUP, "record.nowPlaying", parameters = listOf("%item.record_cat.desc"), needsTranslation = true)
+        assertTrue(packets.any { it.contentEquals(popup.encode()) })
+    }
+
+    @Test
+    fun `taking a disc out of a jukebox stops its song, by the handle it plays by`() {
+        spawn()
+        session.give(ItemStack(disc))
+        val at = BlockPos(1, -63, 0)
+        world[at] = jukebox
+        clientSends(placeBlock(against = at, face = 1, slot = 0, held = DISC_ITEM))
+        sent.clear()
+
+        clientSends(placeBlock(against = at, face = 1, slot = 0, held = 0))
+
+        val packets = receivedPackets()
+        assertTrue(packets.any { it.contentEquals(UpdateSoundData(1).encode()) })
+    }
+
+    @Test
+    fun `using armour puts it on, and the client can go on naming it as it did`() {
+        spawn()
+        session.give(ItemStack(helmet))
+        sent.clear()
+
+        clientSends(useInAir(slot = 0, held = HELMET_ITEM, legacyRequestId = -38388))
+        assertNull(session.heldStack)
+        assertTrue(receivedPackets().any { it.contentEquals(InventorySlot(0, ItemStack(helmet), stackId = 1, window = ARMOUR_WINDOW).encode()) })
+
+        // Request -9 drops the helmet from the armour slot, which the client names -38388.
+        clientSends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(147).writeVarUInt(1).writeVarInt(-9).writeVarUInt(1)
+                    .writeVarUInt(3).writeByte(3).writeByte(1).writeByte(6).writeBoolean(false).writeByte(0).writeIntLE(-38388).writeBoolean(false)
+                    .writeVarUInt(0).writeIntLE(0),
+            ),
+        )
+        assertEquals(0, receivedPacket()[3].toInt()) // The response's result: accepted
+    }
+
+    @Test
+    fun `clicking a note block tunes it and plays it, the note rising out of it`() {
+        spawn()
+        val at = BlockPos(1, -63, 0)
+        world[at] = noteBlock
+        sent.clear()
+
+        clientSends(placeBlock(against = at, face = 1, slot = 0, held = 0))
+
+        val packets = receivedPackets()
+        // Stone below plays the bass drum.
+        assertTrue(packets.any { it.contentEquals(LevelSoundEvent("note", Vec3(1.5f, -62.5f, 0.5f), 1 shl 8 or 1).encode()) })
+        assertTrue(packets.any { it.contentEquals(BlockEvent(at, 1, 1).encode()) })
+    }
+
+    @Test
     fun `clicking a sign opens the side the player sees to write on, and what they write goes on it for everyone`() {
         spawn()
         // North of the player, facing south, so they see its front.
@@ -1294,6 +1420,21 @@ class SessionTest {
             .writeFloatLE(standing.x).writeFloatLE(standing.y).writeFloatLE(standing.z)
             .writeFloatLE(0.5f).writeFloatLE(1f).writeFloatLE(0.5f)
             .writeVarUInt(stone.networkId).writeBoolean(predictedToWork).writeByte(0),
+    )
+
+    /**
+     * An inventory transaction using the item [held], one of it, in hotbar
+     * [slot] in the air, by legacy request [legacyRequestId], as putting on
+     * armour does: the client has emptied the slot already.
+     */
+    private fun useInAir(slot: Int, held: Int, legacyRequestId: Int) = ByteBufUtil.getBytes(
+        Unpooled.buffer().writeVarUInt(30).writeVarInt(legacyRequestId).writeBoolean(false).writeVarUInt(2)
+            .writeVarUInt(1).writeVarUInt(0).writeBoolean(true).writeByte(0).writeBoolean(false).writeVarUInt(slot).heldItem(held, 1).heldItem(0)
+            .writeVarInt(1).writeByte(1).writeBlockPos(BlockPos(0, 0, 0)).writeByte(255).writeVarInt(slot).writeByte(0)
+            .heldItem(held, 1)
+            .writeFloatLE(standing.x).writeFloatLE(standing.y).writeFloatLE(standing.z)
+            .writeFloatLE(0f).writeFloatLE(0f).writeFloatLE(0f)
+            .writeVarUInt(0).writeBoolean(false).writeByte(0),
     )
 
     private fun mobEquipment(slot: Int) = ByteBufUtil.getBytes(

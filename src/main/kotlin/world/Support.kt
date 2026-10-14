@@ -22,8 +22,9 @@ data class WorldEvent(val pos: BlockPos, val event: Int, val data: Int)
  * What a change to the world did around it: the blocks that broke, where
  * blocks changed shape, the sounds they made, where only the data a block
  * keeps changed, like a piston's arm moving out, where blocks a piston
- * moved were, other things that happened at blocks, and the falling
- * blocks that couldn't land, where they came down, which drop as items.
+ * moved were, other things that happened at blocks, the falling blocks
+ * that couldn't land, where they came down, which drop as items, the
+ * notes note blocks played, and the songs jukeboxes started or stopped.
  */
 class Changes(
     val broken: Map<BlockPos, BrokenBlock>,
@@ -33,8 +34,11 @@ class Changes(
     val moved: List<BlockPos> = emptyList(),
     val events: List<WorldEvent> = emptyList(),
     val dropped: List<Pair<Vec3, BlockState>> = emptyList(),
+    val notes: List<NotePlayed> = emptyList(),
+    val songs: List<SongChange> = emptyList(),
 ) {
-    val isEmpty get() = broken.isEmpty() && reshaped.isEmpty() && sounds.isEmpty() && data.isEmpty() && events.isEmpty()
+    val isEmpty get() =
+        broken.isEmpty() && reshaped.isEmpty() && sounds.isEmpty() && data.isEmpty() && events.isEmpty() && notes.isEmpty() && songs.isEmpty()
 }
 
 /** Why a block is to be looked at again, some ticks after something changed. */
@@ -80,6 +84,12 @@ enum class BlockUpdate {
 
     /** Whether sand and the like with nothing under it falls. */
     FALL,
+
+    /** A full composter readying its bone meal. */
+    COMPOST,
+
+    /** A jukebox's song ending, which stops the power it gives. */
+    SONG,
 }
 
 /**
@@ -104,6 +114,7 @@ internal val BlockState.dueFor: List<BlockUpdate>
             isLivingCoral -> BlockUpdate.CORAL
             name == BIG_DRIPLEAF -> BlockUpdate.TILT
             name.endsWith("button") -> BlockUpdate.BUTTON
+            name == COMPOSTER -> BlockUpdate.COMPOST
             fallsFreely -> BlockUpdate.FALL
             liquid != null -> BlockUpdate.FLOW
             else -> null
@@ -285,10 +296,11 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
  * which fall, and scaffolding takes its new distance. Sand and the like
  * with nothing under them fall, and falling blocks fall on, landing or
  * dropping as items. Coral out of water dies, big dripleaves tip over or
- * right themselves, and pressed buttons pop back out. The world settles
- * around what changed, which can leave more for later ticks. Run once a
- * tick. Returns what broke, where blocks changed shape, the sounds they
- * made, and the falling blocks that drop as items.
+ * right themselves, pressed buttons pop back out, full composters ready
+ * their bone meal, jukebox songs end, and cauldrons under water fill with
+ * it. The world settles around what changed, which can leave more for
+ * later ticks. Run once a tick. Returns what broke, where blocks changed
+ * shape, the sounds they made, and the falling blocks that drop as items.
  */
 fun FlatWorld.tickBlocks(): Changes {
     blockTicks++
@@ -351,8 +363,11 @@ fun FlatWorld.tickBlocks(): Changes {
                 startFalling(at, state)
                 changed += at
             }
+            BlockUpdate.COMPOST -> if (readyCompost(at, state, sounds)) reshaped += at
+            BlockUpdate.SONG -> endSong(at)
         }
     }
+    changed += fillFromAbove(since, events)
     reshaped += changed
     reshaped += settle(changed).reshaped
     reshaped.removeAll(broken.keys)

@@ -394,8 +394,6 @@ private fun underWater(ground: Int, water: Int, depth: Int): Int {
     return (channel(16) shl 16) or (channel(8) shl 8) or (water and 0xFF)
 }
 
-private fun opaque(rgb: Int) = rgb or (0xFF shl 24)
-
 /** [colour] darker by [SHADE], as ground lower than the ground north of it shows. */
 private fun darker(colour: Int): Int = mapChannels(colour) { (it * SHADE).toInt() }
 

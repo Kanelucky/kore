@@ -6,6 +6,7 @@ import org.koremc.inventory.SlotStack
 import org.koremc.registry.BlockState
 import org.koremc.registry.Fuel
 import org.koremc.registry.ItemStack
+import org.koremc.registry.ItemStacks
 import org.koremc.registry.Recipes
 import org.koremc.registry.sameKindAs
 
@@ -138,27 +139,60 @@ internal fun FlatWorld.hopperReach(pos: BlockPos, face: Face, recipes: Recipes, 
  * Once it's moved anything, it waits eight ticks before it moves any more.
  * A hopper that was empty waits as long once one passes it an item, a tick
  * less if it's already worked this tick, so items go down a line of
- * hoppers at one pace, whichever works first.
+ * hoppers at one pace, whichever works first. A hopper pointing down into
+ * a composter puts in what composts, one pointing into a jukebox puts in a
+ * disc, which plays, going in [songs], and one under a composter takes out
+ * its bone meal, made with [stacks], once it's ready. Where composters
+ * changed goes in [changed], and what they sound in [sounds].
  */
-internal fun FlatWorld.tickHopper(pos: BlockPos, hopper: Hopper, tick: Long, recipes: Recipes, fuel: Fuel) {
+internal fun FlatWorld.tickHopper(
+    pos: BlockPos,
+    hopper: Hopper,
+    tick: Long,
+    recipes: Recipes,
+    fuel: Fuel,
+    stacks: ItemStacks? = null,
+    changed: MutableList<BlockPos> = mutableListOf(),
+    sounds: MutableList<BlockSound> = mutableListOf(),
+    songs: MutableList<SongChange> = mutableListOf(),
+) {
     hopper.cooldown--
     hopper.tickedAt = tick
     if (hopper.cooldown > 0) return
     hopper.cooldown = 0
     val state = stateAt(pos) ?: return
     if (state.properties[HOPPER_LOCKED] == 1.toByte()) return
-    val pushed = push(pos, hopper, state, tick, recipes, fuel)
-    val pulled = pull(pos, hopper, recipes, fuel)
+    val pushed = push(pos, hopper, state, tick, recipes, fuel, changed, sounds, songs)
+    val pulled = pull(pos, hopper, recipes, fuel, stacks, changed, sounds)
     if (pushed || pulled) hopper.cooldown = HOPPER_COOLDOWN
 }
 
 /** Passes one item from [hopper] into the block it points into, if that takes one. */
-private fun FlatWorld.push(pos: BlockPos, hopper: Hopper, state: BlockState, tick: Long, recipes: Recipes, fuel: Fuel): Boolean {
+private fun FlatWorld.push(
+    pos: BlockPos,
+    hopper: Hopper,
+    state: BlockState,
+    tick: Long,
+    recipes: Recipes,
+    fuel: Fuel,
+    changed: MutableList<BlockPos>,
+    sounds: MutableList<BlockSound>,
+    songs: MutableList<SongChange>,
+): Boolean {
     val facing = Face.of(state.properties[FACING_DIRECTION] as? Int ?: Face.DOWN.ordinal)?.takeIf { it != Face.UP } ?: Face.DOWN
-    val target = hopperReach(pos.side(facing), facing.opposite, recipes, fuel) ?: return false
+    val into = pos.side(facing)
+    // A composter takes what composts from above, and a jukebox a disc from any side, without slots a hopper reaches.
+    val takes: (ItemStack) -> Boolean = when {
+        facing == Face.DOWN && stateAt(into)?.isComposter == true -> { stack -> compostFromHopper(into, stack, changed, sounds) }
+        stateAt(into)?.isJukebox == true -> { stack -> discFromHopper(into, stack, songs) }
+        else -> {
+            val target = hopperReach(into, facing.opposite, recipes, fuel) ?: return false
+            { stack -> passOne(target, stack, tick) }
+        }
+    }
     for (slot in 0 until HOPPER_SLOTS) {
         val there = hopper.slots[slot] ?: continue
-        if (!passOne(target, there.stack, tick)) continue
+        if (!takes(there.stack)) continue
         hopper.slots[slot] = there.less(1)
         return true
     }
@@ -178,10 +212,24 @@ internal fun FlatWorld.passOne(target: HopperReach, stack: ItemStack, tick: Long
     return true
 }
 
-/** Takes one item into [hopper] from the container above it, or else the items lying on it. */
-private fun FlatWorld.pull(pos: BlockPos, hopper: Hopper, recipes: Recipes, fuel: Fuel): Boolean {
+/** Takes one item into [hopper] from the container or composter above it, or else the items lying on it. */
+private fun FlatWorld.pull(
+    pos: BlockPos,
+    hopper: Hopper,
+    recipes: Recipes,
+    fuel: Fuel,
+    stacks: ItemStacks?,
+    changed: MutableList<BlockPos>,
+    sounds: MutableList<BlockSound>,
+): Boolean {
     val own = HopperReach(hopper.slots, (0 until HOPPER_SLOTS).toList())
     val above = pos.side(Face.UP)
+    if (stateAt(above)?.isComposter == true) {
+        val boneMeal = stacks?.takeIf { compostReady(above) }?.of(BONE_MEAL) ?: return false
+        if (own.put(boneMeal, 1, ::newStackId) == 0) return false
+        emptyCompost(above, changed, sounds)
+        return true
+    }
     val source = hopperReach(above, Face.DOWN, recipes, fuel)
     if (source != null) {
         for (slot in source.outOf) {

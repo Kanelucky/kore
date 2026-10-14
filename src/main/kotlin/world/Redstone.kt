@@ -67,7 +67,7 @@ private const val MAX_PASSES = 16
 /** Blocks besides dust that dust beside them points into: sources of power, and parts of redstone that carry it on. */
 private val WIRE_JOINS = setOf(
     "lever", "redstone_torch", "unlit_redstone_torch", "redstone_block", "daylight_detector", "daylight_detector_inverted",
-    "tripwire_hook", "trapped_chest", "target", "detector_rail", "lectern", "lightning_rod",
+    "tripwire_hook", "trapped_chest", "target", "detector_rail", "lectern", "lightning_rod", "jukebox",
 )
 private val WIRE_JOIN_ENDINGS = listOf("button", "pressure_plate")
 
@@ -111,13 +111,15 @@ fun FlatWorld.isPowered(pos: BlockPos): Boolean = Face.entries.any { signal(pos.
 
 /**
  * The power the block at [from] gives the block beside it on its
- * [towards] side, from 0 to 15. A source gives what it gives, and a block
- * power passes through gives the strongest power going straight into it.
- * Dust's power counts only [withWire]: dust takes none from dust through a
- * block, so a block that only dust powers powers no other dust.
+ * [towards] side, from 0 to 15. A source gives what it gives, a jukebox
+ * full power while it plays a song, and a block power passes through gives
+ * the strongest power going straight into it. Dust's power counts only
+ * [withWire]: dust takes none from dust through a block, so a block that
+ * only dust powers powers no other dust.
  */
 internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean = true): Int {
     val state = stateAt(from) ?: return 0
+    if (state.isJukebox && playingSong(from)) return MAX_POWER
     if (state.conductsPower) return strongestInto(from, withWire)
     return when {
         state.givesPower || state.name == REDSTONE_BLOCK || state.lecternPowered -> MAX_POWER
@@ -237,18 +239,18 @@ private val BlockState.torchHeldFrom: Face get() = heldFrom ?: Face.DOWN
  * tick, since what's in a container changes by itself. An observer
  * pulses two ticks after the block it watches changes in any way, for two
  * ticks, unless it's pulsing already. A dispenser or dropper that power
- * has just
- * reached fires a moment later, and a hopper is locked for as long as
- * it's powered. A door, trapdoor or fence gate opens as power reaches it,
- * and shuts as the power goes, a door if either half is powered. Between
- * times, a player can open or shut a wooden one by hand, and it stays so
- * until the power changes. Returns where blocks changed, and the sounds
- * they made.
+ * has just reached fires a moment later, a note block plays at once, and a
+ * hopper is locked for as long as it's powered. A door, trapdoor or fence
+ * gate opens as power reaches it, and shuts as the power goes, a door if
+ * either half is powered. Between times, a player can open or shut a
+ * wooden one by hand, and it stays so until the power changes. Returns
+ * where blocks changed, the sounds they made, and the notes played.
  */
 fun FlatWorld.updatePower(): Changes {
     val changed = LinkedHashSet<BlockPos>()
     val sounds = mutableListOf<BlockSound>()
-    for (pos in comparators.toList()) answerPower(pos, changed, sounds)
+    val notes = mutableListOf<NotePlayed>()
+    for (pos in comparators.toList()) answerPower(pos, changed, sounds, notes)
     var passes = 0
     while (powerChanges.isNotEmpty() && passes++ < MAX_PASSES) {
         val changedNow = powerChanges.toList()
@@ -256,9 +258,9 @@ fun FlatWorld.updatePower(): Changes {
         for (pos in changedNow) observedChange(pos)
         val near = changedNow.flatMap { it.around(POWER_REACH) }.filterTo(LinkedHashSet()) { it.y in MIN_Y..MAX_Y }
         changed += updateWire(near)
-        for (pos in near) answerPower(pos, changed, sounds)
+        for (pos in near) answerPower(pos, changed, sounds, notes)
     }
-    return Changes(emptyMap(), changed.toList(), sounds)
+    return Changes(emptyMap(), changed.toList(), sounds, notes = notes)
 }
 
 /**
@@ -351,9 +353,10 @@ internal fun FlatWorld.tickObserver(pos: BlockPos, state: BlockState): Boolean {
 }
 
 /** Brings the block at [pos] in line with the power around it, if it answers power. */
-private fun FlatWorld.answerPower(pos: BlockPos, changed: MutableSet<BlockPos>, sounds: MutableList<BlockSound>) {
+private fun FlatWorld.answerPower(pos: BlockPos, changed: MutableSet<BlockPos>, sounds: MutableList<BlockSound>, notes: MutableList<NotePlayed>) {
     val state = stateAt(pos) ?: return
     when {
+        state.isNoteBlock -> powerNote(pos, isPowered(pos))?.let(notes::add)
         state.opensWithPower -> {
             // A door goes by its lower half, which keeps both halves' power.
             val lower = if (state.properties[UPPER_BLOCK] == 1.toByte()) pos.side(Face.DOWN) else pos
@@ -532,17 +535,19 @@ private fun FlatWorld.comparatorBack(pos: BlockPos, state: BlockState): Int {
  * or null for a block it reads nothing of. A container is as full as its
  * slots are, each of the most it holds of a stack, a double chest as one:
  * 1 for anything in it at all, up to 15 with every slot full. A cake reads
- * more for each slice left, a composter for each level, a respawn anchor
- * for each charge, and a beehive or bee nest for its honey. An end portal
- * frame reads full with an eye in it, an item frame by which of its eight
- * ways its item is turned, a lectern by how far through its book the
- * reader is, and a crafter by how many of its slots are full or switched
- * off.
+ * more for each slice left, a composter for each level, a cauldron for
+ * each third, a respawn anchor for each charge, and a beehive or bee nest
+ * for its honey. An end portal frame reads full with an eye in it, an item
+ * frame by which of its eight ways its item is turned, a lectern by how
+ * far through its book the reader is, a crafter by how many of its slots
+ * are full or switched off, and a jukebox by its disc.
  */
 internal fun FlatWorld.fullness(pos: BlockPos): Int? {
     val state = stateAt(pos) ?: return null
     val properties = state.properties
     when (state.name) {
+        CAULDRON -> return cauldronFullness(state)
+        JUKEBOX -> return discPower(pos)
         "minecraft:cake" -> return (7 - (properties["bite_counter"] as? Int ?: 0)) * 2
         "minecraft:composter" -> return properties["composter_fill_level"] as? Int ?: 0
         "minecraft:respawn_anchor" -> return (properties["respawn_anchor_charge"] as? Int ?: 0) * MAX_POWER / 4

@@ -15,6 +15,7 @@ import org.koremc.inventory.Crafter
 import org.koremc.inventory.ENCHANTING_INPUT_SLOT
 import org.koremc.inventory.EnchantingOffer
 import org.koremc.inventory.HOTBAR_SIZE
+import org.koremc.inventory.Location
 import org.koremc.inventory.MAX_BOOKSHELVES
 import org.koremc.inventory.OpenContainer
 import org.koremc.inventory.PairedContainer
@@ -96,12 +97,14 @@ import org.koremc.protocol.OfferedEnchantment
 import org.koremc.protocol.OpenSign
 import org.koremc.protocol.PacketException
 import org.koremc.protocol.PermissionLevel
+import org.koremc.protocol.PlaySound
 import org.koremc.protocol.PlayStatus
 import org.koremc.protocol.PlayerAction
 import org.koremc.protocol.PlayerAuthInput
 import org.koremc.protocol.PlayerEnchantOptions
 import org.koremc.protocol.PlayerList
 import org.koremc.protocol.PlayerListEntry
+import org.koremc.protocol.RecordStarted
 import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.RequestChunkRadius
 import org.koremc.protocol.RequestNetworkSettings
@@ -127,6 +130,7 @@ import org.koremc.protocol.UpdateAbilities
 import org.koremc.protocol.UpdateAttributes
 import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.UpdatePlayerGameType
+import org.koremc.protocol.UpdateSoundData
 import org.koremc.protocol.VoxelShapes
 import org.koremc.protocol.abilitiesFor
 import org.koremc.protocol.decodeClientPacket
@@ -191,6 +195,7 @@ import org.koremc.world.LOCATOR
 import org.koremc.world.Liquid
 import org.koremc.world.Machine
 import org.koremc.world.MapData
+import org.koremc.world.NOTE_SOUND
 import org.koremc.world.PISTON_MOVE_TICKS
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
@@ -202,6 +207,7 @@ import org.koremc.world.Placer
 import org.koremc.world.PlayerExperience
 import org.koremc.world.SNOW_LAYER
 import org.koremc.world.STORAGE_SLOTS
+import org.koremc.world.SongChange
 import org.koremc.world.Storage
 import org.koremc.world.Vec3
 import org.koremc.world.WRITABLE_BOOK
@@ -211,6 +217,7 @@ import org.koremc.world.bit
 import org.koremc.world.blockPlacedBy
 import org.koremc.world.breakBlock
 import org.koremc.world.breakTicks
+import org.koremc.world.cauldronNudge
 import org.koremc.world.centre
 import org.koremc.world.chestHalves
 import org.koremc.world.chunksAround
@@ -228,10 +235,14 @@ import org.koremc.world.furnaceKind
 import org.koremc.world.goesOnLectern
 import org.koremc.world.harvests
 import org.koremc.world.isBlockedOpen
+import org.koremc.world.isCauldron
+import org.koremc.world.isComposter
 import org.koremc.world.isCrafter
 import org.koremc.world.isFlowerPot
 import org.koremc.world.isItemFrame
+import org.koremc.world.isJukebox
 import org.koremc.world.isLectern
+import org.koremc.world.isNoteBlock
 import org.koremc.world.isSign
 import org.koremc.world.knockBookOff
 import org.koremc.world.lecternBook
@@ -245,6 +256,7 @@ import org.koremc.world.opensOnClick
 import org.koremc.world.otherHalf
 import org.koremc.world.pistonMotions
 import org.koremc.world.place
+import org.koremc.world.playNote
 import org.koremc.world.pressPlates
 import org.koremc.world.putOnLectern
 import org.koremc.world.setBeaconPowers
@@ -254,6 +266,7 @@ import org.koremc.world.side
 import org.koremc.world.signWaxed
 import org.koremc.world.smokeDirection
 import org.koremc.world.snapsUp
+import org.koremc.world.songTitleIn
 import org.koremc.world.stepOn
 import org.koremc.world.storage
 import org.koremc.world.takeFromFrame
@@ -261,11 +274,15 @@ import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
 import org.koremc.world.tickOrbs
 import org.koremc.world.toggleCrafterSlot
+import org.koremc.world.tuneNote
 import org.koremc.world.turnPage
 import org.koremc.world.updatePower
 import org.koremc.world.usable
 import org.koremc.world.use
+import org.koremc.world.useCauldron
+import org.koremc.world.useComposter
 import org.koremc.world.useFrame
+import org.koremc.world.useJukebox
 import org.koremc.world.usePot
 import org.koremc.world.useToolOn
 import org.koremc.world.wearFromBreaking
@@ -317,6 +334,20 @@ private const val KNOCK_OUT_MILLIS = 250L
 
 /** What the client says swung a player's arm as they used something on a block. */
 private const val INTERACT_SWING = "interact"
+
+/** The game's message for what a jukebox has just started playing, which the song's title fills in. */
+private const val NOW_PLAYING = "record.nowPlaying"
+
+/** How loud a jukebox's song plays: four times as far as a sound at full volume carries. */
+private const val JUKEBOX_VOLUME = 4f
+
+/** How the names of armour end, by the armour slot each piece goes in, from the head down. */
+private val ARMOUR_PIECES = listOf("_helmet", "_chestplate", "_leggings", "_boots")
+
+private const val ELYTRA = "minecraft:elytra"
+
+/** The armour slot the item called [name] is worn in, or null for something that isn't worn. */
+private fun armourSlotFor(name: String): Int? = if (name == ELYTRA) 1 else ARMOUR_PIECES.indexOfFirst(name::endsWith).takeIf { it >= 0 }
 
 /** Buckets: empty, and full of each liquid. */
 private const val BUCKET = "minecraft:bucket"
@@ -1408,7 +1439,7 @@ class Session(
     private fun onTransaction(packet: InventoryTransaction, tick: Long? = null) {
         val held = inventory.items[heldSlot]
         when (packet.type) {
-            InventoryTransaction.USE_ITEM -> packet.use?.let { onItemUse(it, tick) }
+            InventoryTransaction.USE_ITEM -> packet.use?.let { onItemUse(it, tick, packet.legacyRequestId) }
             InventoryTransaction.NORMAL -> onDropFromSlot(packet.actions)
         }
         val acknowledged = if (packet.legacyRequestId != 0) acknowledge(packet) else emptyList()
@@ -1464,42 +1495,56 @@ class Session(
         send(slotOf(from.slot))
     }
 
-    /** The player using their item, at the client's [tick] when it came in their input. */
-    private fun onItemUse(use: ItemUse, tick: Long? = null) {
+    /**
+     * The player using their item, at the client's [tick] when it came in
+     * their input, in a transaction the client names the stacks it changes
+     * by, [legacyRequestId], if it isn't 0.
+     */
+    private fun onItemUse(use: ItemUse, tick: Long? = null, legacyRequestId: Int = 0) {
         when (use.action) {
             ItemUseAction.PLACE -> onClick(use)
             ItemUseAction.DESTROY -> onBreak(use.position, creativeOnly = false, tick)
-            ItemUseAction.USE -> useInAir(use)
+            ItemUseAction.USE -> useInAir(use, legacyRequestId)
             // Attacking with an item is for later.
             ItemUseAction.USE_AS_ATTACK -> {}
         }
     }
 
     /**
-     * The player using what they hold in the air. An empty map becomes a
-     * map of the square of the world they're in, which they draw as they
-     * hold it, and an empty locator map a locator map, in creative too.
-     * With more than one empty map, the map goes among their items, or
-     * drops at their feet if there's no room.
+     * The player using what they hold in the air. Armour goes on, swapping
+     * places with what they wore there, as the client has it already, naming
+     * the piece it put on by [legacyRequestId]. An empty map becomes a map of
+     * the square of the world they're in, which they draw as they hold it,
+     * and an empty locator map a locator map, in creative too. With more than
+     * one empty map, the map goes among their items, or drops at their feet
+     * if there's no room.
      */
-    private fun useInAir(use: ItemUse) {
+    private fun useInAir(use: ItemUse, legacyRequestId: Int) {
         if (use.hotbarSlot in 0 until HOTBAR_SIZE) heldSlot = use.hotbarSlot
         val held = inventory.items[heldSlot]?.takeIf { use.hotbarSlot == heldSlot && it.stack.item.runtimeId == use.heldItem } ?: return
-        if (held.stack.item.name != EMPTY_MAP || gameMode == GameMode.SPECTATOR) return
+        if (gameMode == GameMode.SPECTATOR) return
+        armourSlotFor(held.stack.item.name)?.let { return putOn(it, held, legacyRequestId) }
+        if (held.stack.item.name != EMPTY_MAP) return
         val blank = game.items.of(FILLED_MAP) ?: return
         val map = world.maps.start(floor(position.x).toInt(), floor(position.z).toInt(), showsPlayers = held.stack.aux == LOCATOR)
         val drawn = blank.showing(map)
         world.drawMap(map, position.x, position.z, game.traits)
-        if (held.stack.count == 1) {
-            inventory.items[heldSlot] = SlotStack(drawn, inventory.newStackId())
-            send(slotOf(heldSlot))
-        } else {
-            inventory.items[heldSlot] = held.less(1)
-            val (filled, left) = inventory.add(drawn)
-            send(*(filled + heldSlot).distinct().map(::slotOf).toTypedArray())
-            if (left > 0) throwItem(drawn)
-        }
+        swapHeld(drawn)
         log.debug("{} started map {}, around {}, {}", player?.displayName, map.id, map.centreX, map.centreZ)
+    }
+
+    /**
+     * Puts on the armour the player holds, [held], in the armour slot
+     * [slot], and puts what they wore there in their hand. Until it hears
+     * otherwise, the client names the piece it put on by [legacyRequestId].
+     */
+    private fun putOn(slot: Int, held: SlotStack, legacyRequestId: Int) {
+        val worn = inventory.armour[slot]
+        inventory.armour[slot] = held
+        inventory.items[heldSlot] = worn
+        if (legacyRequestId != 0) stackRequests.rememberLegacyAt(legacyRequestId, listOf(Location(inventory.armour, slot)))
+        send(InventorySlot(slot, held.stack, held.id, ARMOUR_WINDOW))
+        log.debug("{} put on {}", player?.displayName, held.stack.item.name)
     }
 
     /**
@@ -1604,14 +1649,16 @@ class Session(
     }
 
     /**
-     * What the player holds, used on the block they clicked, [clicked]:
-     * into an item frame or flower pot, if [blockFirst], and, whether or
-     * not, an eye of ender into an end portal frame, or a tool or honeycomb
-     * on the block, as [useToolOn] has it. A use the client found does
-     * nothing can only be a tool's, which it leaves to Kore. Everyone with
-     * the chunk sees and hears it. Outside creative, what's used up goes
-     * from the player's hand, and a tool wears. Returns whether it did
-     * anything, if the player can build and reach the block.
+     * What the player holds, used on the block they clicked, [clicked], if
+     * [blockFirst]: into an item frame, flower pot, jukebox, composter or
+     * cauldron, or on a note block, which a click tunes, but for a head put
+     * on its top. Whether or not, an eye of ender goes into an end portal
+     * frame, and a tool or honeycomb works on the block, as [useToolOn] has
+     * it. Everyone with the chunk sees and hears it, and a disc going into a
+     * jukebox says what's playing. Outside creative, what's used up goes from
+     * the player's hand, or swaps for what's left of it, and a tool wears.
+     * Returns whether it did anything, if the player can build and reach the
+     * block.
      */
     private fun useItemOn(use: ItemUse, clicked: BlockState, blockFirst: Boolean): Boolean {
         val face = Face.of(use.face) ?: return false
@@ -1619,15 +1666,22 @@ class Session(
         val held = inventory.items[heldSlot]?.stack?.takeIf { use.hotbarSlot == heldSlot && it.item.runtimeId == use.heldItem }
         if ((use.heldItem != 0 && held == null) || !canBuild() || !inReach(use.position)) return false
         val pos = use.position
+        val headOnTop = face == Face.UP && held?.item?.name?.let { it.endsWith("_head") || it.endsWith("_skull") } == true
         val used = when {
-            !use.predictedToWork -> held?.let { world.useToolOn(pos, face, it, facing(yaw), game.items) }
             blockFirst && clicked.isItemFrame -> world.useFrame(pos, clicked, held)
             blockFirst && clicked.isFlowerPot -> world.usePot(pos, clicked, held, held?.let { it.block ?: world.blocks.blockPlacedBy(it.item.name) }, game.items)
+            blockFirst && clicked.isNoteBlock && !headOnTop -> ItemUsedOn(emptyList(), notes = listOfNotNull(world.tuneNote(pos)))
+            blockFirst && clicked.isJukebox -> world.useJukebox(pos, held, game.items)
+            blockFirst && clicked.isComposter -> world.useComposter(pos, clicked, held, game.items)
+            blockFirst && clicked.isCauldron -> world.useCauldron(pos, clicked, held, game.items)
             held?.item?.name == ENDER_EYE -> world.fillPortalFrame(pos, clicked)
             held != null -> world.useToolOn(pos, face, held, facing(yaw), game.items)
             else -> null
         } ?: return false
         showUsed(used, pos.side(face))
+        if (clicked.isJukebox && used.held == HeldAfter.USED_UP) {
+            world.nowPlaying(pos)?.let { showAround(listOf(it)) }
+        }
         // Nor does the client swing the player's arm for a use it left to Kore, so Kore swings it, for them and everyone around.
         if (!use.predictedToWork) {
             send(Animate(Animate.SWING_ARM, entityId, swingSource = INTERACT_SWING))
@@ -1639,22 +1693,43 @@ class Session(
 
     /**
      * Shows everyone with the chunk what using an item on a block did, [used],
-     * and settles the player's hand: what was used up goes, outside creative,
-     * and a tool wears, which the client hears of as the use is answered.
-     * What came out of the block drops at [out], and what the player was
-     * handed goes among their items.
+     * and settles the player's hand: what changed, like leather dyed, is
+     * swapped for its new self, and outside creative, what was used up goes,
+     * or swaps for what it handed back, and a tool wears, which the client
+     * hears of as the use is answered. What came out of the block drops at
+     * [out], unless it says where, and anything else the player was handed
+     * goes among their items.
      */
     private fun showUsed(used: ItemUsedOn, out: BlockPos) {
-        showAround(world.packetsFor(Changes(emptyMap(), used.changed, listOfNotNull(used.sound), events = used.events)))
-        if (!creative) {
-            when (used.held) {
-                HeldAfter.USED_UP -> inventory.remove(heldSlot)
-                HeldAfter.WORN -> wearHeld(1)
-                HeldAfter.KEPT -> {}
-            }
+        showAround(world.packetsFor(Changes(emptyMap(), used.changed, listOfNotNull(used.sound), events = used.events, notes = used.notes, songs = used.songs)))
+        when {
+            used.held == HeldAfter.CHANGED -> used.given?.let { swapHeld(it, used.count) }
+            creative -> {}
+            used.held == HeldAfter.USED_UP -> inventory.remove(heldSlot, used.count)
+            used.held == HeldAfter.WORN -> wearHeld(1)
+            used.held == HeldAfter.SWAPPED -> used.given?.let { swapHeld(it, used.count) }
         }
-        if (used.dropped.isNotEmpty()) world.dropFromBlock(out, used.dropped)
-        used.given?.let(::give)
+        if (used.dropped.isNotEmpty()) world.dropFromBlock(used.dropAt ?: out, used.dropped)
+        if (used.held == HeldAfter.KEPT) used.given?.let(::give)
+    }
+
+    /**
+     * Swaps [count] of what the player holds for [swapped], as a bucket
+     * emptied swaps for an empty one: into the held slot, if that was all
+     * of it, and among their items otherwise, or thrown, if there's no
+     * room. The client hears of the slots that changed.
+     */
+    private fun swapHeld(swapped: ItemStack, count: Int = 1) {
+        val held = inventory.items[heldSlot] ?: return
+        if (held.stack.count <= count) {
+            inventory.items[heldSlot] = SlotStack(swapped, inventory.newStackId())
+            send(slotOf(heldSlot))
+            return
+        }
+        inventory.items[heldSlot] = held.less(count)
+        val (filled, left) = inventory.add(swapped)
+        send(*(filled + heldSlot).distinct().map(::slotOf).toTypedArray())
+        if (left > 0) throwItem(swapped.copy(count = left))
     }
 
     /**
@@ -1901,17 +1976,7 @@ class Session(
         broken.forEach { (pos, block) -> game.dropBroken(pos, block, harvested = !creative) }
         if (!creative) {
             val swapped = if (filling) game.items.of(LIQUID_BUCKETS.getValue(taken!!)) else game.items.of(BUCKET)
-            if (swapped != null) {
-                if (held.count == 1) {
-                    inventory.items[heldSlot] = SlotStack(swapped, inventory.newStackId())
-                    send(slotOf(heldSlot))
-                } else {
-                    inventory.items[heldSlot] = inventory.items[heldSlot]!!.less(1)
-                    val (filled, left) = inventory.add(swapped)
-                    send(*(filled + heldSlot).distinct().map(::slotOf).toTypedArray())
-                    if (left > 0) throwItem(swapped)
-                }
-            }
+            swapped?.let(::swapHeld)
         }
         log.debug("{} used {} at {}", player?.displayName, held.item.name, at)
     }
@@ -2345,6 +2410,8 @@ class Session(
         // In Bedrock, punching a lectern knocks its book off, and punching a frame with an item in it knocks the item out, leaving the frame.
         if (state.isLectern && world.knockBookOff(pos)) showAround(pos, BlockActorData(pos, world.blockEntityAt(pos)!!))
         if (state.isItemFrame && knockOutOfFrame(pos)) return
+        // Punching a note block plays it, as it starts to break.
+        if (state.isNoteBlock) world.playNote(pos)?.let { showAround(world.packetsFor(Changes(emptyMap(), emptyList(), notes = listOf(it)))) }
         val ticks = ticksToBreak(state.name)
         breaking = Breaking(pos, tick, ticks)
         if (ticks != null && ticks > 0) showAround(pos, LevelEvent(LevelEvent.START_BLOCK_CRACKING, pos.corner, CRACKED / ticks))
@@ -2835,19 +2902,22 @@ private fun GameData.dropBroken(pos: BlockPos, broken: BrokenBlock, harvested: B
  * Works the furnaces, brewing stands, hoppers, dispensers and droppers in
  * [game]'s world for a tick, for these players to see if they have the
  * chunks: furnaces lighting up and going out, the bottles on brewing
- * stands, the sound of a brew finishing, and dispensers firing. Run once a
- * tick, after items move, so that the items hoppers take in go from the
- * world as players see it.
+ * stands, the sound of a brew finishing, dispensers firing, composters
+ * filling and emptying, and jukeboxes playing what hoppers put in them,
+ * and what's playing. Run once a tick, after items move, so that the items
+ * hoppers take in go from the world as players see it.
  */
 internal fun Collection<Session>.tickMachines(game: GameData) {
     val world = game.world
     val brewed = mutableListOf<BlockPos>()
     val fired = mutableListOf<Fired>()
     val sounds = mutableListOf<BlockSound>()
-    val changed = world.tickMachines(game.recipes, game.fuel, brewed, fired, sounds)
+    val songs = mutableListOf<SongChange>()
+    val changed = world.tickMachines(game.recipes, game.fuel, brewed, fired, sounds, game.items, songs)
     showAround(
-        changed.map { it to UpdateBlock(it, world.blockAt(it)) } + brewed.map { it to LevelSoundEvent(BREWED, it.centre, -1) } + fired.flatMap(::firing) +
-            sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) },
+        changed.map { it to UpdateBlock(it, world.blockAt(it)) } + songs.mapNotNull { (at) -> world.blockEntityAt(at)?.let { at to BlockActorData(at, it) } } +
+            brewed.map { it to LevelSoundEvent(BREWED, it.centre, -1) } + fired.flatMap(::firing) +
+            sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) } + songs.flatMap(::songPackets) + songs.mapNotNull { world.nowPlaying(it.pos) },
     )
 }
 
@@ -2915,19 +2985,40 @@ private fun firing(fired: Fired): List<Pair<BlockPos, ServerPacket>> {
     return listOf(fired.pos to LevelEvent(LevelEvent.SOUND_CLICK, at, CLICK_PITCH), fired.pos to LevelEvent(LevelEvent.PARTICLES_SHOOT, at, smokeDirection(fired.facing)))
 }
 
+/** What everyone around the jukebox at [pos] is told as a song starts: what's playing. Null if it has no disc. */
+private fun FlatWorld.nowPlaying(pos: BlockPos): Pair<BlockPos, ServerPacket>? =
+    songTitleIn(pos)?.let { pos to Text(Text.JUKEBOX_POPUP, NOW_PLAYING, parameters = listOf(it), needsTranslation = true) }
+
 /**
  * What players see of [changes]: blocks going, with the particles and
  * sound of their breaking, and what took their place, like water, blocks
  * changing shape, with any data they keep, the sounds blocks made, and
  * the data blocks keep that changed by itself, like a piston's arm moving
- * out.
+ * out, the notes note blocks played, and the songs jukeboxes started or
+ * stopped.
  */
 private fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPacket>> =
     changes.broken.flatMap { (pos, broken) ->
         withData(pos) + (pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
     } + changes.reshaped.flatMap(::withData) + changes.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) } +
         changes.events.map { it.pos to LevelEvent(it.event, it.pos.centre, it.data) } +
-        changes.data.mapNotNull { pos -> blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) } }
+        changes.data.mapNotNull { pos -> blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) } } +
+        changes.notes.flatMap { (pos, instrument, note) ->
+            // The note sounds, and rises out of the block in its colour.
+            listOf(pos to LevelSoundEvent(NOTE_SOUND, pos.centre, instrument shl 8 or note), pos to BlockEvent(pos, instrument, note))
+        } +
+        changes.songs.flatMap(::songPackets)
+
+/**
+ * What players hear of a jukebox's song starting, [change], played by its
+ * handle and tied to the jukebox, as a jukebox's songs play since 26.50, so
+ * they can be told to stop it by the handle. Stopping it is the handle alone.
+ */
+private fun songPackets(change: SongChange): List<Pair<BlockPos, ServerPacket>> {
+    val (pos, handle, song) = change
+    if (song == null) return listOf(pos to UpdateSoundData(handle))
+    return listOf(pos to PlaySound(song, pos.centre, JUKEBOX_VOLUME, 1f, handle), pos to RecordStarted(pos, handle))
+}
 
 /**
  * The block at [pos] as it is now, with the water inside it, if there is
@@ -2936,6 +3027,8 @@ private fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPa
 private fun FlatWorld.withData(pos: BlockPos): List<Pair<BlockPos, ServerPacket>> {
     val inside = liquidAt(pos)?.networkId ?: AIR_NETWORK_ID
     return listOfNotNull(
+        // The client draws a cauldron's water afresh only as its block changes, so a cauldron changes twice, to show its colour.
+        cauldronNudge(pos)?.let { pos to UpdateBlock(pos, it) },
         pos to UpdateBlock(pos, blockAt(pos)),
         (pos to UpdateBlock(pos, inside, layer = 1)).takeIf { inside != AIR_NETWORK_ID || pos in liquidChanges },
         blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) },

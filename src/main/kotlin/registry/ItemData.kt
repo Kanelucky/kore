@@ -13,6 +13,7 @@ private const val DAMAGE = "Damage"
 private const val REPAIR_COST = "RepairCost"
 private const val DISPLAY = "display"
 private const val NAME = "Name"
+private const val DYED_COLOUR = "customColor"
 
 /** An enchantment at a level, as an item keeps it: by the enchantment's number. */
 data class EnchantmentLevel(val id: Int, val level: Int)
@@ -92,6 +93,12 @@ fun ItemStack.withCustomName(name: String?): ItemStack = withNbt {
     val built = display.build()
     if (built.isEmpty()) remove(DISPLAY) else putCompound(DISPLAY, built)
 }
+
+/** The colour leather, or wolf armour, is dyed, opaque, or null for its own. */
+val ItemStack.dyedColour: Int? get() = nbt.takeIf { it.containsKey(DYED_COLOUR) }?.getInt(DYED_COLOUR)
+
+/** This item dyed [colour], or back to its own colour for null. */
+fun ItemStack.withDyedColour(colour: Int?): ItemStack = withNbt { if (colour == null) remove(DYED_COLOUR) else putInt(DYED_COLOUR, colour) }
 
 /** This item with its NBT changed by [change]. */
 private inline fun ItemStack.withNbt(change: NbtMapBuilder.() -> Unit): ItemStack =
