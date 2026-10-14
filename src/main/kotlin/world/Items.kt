@@ -4,7 +4,9 @@ import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
 import org.koremc.registry.sameKindAs
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.sqrt
 import kotlin.random.Random
 
 /** How long an item lies in the world before it's gone, in ticks: five minutes. */
@@ -37,6 +39,34 @@ private const val MERGE_PERIOD = 20
  * and an item a hair inside a block mustn't fall through it.
  */
 private const val TOUCHING = 1e-4
+
+// How items move in water and lava, as in the game: deeper in than this, they float up, by a little each tick,
+// while they rise slower than the limit, and slow more across, in lava most.
+private const val FLOATS_DEEPER_THAN = 0.1
+private const val RISE = 5e-4
+private const val RISE_LIMIT = 0.06
+private const val WATER_DRAG = 0.99
+private const val LAVA_DRAG = 0.95
+
+// How hard flowing water and lava push an item along, and the least push that moves one lying still.
+private const val WATER_PUSH = 0.014
+private const val LAVA_PUSH = 0.0023333333333333335
+private const val LEAST_PUSH = 0.0045
+private const val STILL = 0.003
+
+/** How shallow a liquid's push is weakened at, by how deep it is. */
+private const val SHALLOW = 0.4
+
+/** How much harm an item takes before it's gone, and from lava each tick, and fire, soul fire, and burning once a second. */
+private const val ITEM_HEALTH = 5
+private const val LAVA_HARM = 4
+private const val FIRE_HARM = 1
+private const val SOUL_FIRE_HARM = 2
+
+/** How long an item burns on, in ticks, after it's touched lava, or fire, and how often burning harms it. */
+private const val LAVA_BURNS = 15 * 20
+private const val FIRE_BURNS = 8 * 20
+private const val BURN_PERIOD = 20
 
 /**
  * An item lying in the world: a stack anyone can pick up once its pickup
@@ -87,6 +117,16 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
 
     internal var age = 0
 
+    /** How much more harm it can take before it's gone, from lava or fire. */
+    private var health = ITEM_HEALTH
+
+    /** How many more ticks it burns for, having touched lava or fire. */
+    private var burning = 0
+
+    /** Whether lava harmed it in the last tick, which fizzes. */
+    var fizzed = false
+        private set
+
     /**
      * Whether it can take in more items, or go into another stack: it's
      * landed, it isn't about to go, and its stack isn't full. Items in the
@@ -94,13 +134,44 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
      */
     private val mergeable get() = onGround && age < ITEM_LIFETIME && stack.count < stack.item.maxStackSize
 
+    /** Whether lava and fire leave it be: netherite, and ancient debris. */
+    private val fireproof get() = "netherite" in stack.item.name || stack.item.name == "minecraft:ancient_debris"
+
+    /**
+     * Moves the item on a tick, as the game does: it falls, or floats up in
+     * water or lava, which carry it along as they flow, and slows. Lava
+     * harms it, with a fizz, and fire, and it burns on a while after,
+     * unless it's in water, or fireproof. Returns whether it's still there:
+     * one that's lain long enough, fallen out of the world, or burned is gone.
+     */
     internal fun tick(world: FlatWorld): Boolean {
         age++
+        fizzed = false
         if (pickupDelay > 0) pickupDelay--
         if (age >= ITEM_LIFETIME || position.y < MIN_Y - VOID_DEPTH) return false
 
         var (vx, vy, vz) = velocity.toDoubles()
-        if (!pushed) vy -= GRAVITY
+        val water = world.liquidAround(Box.around(position), Liquid.WATER, vx, vz)
+        val lava = world.liquidAround(Box.around(position), Liquid.LAVA, vx, vz)
+        vx += water.push[0] + lava.push[0]
+        vy += water.push[1] + lava.push[1]
+        vz += water.push[2] + lava.push[2]
+        val drag = when {
+            water.depth > FLOATS_DEEPER_THAN -> WATER_DRAG
+            lava.depth > FLOATS_DEEPER_THAN -> LAVA_DRAG
+            else -> null
+        }
+        when {
+            pushed -> {}
+            drag != null -> {
+                vx *= drag
+                vz *= drag
+                if (vy < RISE_LIMIT) vy += RISE
+            }
+            else -> vy -= GRAVITY
+        }
+        if (!burn(world, water.depth > 0, lava.depth > 0)) return false
+
         val start = position
         var box = Box.around(position)
         val dy = world.clip(box, Axis.Y, vy)
@@ -122,6 +193,32 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
         snapped = pushed
         pushed = false
         return true
+    }
+
+    /**
+     * Harms the item as the game does: [inLava], every tick, with a fizz,
+     * and in fire, soul fire more, each setting it burning, which harms it once a second
+     * after, but in lava, until it's out or [inWater] puts it out. Returns
+     * whether it's still there.
+     */
+    private fun burn(world: FlatWorld, inWater: Boolean, inLava: Boolean): Boolean {
+        if (fireproof) return true
+        if (inLava) {
+            burning = maxOf(burning, LAVA_BURNS)
+            health -= LAVA_HARM
+            fizzed = true
+        }
+        val fire = world.fireHarm(Box.around(position))
+        if (fire > 0) {
+            burning = maxOf(burning, FIRE_BURNS)
+            health -= fire
+        }
+        if (inWater) burning = 0
+        if (burning > 0) {
+            if (burning % BURN_PERIOD == 0 && !inLava) health -= FIRE_HARM
+            burning--
+        }
+        return health > 0
     }
 
     /**
@@ -193,17 +290,113 @@ fun FlatWorld.dropFromBlock(pos: BlockPos, stacks: List<ItemStack>) {
  * merge with items of their kind close by. One that's lain for five
  * minutes, or fallen out of the world, is gone.
  */
-fun FlatWorld.tickItems() {
+fun FlatWorld.tickItems(): List<Vec3> {
     // Before any item moves, since one may merge into another that has yet to.
     items.forEach { it.restacked = false }
+    val fizzes = mutableListOf<Vec3>()
     for (item in items.toList()) {
         if (itemWith(item.id) == null) continue // Merged into another this tick
-        if (!item.tick(this)) {
+        val alive = item.tick(this)
+        if (item.fizzed) fizzes += item.position
+        if (!alive) {
             removeItem(item.id)
             continue
         }
         item.mergeWithNeighbours(this).forEach { removeItem(it.id) }
     }
+    return fizzes
+}
+
+/** How deep a liquid reaches up an item, from its bottom, and the way it pushes the item, in blocks a tick. */
+private class InLiquid(val depth: Double, val push: DoubleArray)
+
+/**
+ * How deep [liquid] reaches up [box], and how it pushes what's in it, as
+ * the game has it: the way it flows in each block of it the box is in,
+ * less where it's shallow, together, at the liquid's own strength, or a
+ * little more for an item lying still, moving [vx] and [vz] across.
+ */
+private fun FlatWorld.liquidAround(box: Box, liquid: Liquid, vx: Double, vz: Double): InLiquid {
+    val inner = Box(DoubleArray(3) { box.min[it] + 0.001 }, DoubleArray(3) { box.max[it] - 0.001 })
+    var depth = 0.0
+    val flow = DoubleArray(3)
+    var flowing = 0
+    for (x in floor(inner.min[0]).toInt() until ceil(inner.max[0]).toInt()) {
+        for (y in floor(inner.min[1]).toInt() until ceil(inner.max[1]).toInt()) {
+            for (z in floor(inner.min[2]).toInt() until ceil(inner.max[2]).toInt()) {
+                if (y !in MIN_Y..MAX_Y) continue
+                val pos = BlockPos(x, y, z)
+                val here = liquidHere(pos)?.takeIf { it.liquid == liquid } ?: continue
+                // Liquid with more of it above fills its block.
+                val top = y + if (liquidHere(pos.side(Face.UP))?.liquid == liquid) 1.0 else heightOf(here.depth)
+                if (top < inner.min[1]) continue
+                depth = maxOf(depth, top - inner.min[1])
+                val way = flowAt(pos, liquid, here.depth)
+                val weight = if (depth < SHALLOW) depth else 1.0
+                for (axis in 0..2) flow[axis] += way[axis] * weight
+                flowing++
+            }
+        }
+    }
+    val length = sqrt(flow.sumOf { it * it })
+    if (length == 0.0) return InLiquid(depth, DoubleArray(3))
+    var push = DoubleArray(3) { flow[it] / length * if (liquid == Liquid.WATER) WATER_PUSH else LAVA_PUSH }
+    if (abs(vx) < STILL && abs(vz) < STILL && sqrt(push.sumOf { it * it }) < LEAST_PUSH) push = DoubleArray(3) { flow[it] / length * LEAST_PUSH }
+    return InLiquid(depth, push)
+}
+
+/** How high in its block liquid [depth] steps from its source fills it: still and falling liquid eight ninths, and each step less a ninth less. */
+private fun heightOf(depth: Int) = (if (depth >= FALLING_DEPTH) 8 else 8 - depth) / 9.0
+
+/**
+ * The way [liquid] at [pos], [depth] steps from its source, flows, as the
+ * game works it out: from it toward where beside it is lower, or empty,
+ * with liquid lower still below, and falling liquid down a wall beside it.
+ * Unit length, or none for still liquid.
+ */
+private fun FlatWorld.flowAt(pos: BlockPos, liquid: Liquid, depth: Int): DoubleArray {
+    val own = heightOf(depth)
+    var x = 0.0
+    var z = 0.0
+    for (side in AROUND) {
+        val next = pos.side(side)
+        val there = liquidHere(next)
+        if (there != null && there.liquid != liquid) continue
+        val beside = there?.let { heightOf(it.depth) } ?: 0.0
+        val drop = when {
+            beside > 0 -> own - beside
+            stateAt(next)?.solidHeights() != null -> 0.0
+            else -> liquidHere(next.side(Face.DOWN))?.takeIf { it.liquid == liquid }?.let { own - (heightOf(it.depth) - 8 / 9.0) } ?: 0.0
+        }
+        x += side.dx * drop
+        z += side.dz * drop
+    }
+    var y = 0.0
+    if (depth >= FALLING_DEPTH && AROUND.any { side -> listOf(pos.side(side), pos.side(side).side(Face.UP)).any { stateAt(it)?.hasFullFace(side.opposite) == true } }) {
+        val across = sqrt(x * x + z * z)
+        if (across > 0) {
+            x /= across
+            z /= across
+        }
+        y = -6.0
+    }
+    val length = sqrt(x * x + y * y + z * z)
+    return if (length == 0.0) DoubleArray(3) else doubleArrayOf(x / length, y / length, z / length)
+}
+
+/** How much the fire [box] is in harms it a tick: soul fire more than fire, and none out of it. */
+private fun FlatWorld.fireHarm(box: Box): Int {
+    var harm = 0
+    for (x in floor(box.min[0]).toInt()..floor(box.max[0] - TOUCHING).toInt()) {
+        for (y in floor(box.min[1]).toInt()..floor(box.max[1] - TOUCHING).toInt()) {
+            for (z in floor(box.min[2]).toInt()..floor(box.max[2] - TOUCHING).toInt()) {
+                if (y !in MIN_Y..MAX_Y) continue
+                val state = stateAt(BlockPos(x, y, z)) ?: continue
+                if (state.isFire) harm = maxOf(harm, if (state.name == SOUL_FIRE) SOUL_FIRE_HARM else FIRE_HARM)
+            }
+        }
+    }
+    return harm
 }
 
 internal enum class Axis { X, Y, Z }

@@ -14,6 +14,9 @@ internal const val FLOWING_LAVA = "minecraft:flowing_lava"
 private const val DEPTH = "liquid_depth"
 private const val FALLING = 8
 
+/** The depth from which liquid is falling, as items in it find it. */
+internal const val FALLING_DEPTH = FALLING
+
 /** Liquid no route down is found for, as far as it looks. */
 private const val NO_WAY_DOWN = 1000
 

@@ -490,6 +490,9 @@ private const val LEVEL_UP = "levelup"
 /** The sound of a brewing stand finishing a brew. */
 private const val BREWED = "potion.brewed"
 
+/** The sound of an item burning in lava. */
+private const val FIZZ = "fizz"
+
 /** The sound of a beacon taking the powers a player paid for. */
 private const val BEACON_POWER = "beacon.power"
 
@@ -3405,7 +3408,8 @@ class Sessions(
         if (++ticks % AUTOSAVE_TICKS == 0L) save()
         playerCount = sessions.values.count { it.isInGame }
         sessions.values.tickBlocks(game, dropItems = config.gameMode != GameMode.CREATIVE)
-        game.world.tickItems()
+        // Items burning in lava fizz, for everyone around to hear.
+        sessions.values.showAround(game.world.tickItems().map { it.toBlockPos() to LevelSoundEvent(FIZZ, it, -1) })
         sessions.values.tickMachines(game)
         sessions.values.tickSky(game)
         sessions.values.tickGrowth(game, dropItems = config.gameMode != GameMode.CREATIVE)

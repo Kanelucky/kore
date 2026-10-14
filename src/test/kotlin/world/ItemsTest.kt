@@ -172,5 +172,86 @@ class ItemsTest {
         assertEquals(emptyList(), drops.of(door)) // The top half; the bottom half drops the door
     }
 
+    // A world with water, lava and fire in it, on the same floor.
+    private val liquids = listOf(WATER, FLOWING_WATER, LAVA, FLOWING_LAVA).flatMap { name -> (0..15).map { state(name, "liquid_depth" to it) } }
+    private val fire = state(FIRE, "age" to 0)
+    private val soulFire = state(SOUL_FIRE, "age" to 0)
+    private val wild = FlatWorld(BlockPalette(listOf(air, stone, fire, soulFire) + liquids), listOf(stone))
+    private val netherite = ItemDefinition("minecraft:netherite_ingot", 610, componentBased = false, ItemVersion.NONE)
+
+    private fun water(depth: Int) = wild.liquidState(Liquid.WATER, depth)
+    private fun lava(depth: Int) = wild.liquidState(Liquid.LAVA, depth)
+    private fun on(x: Int, y: Int = 0) = BlockPos(x, MIN_Y + 1 + y, 0)
+    private fun drop(x: Float, item: ItemDefinition = dirtItem) = wild.spawnItem(ItemStack(item), Vec3(x, floor, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 0)
+
+    @Test
+    fun `items float up through water to its top, and bob there`() {
+        wild[on(0)] = water(0)
+        wild[on(0, y = 1)] = water(0)
+        val item = drop(0.5f)
+
+        repeat(40) { wild.tickItems() }
+        assertTrue(item.position.y > floor + 0.2f, "it rises")
+        val heights = List(400) { wild.tickItems(); item.position.y }.drop(200)
+        val top = floor + 1 + 8 / 9f
+        assertTrue(heights.all { it in top - 0.5f..top }, "and stays just under the top: $heights")
+        assertTrue(heights.distinct().size > 1, "bobbing")
+        assertEquals(0.5f, item.position.x, "still water leaves it where it is")
+    }
+
+    @Test
+    fun `flowing water carries items along the way it flows`() {
+        (0..7).forEach { wild[on(it)] = water(it) }
+        val item = drop(2.5f)
+
+        repeat(20) { wild.tickItems() }
+        assertTrue(item.position.x > 4f, "downstream: ${item.position}")
+        assertEquals(0.5f, item.position.z)
+    }
+
+    @Test
+    fun `lava burns items up, fizzing`() {
+        wild[on(0)] = lava(0)
+        drop(0.5f)
+
+        assertEquals(1, wild.tickItems().size)
+        assertEquals(1, wild.items.size)
+        assertEquals(1, wild.tickItems().size)
+        assertEquals(0, wild.items.size)
+    }
+
+    @Test
+    fun `fire burns items up, soul fire faster, and netherite comes through both and lava`() {
+        wild[on(0)] = fire
+        wild[on(2)] = soulFire
+        wild[on(4)] = lava(0)
+        val inFire = drop(0.5f)
+        drop(2.5f)
+        val fireproof = listOf(0.5f, 2.5f, 4.5f).map { drop(it, netherite) }
+
+        repeat(2) { wild.tickItems() }
+        assertEquals(fireproof.toSet() + inFire, wild.items.toSet())
+        wild.tickItems()
+        assertEquals(fireproof.toSet(), wild.items.toSet())
+        assertTrue(List(100) { wild.tickItems() }.all { it.isEmpty() }, "with no fizz")
+        assertEquals(fireproof.toSet(), wild.items.toSet())
+    }
+
+    @Test
+    fun `items burn on once out of fire, until they're gone, or water puts them out`() {
+        wild[on(0)] = fire
+        wild[on(2)] = fire
+        drop(0.5f)
+        val doused = drop(2.5f)
+
+        wild.tickItems()
+        wild[on(0)] = air
+        wild[on(2)] = water(0)
+        repeat(30) { wild.tickItems() }
+        assertEquals(2, wild.items.size, "burning harms them only once a second")
+        repeat(70) { wild.tickItems() }
+        assertEquals(listOf(doused), wild.items.toList())
+    }
+
     private fun state(name: String, vararg properties: Pair<String, Any>) = BlockState(name, NbtMap.fromMap(mapOf(*properties)), 18168865)
 }
