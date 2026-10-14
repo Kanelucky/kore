@@ -59,7 +59,7 @@ private val COMMENTS = mapOf(
         "Off, they stay as they're put.",
     "features.fallingBlocks" to "Sand, gravel, anvils and the like falling with nothing under them.\n" +
         "Off, they stay where they are, and hanging dripstone and snow break instead.",
-    "features.growth" to "Random ticks, bone meal and trampling farmland: whatever grows, spreads, dries, decays, melts or weathers.",
+    "features.growth" to "Random ticks, bone meal, trampling farmland, and snow and ice forming: whatever grows, spreads, dries, decays, melts, freezes or weathers.",
     "features.machines" to "Furnaces, brewing stands, hoppers, dispensers, droppers, crafters and beacons working.\n" +
         "Off, they keep what's put in them, and do nothing with it.",
 )

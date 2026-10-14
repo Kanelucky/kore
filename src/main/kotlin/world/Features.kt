@@ -22,7 +22,7 @@ data class Features(
     val liquids: Boolean = true,
     /** Sand, gravel, anvils and the like falling with nothing under them. Off, they stay where they are, and hanging dripstone and snow break instead. */
     val fallingBlocks: Boolean = true,
-    /** Random ticks, bone meal and trampling farmland: whatever grows, spreads, dries, decays, melts or weathers. */
+    /** Random ticks, bone meal, trampling farmland, and snow and ice forming: whatever grows, spreads, dries, decays, melts, freezes or weathers. */
     val growth: Boolean = true,
     /** Furnaces, brewing stands, hoppers, dispensers, droppers, crafters and beacons working. Off, they keep what's put in them, and do nothing with it. */
     val machines: Boolean = true,

@@ -1,6 +1,5 @@
 package org.koremc.world
 
-import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.BlockState
 import kotlin.math.PI
 import kotlin.math.cos
@@ -55,27 +54,6 @@ class Weather {
     var thunderTime = 0
 }
 
-/** What falls from the sky in a biome while it rains: rain, snow where it's cold, or nothing where it's dry. */
-enum class Precipitation {
-    NONE,
-    RAIN,
-    SNOW,
-    ;
-
-    companion object {
-        /** Below this temperature, it snows rather than rains. */
-        private const val SNOWS_BELOW = 0.15f
-
-        /** What falls in [biome], as the game defines it, or rain for one Kore doesn't know. */
-        fun of(biome: BiomeDefinition?): Precipitation = when {
-            biome == null -> RAIN
-            !biome.rain -> NONE
-            biome.temperature < SNOWS_BELOW -> SNOW
-            else -> RAIN
-        }
-    }
-}
-
 /** A lightning bolt that struck at [position], as the entity [id], which shows until it's gone, [BOLT_LIFETIME] ticks on. */
 class LightningBolt(val id: Long, val position: Vec3) {
     internal var age = 0
@@ -90,12 +68,13 @@ class SkyChanges(val weatherChanged: Boolean, val strikes: List<LightningBolt>, 
 
 /**
  * Ticks the sky: the world's time passes, if day turns to night, and the
- * weather changes in its own time, if it does. In a thunderstorm where
- * rain falls, lightning strikes now and then in the chunks around
- * [players], by their chunks, drawn to a lightning rod nearby. Rain, or
- * snow, fills the cauldrons it falls in, now and then, though in a dry
- * biome nothing falls, and daylight detectors look at the sky once a
- * second. Run once a tick.
+ * weather changes in its own time, if it does. In a thunderstorm,
+ * lightning strikes now and then in the chunks around [players], by their
+ * chunks, where rain falls, drawn to a lightning rod nearby. Now and then
+ * in each, the top of a column has its weather: water freezes where it's
+ * cold, and while it rains, snow settles where it's cold, and what falls
+ * fills a cauldron, though in a dry biome nothing does. Daylight detectors
+ * look at the sky once a second. Run once a tick.
  */
 fun FlatWorld.tickSky(players: Collection<ChunkPos>, random: Random = Random.Default): SkyChanges {
     gameTime++
@@ -106,14 +85,13 @@ fun FlatWorld.tickSky(players: Collection<ChunkPos>, random: Random = Random.Def
     val strikes = mutableListOf<LightningBolt>()
     val changed = mutableListOf<BlockPos>()
     val events = mutableListOf<WorldEvent>()
-    if (weather.raining && precipitation != Precipitation.NONE) {
-        for (chunk in players.flatMap { chunksAround(it, SIMULATION_DISTANCE) }.distinct()) {
-            // Lightning strikes only where rain falls, not snow.
-            if (weather.thundering && precipitation == Precipitation.RAIN && random.nextDouble() < LIGHTNING_CHANCE) {
-                strikes += strike(randomTop(chunk, random), changed, events, random)
-            }
-            if (random.nextDouble() < PRECIPITATION_CHANCE) rainOn(randomTop(chunk, random).side(Face.DOWN), random)?.let(changed::add)
+    for (chunk in players.flatMap { chunksAround(it, SIMULATION_DISTANCE) }.distinct()) {
+        if (weather.raining && weather.thundering && random.nextDouble() < LIGHTNING_CHANCE) {
+            // Only where rain falls, not snow.
+            val target = randomTop(chunk, random)
+            if (precipitationAt(target) == Precipitation.RAIN) strikes += strike(target, changed, events, random)
         }
+        if (random.nextDouble() < PRECIPITATION_CHANCE) changed += weatherOn(randomTop(chunk, random), random)
     }
     if (features.redstone && gameTime % DAYLIGHT_PERIOD == 0L) changed += senseDaylight()
     return SkyChanges(weatherChanged, strikes, changed, events)
@@ -291,9 +269,9 @@ internal fun FlatWorld.endRodPower(pos: BlockPos, state: BlockState): Boolean {
  * into a cauldron, empty or of the same, it adds a level, now and then.
  * Returns where a cauldron filled, if one did.
  */
-private fun FlatWorld.rainOn(pos: BlockPos, random: Random): BlockPos? {
+internal fun FlatWorld.rainOn(pos: BlockPos, random: Random): BlockPos? {
     val state = stateAt(pos)?.takeIf { it.isCauldron } ?: return null
-    val filled = when (precipitation) {
+    val filled = when (precipitationAt(pos)) {
         Precipitation.RAIN -> random.nextDouble() < CAULDRON_FILL_CHANCE && rainFills(pos, state)
         Precipitation.SNOW -> random.nextDouble() < CAULDRON_SNOW_CHANCE && snowFills(pos, state)
         Precipitation.NONE -> false

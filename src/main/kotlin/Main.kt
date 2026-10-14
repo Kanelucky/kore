@@ -29,12 +29,10 @@ import org.koremc.network.rtc.maxSendableMessageSize
 import org.koremc.network.rtc.verifiedClientKey
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.VanillaData
-import org.koremc.storage.BIOME_NAMES
 import org.koremc.storage.FlatPreset
 import org.koremc.storage.LevelType
 import org.koremc.storage.WorldSettings
 import org.koremc.storage.WorldStorage
-import org.koremc.world.Precipitation
 import org.slf4j.LoggerFactory
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -90,7 +88,7 @@ fun main() {
     // A flat world is made from its preset; any other kind, which Kore can't make yet, is made a classic flat one.
     val preset = if (config.levelType == LevelType.FLAT) config.flatWorldPreset else FlatPreset.CLASSIC_FLAT
     val storage = try {
-        WorldStorage.open(config.worldsDirectory.resolve(config.level), config.level, preset.layers(vanilla.blocks), vanilla.blocks, items, settings, vanilla.traits)
+        WorldStorage.open(config.worldsDirectory.resolve(config.level), config.level, preset.layers(vanilla.blocks), vanilla.blocks, items, settings, vanilla.traits, vanilla.biomes)
     } catch (e: Exception) {
         log.error("Couldn't open the world in {}", config.worldsDirectory.resolve(config.level).toAbsolutePath(), e)
         exitProcess(1)
@@ -98,7 +96,6 @@ fun main() {
     // A world made before keeps its own game mode, unless force-gamemode says otherwise, and its own seed.
     val running = config.copy(gameMode = storage.settings.gameMode, seed = storage.settings.seed)
     storage.world.features = config.features
-    storage.world.precipitation = Precipitation.of(vanilla.biomes.find { it.name == BIOME_NAMES[storage.world.biome] })
     config.features.off.takeIf { it.isNotEmpty() }?.let { log.info("Running without {}, as {} switches them off", it.joinToString(), KORE_JSON) }
     // One thread carries every client's UDP traffic and runs every session, so the world needs no locks.
     val loop = NioEventLoopGroup(1)

@@ -1,5 +1,6 @@
 package org.koremc.world
 
+import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
 import org.koremc.registry.VanillaData
 import org.koremc.registry.assumeGameData
@@ -124,13 +125,22 @@ class WeatherTest {
         assertFalse(world.snowFills(above, world.stateAt(above)!!))
     }
 
+    private fun climateOf(name: String) = Climate.of(data.biomes.single { it.name == "minecraft:$name" })
+
     @Test
-    fun `a biome rains, snows where it's cold, or stays dry, as the game defines it`() {
-        val precipitation = listOf("plains", "desert", "ice_plains", "extreme_hills", "deep_ocean").map { name ->
-            Precipitation.of(data.biomes.single { it.name == "minecraft:$name" })
-        }
-        assertEquals(listOf(Precipitation.RAIN, Precipitation.NONE, Precipitation.SNOW, Precipitation.RAIN, Precipitation.RAIN), precipitation)
-        assertEquals(Precipitation.RAIN, Precipitation.of(null))
+    fun `a biome's climate is the game's, rain or snow falling by how warm it is, colder higher up, and nothing in a dry one`() {
+        assertEquals(Climate(0.8f), climateOf("plains"))
+        assertEquals(Climate(0f, snowLayers = 8, snowCover = 2), climateOf("ice_plains"))
+        assertEquals(Climate.PLAINS, Climate.of(null))
+
+        fun fallsAt(biome: String, y: Int) = world.apply { climate = climateOf(biome) }.precipitationAt(BlockPos(0, y, 0))
+        assertEquals(Precipitation.RAIN, fallsAt("plains", 300))
+        assertEquals(Precipitation.NONE, fallsAt("desert", 0))
+        assertEquals(Precipitation.SNOW, fallsAt("ice_plains", MIN_Y))
+        assertEquals(Precipitation.RAIN, fallsAt("deep_ocean", 106))
+        // Windswept hills snow above y=120.
+        assertEquals(Precipitation.RAIN, fallsAt("extreme_hills", 115))
+        assertEquals(Precipitation.SNOW, fallsAt("extreme_hills", 125))
     }
 
     @Test
@@ -143,18 +153,83 @@ class WeatherTest {
         world.setWeather(raining = true, thundering = true)
         world[above] = block("minecraft:cauldron")
 
-        world.precipitation = Precipitation.NONE
+        world.climate = climateOf("desert")
         assertTrue(world.tickSky(listOf(ChunkPos(0, 0)), always).strikes.isEmpty())
         assertEquals(0, world.stateAt(above)?.properties?.get("fill_level"))
 
-        world.precipitation = Precipitation.SNOW
+        world.climate = climateOf("ice_plains")
         val snowing = world.tickSky(listOf(ChunkPos(0, 0)), always)
         assertTrue(snowing.strikes.isEmpty())
-        assertEquals(listOf(above), snowing.changed)
+        assertTrue(above in snowing.changed)
         assertEquals("powder_snow", world.stateAt(above)?.properties?.get("cauldron_liquid"))
 
-        world.precipitation = Precipitation.RAIN
+        world.climate = climateOf("plains")
         assertTrue(world.tickSky(listOf(ChunkPos(0, 0)), always).strikes.isNotEmpty())
+    }
+
+    @Test
+    fun `snow settles where it's cold while it snows, a layer at a time, as deep as the biome piles it, but not in bright light or on ice`() {
+        world = FlatWorld(blocks, listOf(block("minecraft:stone")), traits = data.traits) // Which say what gives off light
+        val column = BlockPos(5, above.y, 5)
+        fun snowAt() = world.stateAt(column)?.takeIf { it.name == SNOW_LAYER }?.number("height")?.plus(1) ?: 0
+        fun snowFor(times: Int) = repeat(times) { world.weatherOn(world.topOf(column.x, column.z), Random(it)) }
+
+        world.climate = climateOf("ice_plains")
+        snowFor(5)
+        assertEquals(0, snowAt(), "not without rain")
+        world.setWeather(raining = true, thundering = false)
+        snowFor(1)
+        assertEquals(1, snowAt())
+        snowFor(20)
+        assertEquals(8, snowAt(), "a whole block of it, in snowy plains")
+
+        world[column] = block(AIR)
+        world.climate = Climate(0f, snowLayers = 2)
+        snowFor(20)
+        assertEquals(2, snowAt())
+
+        world[column] = block(AIR)
+        world.climate = climateOf("plains")
+        snowFor(20)
+        assertEquals(0, snowAt(), "it rains")
+
+        world.climate = climateOf("ice_plains")
+        world[column.side(Face.EAST)] = block("minecraft:glowstone")
+        snowFor(20)
+        assertEquals(0, snowAt(), "too bright")
+        world[column.side(Face.EAST)] = block(AIR)
+        world[column.side(Face.DOWN)] = block("minecraft:ice")
+        snowFor(20)
+        assertEquals(0, snowAt(), "on ice")
+    }
+
+    @Test
+    fun `still water freezes where it's cold, in any weather, from its edges in`() {
+        world.climate = climateOf("ice_plains")
+        // Three by three of water on the ground, the middle with water all round it.
+        val middle = BlockPos(5, above.y, 5)
+        for (x in -1..1) for (z in -1..1) world[BlockPos(middle.x + x, middle.y, middle.z + z)] = world.liquidState(Liquid.WATER, 0)
+        fun freeze(pos: BlockPos) = world.weatherOn(world.topOf(pos.x, pos.z), Random(1))
+
+        assertEquals(emptyList(), freeze(middle))
+        val edge = middle.side(Face.NORTH)
+        assertEquals(listOf(edge), freeze(edge))
+        assertEquals("minecraft:ice", world.stateAt(edge)?.name)
+        assertEquals(listOf(middle), freeze(middle))
+
+        world.climate = climateOf("plains")
+        assertEquals(emptyList(), freeze(middle.side(Face.SOUTH)))
+    }
+
+    @Test
+    fun `with growth off, no snow settles and no water freezes`() {
+        world.features = Features(growth = false)
+        world.climate = climateOf("ice_plains")
+        world.setWeather(raining = true, thundering = false)
+        world[above] = world.liquidState(Liquid.WATER, 0)
+        assertEquals(emptyList(), world.weatherOn(world.topOf(above.x, above.z), Random(1)))
+        assertEquals(emptyList(), world.weatherOn(world.topOf(9, 9), Random(1)))
+        assertEquals(AIR, world.stateAt(BlockPos(9, above.y, 9))?.name)
     }
 
     @Test

@@ -10,6 +10,7 @@ import org.cloudburstmc.nbt.NbtUtils
 import org.koremc.protocol.Difficulty
 import org.koremc.protocol.GameMode
 import org.koremc.registry.AIR_NETWORK_ID
+import org.koremc.registry.BiomeDefinition
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockTraits
 import org.koremc.registry.ItemStacks
@@ -21,6 +22,7 @@ import org.koremc.world.FlatWorld
 import org.koremc.world.GameRules
 import org.koremc.world.LoadedChunk
 import org.koremc.world.MAP_SIZE
+import org.koremc.world.Climate
 import org.koremc.world.MIN_Y
 import org.koremc.world.MapData
 import org.koremc.world.PLAINS_BIOME_ID
@@ -307,10 +309,11 @@ class WorldStorage private constructor(
         /**
          * Opens the world in [directory], or makes a new flat world called
          * [name] there, of [defaultLayers], with their platform on them, if
-         * there's none. Its blocks and
-         * items are [blocks] and [items], what the game says of the blocks,
-         * like what liquid does to them, [traits], and Kore runs it with
-         * [settings], but for the game mode and seed a world made before keeps.
+         * there's none. Its blocks and items are [blocks] and [items], what
+         * the game says of the blocks, like what liquid does to them,
+         * [traits], and of the biomes, like how warm each is, [biomes], and
+         * Kore runs it with [settings], but for the game mode and seed a world
+         * made before keeps.
          */
         fun open(
             directory: Path,
@@ -320,6 +323,7 @@ class WorldStorage private constructor(
             items: ItemStacks,
             settings: WorldSettings,
             traits: BlockTraits = BlockTraits.NONE,
+            biomes: List<BiomeDefinition> = emptyList(),
         ): WorldStorage {
             Files.createDirectories(directory)
             val levelDatFile = directory.resolve("level.dat")
@@ -344,7 +348,8 @@ class WorldStorage private constructor(
             val storage = WorldStorage(directory, WorldDatabase.open(directory.resolve("db")), levelDat, blocks, items, kept)
             storage.biome = layers.biome
             val spawn = levelDat.spawn ?: levelDat.groundSpawn.let { (x, z) -> BlockPos(x, MIN_Y + layers.layers.size, z) }
-            storage.world = FlatWorld(blocks, layers.layers, layers.biome, loader = storage, spawn = spawn, traits = traits).apply {
+            val climate = Climate.of(biomes.find { it.name == BIOME_NAMES[layers.biome] })
+            storage.world = FlatWorld(blocks, layers.layers, layers.biome, storage, spawn, traits, climate, levelDat.seed).apply {
                 time = levelDat.time
                 gameTime = levelDat.gameTime
                 rules = GameRules(levelDat.gameRules)

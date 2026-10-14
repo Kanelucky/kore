@@ -42,9 +42,21 @@ class FlatWorld(
     val spawn: BlockPos = BlockPos(0, MIN_Y + layers.size, 0),
     /** What the game says of each block state, like what liquid does to it. */
     val traits: BlockTraits = BlockTraits.NONE,
+    /** The climate of [biome]: how warm it is, what falls from the sky when it rains, and how deep snow lies. */
+    climate: Climate = Climate.PLAINS,
+    /** The world's seed, which lays out what isn't the same in every column. */
+    private val seed: Long = 0,
 ) {
 
     private val generated: Chunk
+
+    /** The top of the layers, if it's snow lying unevenly, as the game makes it in a snowy biome, rather than the same in every column. */
+    private val drifting: BlockState? = layers.lastOrNull()?.takeIf { it.name == SNOW_LAYER && climate.snowCover > 0 }
+    private val snowCover = climate.snowCover
+    private val driftY = MIN_Y + layers.size - 1
+
+    /** The chunks made so far that aren't the same as every other, by where they are: those with snow drifting on them. */
+    private val made = HashMap<ChunkPos, Chunk>()
 
     /** The chunks that don't match [generated]: those players changed, and those [loader] had saved. */
     private val changed = HashMap<ChunkPos, Chunk>()
@@ -126,11 +138,31 @@ class FlatWorld(
      * generated chunk if the loader has none.
      */
     private fun load(pos: ChunkPos): Chunk {
-        if (!asked.add(pos)) return generated
-        val loaded = loader.load(pos) ?: return generated
+        if (!asked.add(pos)) return generate(pos)
+        val loaded = loader.load(pos) ?: return generate(pos)
         loaded.chunk?.let { changed[pos] = it }
         loaded.restore(this)
-        return changed[pos] ?: generated
+        return changed[pos] ?: generate(pos)
+    }
+
+    /**
+     * The chunk at [pos] as the world makes it: the same as every other, but
+     * for snow on top drifting, from bare ground to as deep as the biome
+     * makes it, as the world's seed lays it out.
+     */
+    private fun generate(pos: ChunkPos): Chunk {
+        val snow = drifting ?: return generated
+        return made.getOrPut(pos) {
+            val subChunk = (driftY - MIN_Y) shr 4
+            val top = generated.subChunks[subChunk]
+            val ids = IntArray(SUB_CHUNK_VOLUME) { top[it] }
+            val depths = (1..snowCover).map { blocks.find(SNOW_LAYER, snow.properties + ("height" to it - 1))?.networkId ?: snow.networkId }
+            for (x in 0 until 16) for (z in 0 until 16) {
+                val depth = snowDepth(seed, pos.x * 16 + x, pos.z * 16 + z, snowCover)
+                ids[blockIndex(x, driftY and 0xF, z)] = if (depth == 0) AIR_NETWORK_ID else depths[depth - 1]
+            }
+            Chunk(generated.subChunks.toMutableList().apply { set(subChunk, PalettedStorage.of(ids)) }, generated.biomes)
+        }
     }
 
     /** The network ID of the block at [pos]. */
@@ -281,8 +313,8 @@ class FlatWorld(
     /** The game's systems that run in this world, as kore.json switches them. */
     var features = Features()
 
-    /** What falls from the sky in [biome] when it rains: rain, snow, or in a dry one, nothing. */
-    var precipitation = Precipitation.RAIN
+    /** The climate of [biome]: how warm it is, and what falls from the sky when it rains, and how deep snow piles up. */
+    var climate = climate
 
     /** The weather. */
     var weather = Weather()

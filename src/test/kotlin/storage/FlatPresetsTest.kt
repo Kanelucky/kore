@@ -97,6 +97,42 @@ class FlatPresetsTest {
         }
     }
 
+    /** How many layers deep the snow on Snowy Kingdom's grass lies in each column of [area], by [world]. */
+    private fun snowIn(world: org.koremc.world.FlatWorld, area: IntRange = 0 until 64) = area.flatMap { x ->
+        area.map { z -> world.stateAt(BlockPos(x, 0, z))?.takeIf { it.name == "minecraft:snow_layer" }?.let { (it.properties["height"] as Int) + 1 } ?: 0 }
+    }
+
+    @Test
+    fun `Snowy Kingdom's snow lies unevenly, mostly a layer deep, deeper in drifts and bare in patches, the same each time it opens`() {
+        val items = ItemStacks(data.items, data.creative, blocks)
+        fun open(seed: Long = 7) = WorldStorage.open(directory, "Snowy", FlatPreset.SNOWY_KINGDOM.layers(blocks), blocks, items, settings.copy(seed = seed), biomes = data.biomes)
+
+        val snow = open().run { snowIn(world).also { close() } }
+        val counts = snow.groupingBy { it }.eachCount()
+        assertEquals(setOf(0, 1, 2), counts.keys)
+        assertTrue(counts.getValue(1) > counts.getValue(2) && counts.getValue(2) > counts.getValue(0), "$counts")
+        open().run {
+            assertEquals(snow, snowIn(world), "laid out by the world's seed")
+            assertEquals("minecraft:grass_block", world.stateAt(BlockPos(5, -1, 5))?.name)
+            close()
+        }
+        directory.toFile().deleteRecursively()
+        open(seed = 8).run {
+            assertTrue(snowIn(world) != snow, "another seed, other drifts")
+            close()
+        }
+    }
+
+    @Test
+    fun `presets without snow on top are the same in every column`() {
+        val items = ItemStacks(data.items, data.creative, blocks)
+        WorldStorage.open(directory, "Overworld", FlatPreset.OVERWORLD.layers(blocks), blocks, items, settings, biomes = data.biomes).run {
+            val tops = (0 until 40).flatMap { x -> (0 until 40).map { z -> world.stateAt(BlockPos(x, MIN_Y + 63, z))?.name } }.toSet()
+            assertEquals(setOf("minecraft:grass_block"), tops)
+            close()
+        }
+    }
+
     @Test
     fun `a world made from a preset opens again in its biome, whatever preset is asked for then`() {
         val items = ItemStacks(data.items, data.creative, blocks)

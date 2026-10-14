@@ -3160,8 +3160,8 @@ private fun FlatWorld.mapData(map: MapData, patch: MapPatch?) = ClientboundMapIt
 /**
  * Ticks the sky over [game]'s world, around these players, for them to see
  * what it does: the weather changing, lightning striking, with what it did
- * to the blocks it struck, cauldrons filling with rain, and daylight
- * detectors changing. They hear the time once a second. Run once a tick,
+ * to the blocks it struck, snow settling, water freezing, cauldrons
+ * filling with rain or snow, and daylight detectors changing. They hear the time once a second. Run once a tick,
  * before redstone, which answers what the sky powered.
  */
 internal fun Collection<Session>.tickSky(game: GameData) {
