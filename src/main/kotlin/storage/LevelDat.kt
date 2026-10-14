@@ -59,8 +59,12 @@ private const val GROUND = Short.MAX_VALUE.toInt()
 /** How the game writes a flat world's layers, for the version of them that names blocks. */
 private const val LAYERS_ENCODING = 6
 
-/** What a flat world is made of: its [layers], from the bottom of the world up, and its [biome]. */
-data class FlatLayers(val layers: List<BlockState>, val biome: Int = PLAINS_BIOME_ID)
+/**
+ * What a flat world is made of: its [layers], from the bottom of the world
+ * up, and its [biome], and the blocks a new one is made with besides, its
+ * [platform], which are saved as any others are.
+ */
+data class FlatLayers(val layers: List<BlockState>, val biome: Int = PLAINS_BIOME_ID, val platform: Map<BlockPos, BlockState> = emptyMap())
 
 /**
  * A world's settings, as the game keeps them in its level.dat: little-

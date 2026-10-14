@@ -306,7 +306,8 @@ class WorldStorage private constructor(
     companion object {
         /**
          * Opens the world in [directory], or makes a new flat world called
-         * [name] there, of [defaultLayers], if there's none. Its blocks and
+         * [name] there, of [defaultLayers], with their platform on them, if
+         * there's none. Its blocks and
          * items are [blocks] and [items], what the game says of the blocks,
          * like what liquid does to them, [traits], and Kore runs it with
          * [settings], but for the game mode and seed a world made before keeps.
@@ -353,7 +354,10 @@ class WorldStorage private constructor(
                 runCatching { mapFrom(readAll(value).first()) }.getOrNull()?.let(storage.world.maps::add)
             }
             log.info("{} the world \"{}\" in {}", if (existing) "Opened" else "Made", levelDat.name, directory.toAbsolutePath())
-            if (!existing) storage.save()
+            if (!existing) {
+                for ((pos, state) in defaultLayers.platform) storage.world[pos] = state
+                storage.save()
+            }
             return storage
         }
     }

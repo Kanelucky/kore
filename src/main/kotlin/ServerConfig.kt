@@ -3,6 +3,7 @@ package org.koremc
 import org.koremc.network.JoinInfo
 import org.koremc.protocol.Difficulty
 import org.koremc.protocol.GameMode
+import org.koremc.storage.FlatPreset
 import org.koremc.storage.LevelType
 import org.koremc.world.Features
 import java.nio.file.Path
@@ -37,6 +38,8 @@ data class ServerConfig(
     val level: String = "Bedrock level",
     /** What a new world is like. A world made before keeps its own. */
     val levelType: LevelType = LevelType.FLAT,
+    /** The preset a new world is made from, if [levelType] makes it flat. A world made before keeps its own layers. */
+    val flatWorldPreset: FlatPreset = FlatPreset.CLASSIC_FLAT,
     /** Where worlds are saved, each in a folder of its own, as the game's dedicated server keeps them. */
     val worldsDirectory: Path = Path.of("worlds"),
     /** The most players on the server at once. Anyone else who tries to join is told it's full. */

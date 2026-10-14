@@ -113,6 +113,51 @@ class WeatherTest {
     }
 
     @Test
+    fun `snow adds a level of powder snow to a cauldron empty or of powder snow, but not one of water`() {
+        world[above] = block("minecraft:cauldron")
+        assertTrue(world.snowFills(above, world.stateAt(above)!!))
+        assertEquals("powder_snow", world.stateAt(above)?.properties?.get("cauldron_liquid"))
+        assertTrue(world.snowFills(above, world.stateAt(above)!!))
+        assertEquals(2, world.stateAt(above)?.properties?.get("fill_level"))
+
+        world[above] = block("minecraft:cauldron", "fill_level" to 2)
+        assertFalse(world.snowFills(above, world.stateAt(above)!!))
+    }
+
+    @Test
+    fun `a biome rains, snows where it's cold, or stays dry, as the game defines it`() {
+        val precipitation = listOf("plains", "desert", "ice_plains", "extreme_hills", "deep_ocean").map { name ->
+            Precipitation.of(data.biomes.single { it.name == "minecraft:$name" })
+        }
+        assertEquals(listOf(Precipitation.RAIN, Precipitation.NONE, Precipitation.SNOW, Precipitation.RAIN, Precipitation.RAIN), precipitation)
+        assertEquals(Precipitation.RAIN, Precipitation.of(null))
+    }
+
+    @Test
+    fun `in a thunderstorm, no lightning strikes where snow falls or nothing does, and a cauldron fills with what does`() {
+        // Every chance taken, and the first block of each chunk picked.
+        val always = object : Random() {
+            override fun nextBits(bitCount: Int) = 0
+        }
+        world.rules.set("doWeatherCycle", false)
+        world.setWeather(raining = true, thundering = true)
+        world[above] = block("minecraft:cauldron")
+
+        world.precipitation = Precipitation.NONE
+        assertTrue(world.tickSky(listOf(ChunkPos(0, 0)), always).strikes.isEmpty())
+        assertEquals(0, world.stateAt(above)?.properties?.get("fill_level"))
+
+        world.precipitation = Precipitation.SNOW
+        val snowing = world.tickSky(listOf(ChunkPos(0, 0)), always)
+        assertTrue(snowing.strikes.isEmpty())
+        assertEquals(listOf(above), snowing.changed)
+        assertEquals("powder_snow", world.stateAt(above)?.properties?.get("cauldron_liquid"))
+
+        world.precipitation = Precipitation.RAIN
+        assertTrue(world.tickSky(listOf(ChunkPos(0, 0)), always).strikes.isNotEmpty())
+    }
+
+    @Test
     fun `daylight detectors give power by the sky's light, full at noon and none at midnight, less in rain, and the other way inverted`() {
         val detector = block("minecraft:daylight_detector")
         val inverted = block("minecraft:daylight_detector_inverted")

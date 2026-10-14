@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import org.koremc.storage.FlatPreset
 import org.koremc.world.Features
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
@@ -35,6 +36,7 @@ private data class KoreSettings(
     val advertisedAddresses: List<String>,
     val operatorDomain: String,
     val shutdownMessage: String,
+    val flatWorldPreset: String,
     val features: Features,
 )
 
@@ -44,6 +46,9 @@ private val COMMENTS = mapOf(
         "Left empty, every address this computer has that others can reach.",
     "operatorDomain" to "Shown to players, as text the server can't vouch for, the first time they accept its key.",
     "shutdownMessage" to "What players still on the server are told as it stops.",
+    "flatWorldPreset" to "The preset a new flat world is made from, named as the game names it: \"Classic Flat\", \"Tunneller's Dream\",\n" +
+        "\"Water World\", \"Overworld\", \"Snowy Kingdom\", \"Bottomless Pit\", \"Desert\", \"Redstone Ready\" or \"The Void\".\n" +
+        "Only with level-type FLAT in server.properties, and only as the world is made: one made before keeps its layers.",
     "features" to "The game's systems Kore runs: all on, the game as it is, and all off, blocks that are only blocks.\n" +
         "Off, a system doesn't run at all, and its blocks do nothing. The game rules switch off the rest,\n" +
         "like the weather with doweathercycle, or blocks' drops with dotiledrops.",
@@ -67,7 +72,9 @@ private val COMMENTS = mapOf(
  * rest.
  */
 fun ServerConfig.withKoreSettings(file: Path): ServerConfig {
-    val defaults = json.encodeToJsonElement(KoreSettings.serializer(), KoreSettings(advertisedAddresses, operatorDomain, shutdownMessage, features)).jsonObject
+    val defaults = json.encodeToJsonElement(
+        KoreSettings.serializer(), KoreSettings(advertisedAddresses, operatorDomain, shutdownMessage, flatWorldPreset.title, features),
+    ).jsonObject
     if (!file.exists()) {
         file.writeText(written(defaults))
         log.info("Made {} with Kore's own settings", file.toAbsolutePath())
@@ -94,9 +101,12 @@ fun ServerConfig.withKoreSettings(file: Path): ServerConfig {
     } catch (e: IllegalArgumentException) {
         throw IllegalStateException("$file has a setting Kore can't read: ${e.message}", e)
     }
+    val preset = FlatPreset.named(settings.flatWorldPreset) ?: throw IllegalStateException(
+        "$file has no flat world preset called \"${settings.flatWorldPreset}\": the game's are ${FlatPreset.entries.joinToString { "\"${it.title}\"" }}",
+    )
     return copy(
         advertisedAddresses = settings.advertisedAddresses, operatorDomain = settings.operatorDomain, shutdownMessage = settings.shutdownMessage,
-        features = settings.features,
+        flatWorldPreset = preset, features = settings.features,
     )
 }
 

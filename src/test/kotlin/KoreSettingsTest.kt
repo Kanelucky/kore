@@ -1,5 +1,6 @@
 package org.koremc
 
+import org.koremc.storage.FlatPreset
 import org.koremc.world.Features
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.readText
@@ -36,6 +37,11 @@ class KoreSettingsTest {
                 // What players still on the server are told as it stops.
                 "shutdownMessage": "Server closed",
 
+                // The preset a new flat world is made from, named as the game names it: "Classic Flat", "Tunneller's Dream",
+                // "Water World", "Overworld", "Snowy Kingdom", "Bottomless Pit", "Desert", "Redstone Ready" or "The Void".
+                // Only with level-type FLAT in server.properties, and only as the world is made: one made before keeps its layers.
+                "flatWorldPreset": "Classic Flat",
+
                 // The game's systems Kore runs: all on, the game as it is, and all off, blocks that are only blocks.
                 // Off, a system doesn't run at all, and its blocks do nothing. The game rules switch off the rest,
                 // like the weather with doweathercycle, or blocks' drops with dotiledrops.
@@ -66,6 +72,16 @@ class KoreSettingsTest {
             file.readText(),
         )
         assertEquals(ServerConfig(), ServerConfig().withKoreSettings(file))
+    }
+
+    @Test
+    fun `a flat world preset is read by the game's name for it, and one the game doesn't have is refused, naming those it has`() {
+        file.writeText("""{ "flatWorldPreset": "Tunneller's Dream" }""")
+        assertEquals(FlatPreset.TUNNELLERS_DREAM, ServerConfig().withKoreSettings(file).flatWorldPreset)
+
+        file.writeText("""{ "flatWorldPreset": "the void" }""")
+        val refused = assertFailsWith<IllegalStateException> { ServerConfig().withKoreSettings(file) }
+        assertTrue("\"the void\"" in refused.message!! && "\"The Void\"" in refused.message!!, refused.message)
     }
 
     @Test

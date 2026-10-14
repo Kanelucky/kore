@@ -88,7 +88,7 @@ The console logs at `INFO`. Each run also writes everything at `DEBUG` to its ow
 
 ### ⚙️ Configuration
 
-Settings live in `server.properties`, with the dedicated server's names, and Kore's own in `kore.json`. Kore writes both on first run. Behind NAT, set `advertisedAddresses` in `kore.json` to your public IP so clients get a candidate they can reach. Its `features` switch whole game systems off, for a server without them: `redstone`, `liquids`, `fallingBlocks`, `growth` and `machines`. When moving to a new client release, update `protocol` and `version` in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) and the data together.
+Settings live in `server.properties`, with the dedicated server's names, and Kore's own in `kore.json`. Kore writes both on first run. Behind NAT, set `advertisedAddresses` in `kore.json` to your public IP so clients get a candidate they can reach. `flatWorldPreset` picks the preset a new flat world is made from, by the game's name for it, like `Classic Flat` or `The Void`, and `features` switch whole game systems off, for a server without them: `redstone`, `liquids`, `fallingBlocks`, `growth` and `machines`. When moving to a new client release, update `protocol` and `version` in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) and the data together.
 
 ### 🔑 The Operator Key
 
@@ -114,7 +114,7 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 
 ## ✨ What Works
 
-- **World:** the vanilla flat world, streamed to players as they move, and saved every minute and on stop in the game's own format, in `worlds/`, so it opens in the game too. Players keep where they were and what they had.
+- **World:** a flat world from any of the game's nine flat presets, streamed to players as they move, and saved every minute and on stop in the game's own format, in `worlds/`, so it opens in the game too. Players keep where they were and what they had.
 - **Building and mining:** placing blocks with the game's rules for slabs, stairs, doors, rails, fences, walls, scaffolding and the like; sand, gravel, concrete powder, anvils, snow and hanging dripstone falling; survival mining at the right pace, tool wear, and drops, with Silk Touch, Fortune and shears.
 - **Using items on blocks:** hoes, shovels and axes, waxing and scraping copper, carving pumpkins, writing on, dyeing and waxing signs, item frames, flower pots, and eyes of ender opening end portals.
 - **Note blocks, jukeboxes, composters and cauldrons:** tuning and playing notes by the block below, discs and their songs, put in by hand or hopper, composting with hoppers, and cauldrons of water, lava, powder snow, potions and dye.

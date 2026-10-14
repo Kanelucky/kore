@@ -557,7 +557,8 @@ private fun FlatWorld.spreadGrass(pos: BlockPos, state: BlockState, growing: Gro
 private fun FlatWorld.moisten(pos: BlockPos, state: BlockState, growing: Growing) {
     val moisture = state.number(MOISTURE)
     when {
-        waterNear(pos) || (weather.raining && topOf(pos.x, pos.z).y <= pos.above.y) -> if (moisture < 7) grow(pos, state, growing, MOISTURE to 7)
+        waterNear(pos) || (weather.raining && precipitation == Precipitation.RAIN && topOf(pos.x, pos.z).y <= pos.above.y) ->
+            if (moisture < 7) grow(pos, state, growing, MOISTURE to 7)
         moisture > 0 -> grow(pos, state, growing, MOISTURE to moisture - 1)
         stateAt(pos.above)?.name !in ON_FARMLAND -> put(pos, DIRT, growing)
     }

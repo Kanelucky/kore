@@ -293,6 +293,14 @@ internal fun FlatWorld.rainFills(pos: BlockPos, state: BlockState): Boolean {
     return true
 }
 
+/** Adds a level of snow, as powder snow, to the cauldron at [pos], [state], if it's empty or of powder snow, not full. Returns whether it did. */
+internal fun FlatWorld.snowFills(pos: BlockPos, state: BlockState): Boolean {
+    val level = state.properties[LEVEL] as? Int ?: 0
+    if (level > 0 && (state.properties[CONTENTS] != OF_POWDER_SNOW || level >= FULL)) return false
+    fillCauldron(pos, OF_POWDER_SNOW, level + 1)
+    return true
+}
+
 /** Fills the cauldron at [pos], [state], with lava dripping into it, if it's empty. Returns whether it did. */
 internal fun FlatWorld.lavaFills(pos: BlockPos, state: BlockState): Boolean {
     if ((state.properties[LEVEL] as? Int ?: 0) > 0) return false

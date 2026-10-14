@@ -35,7 +35,8 @@ class FlatWorld(
     /** Every block state the world can hold, by network ID. */
     val blocks: BlockPalette,
     layers: List<BlockState>,
-    biome: Int = PLAINS_BIOME_ID,
+    /** The one biome the world is in, by number. */
+    val biome: Int = PLAINS_BIOME_ID,
     private val loader: ChunkLoader = ChunkLoader.NONE,
     /** Where players appear: by default standing on the top layer, in the corner of chunk 0, 0. */
     val spawn: BlockPos = BlockPos(0, MIN_Y + layers.size, 0),
@@ -279,6 +280,9 @@ class FlatWorld(
 
     /** The game's systems that run in this world, as kore.json switches them. */
     var features = Features()
+
+    /** What falls from the sky in [biome] when it rains: rain, snow, or in a dry one, nothing. */
+    var precipitation = Precipitation.RAIN
 
     /** The weather. */
     var weather = Weather()
