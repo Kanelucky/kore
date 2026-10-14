@@ -28,9 +28,15 @@ private val PARTIAL_NAMES = setOf(
     "cornflower", "dandelion", "golden_dandelion", "lily_of_the_valley", "oxeye_daisy", "poppy", "torchflower",
     "wither_rose", "lilac", "peony", "sunflower", "wheat", "carrots", "potatoes", "beetroot", "melon_stem", "pumpkin_stem",
     "reeds", "nether_wart", "cocoa", "kelp", "azalea", "flowering_azalea",
-    // Item frames, and Education Edition's coloured torches
-    "frame", "glow_frame", "colored_torch_blue", "colored_torch_green", "colored_torch_purple", "colored_torch_red",
+    "cave_vines_body_with_berries", "cave_vines_head_with_berries", "red_shrub",
+    // Item frames, and Education Edition's coloured torches and chalkboards
+    "frame", "glow_frame", "colored_torch_blue", "colored_torch_green", "colored_torch_purple", "colored_torch_red", "chalkboard",
+    // What nothing bumps into: portals, tripwire and bubble columns
+    "portal", "end_gateway", "trip_wire", "bubble_column",
 )
+
+/** Invisible blocks that give off light, one for each level, which nothing bumps into. */
+private const val LIGHT_BLOCKS = "light_block"
 
 /** Whole cubes whose names end like those of a family that isn't. */
 private val FULL_NAMES = setOf("sea_lantern", "dirt_with_roots", "mangrove_roots", "muddy_mangrove_roots")
@@ -45,7 +51,7 @@ val BlockState.isFullCube: Boolean
     get() {
         val name = name.removePrefix("minecraft:")
         if (name in FULL_NAMES || "double" in name) return true
-        return !replaceable && name !in PARTIAL_NAMES && PARTIAL_ENDINGS.none(name::endsWith)
+        return !replaceable && name !in PARTIAL_NAMES && PARTIAL_ENDINGS.none(name::endsWith) && !name.startsWith(LIGHT_BLOCKS)
     }
 
 /** The way stairs climb, by their `weirdo_direction`. Their back is on the side they climb towards. */
