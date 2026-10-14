@@ -171,10 +171,11 @@ data class Animate(val action: Int, val entityId: Long, val data: Float = 0f, va
 
 /**
  * What another player holds, the [stack] in their hotbar [slot], as the
- * server shows it with `MobEquipment`. The client sends the same packet
- * to say which slot its own player picked.
+ * server shows it with `MobEquipment`, or in their offhand, for that
+ * [window]. The client sends the same packet to say which slot its own
+ * player picked.
  */
-data class ShowEquipment(val entityId: Long, val stack: ItemStack?, val slot: Int) : ServerPacket {
+data class ShowEquipment(val entityId: Long, val stack: ItemStack?, val slot: Int, val window: Int = 0) : ServerPacket {
     override val id get() = MOB_EQUIPMENT
 
     override fun encodeBody(out: ByteBuf) {
@@ -182,7 +183,29 @@ data class ShowEquipment(val entityId: Long, val stack: ItemStack?, val slot: In
         out.writeItemInstance(stack)
         out.writeByte(slot) // The slot
         out.writeByte(slot) // The hotbar slot it's picked in, which for a player is the same
-        out.writeByte(0) // The window: the player's own items
+        out.writeByte(window) // The player's own items, or their offhand
+    }
+}
+
+private const val MOB_ARMOR_EQUIPMENT = 32
+
+/**
+ * What another player wears, the [armour] in each armour slot, from the
+ * head down, as the server shows it with `MobArmorEquipment`. A player
+ * wears nothing on the body slot, which is for animals' armour.
+ */
+data class ShowArmour(val entityId: Long, val armour: List<ItemStack?>) : ServerPacket {
+    override val id get() = MOB_ARMOR_EQUIPMENT
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarULong(entityId)
+        for (slot in 0 until ARMOUR_SLOTS) out.writeItemInstance(armour.getOrNull(slot))
+        out.writeItemInstance(null) // The body
+    }
+
+    private companion object {
+        /** Head, chest, legs and feet. */
+        const val ARMOUR_SLOTS = 4
     }
 }
 

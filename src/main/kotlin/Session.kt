@@ -123,6 +123,7 @@ import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.SetPlayerGameType
 import org.koremc.protocol.SetTime
 import org.koremc.protocol.ShortItem
+import org.koremc.protocol.ShowArmour
 import org.koremc.protocol.ShowEquipment
 import org.koremc.protocol.Skin
 import org.koremc.protocol.StackRequest
@@ -2461,17 +2462,23 @@ class Session(
         val sprinting: Boolean,
         val heldSlot: Int,
         val held: ItemStack?,
+        val offhand: ItemStack?,
+        /** What they wear, from the head down. */
+        val armour: List<ItemStack?>,
         /** The effects whose particles show around them. */
         val effects: Long,
     )
 
-    private fun look() = Look(position, pitch, yaw, headYaw, onGround, sneaking, sprinting, heldSlot, inventory.items[heldSlot]?.stack, effects.visible())
+    private fun look() = Look(
+        position, pitch, yaw, headYaw, onGround, sneaking, sprinting, heldSlot, inventory.items[heldSlot]?.stack,
+        inventory.offhand[0]?.stack, inventory.armour.contents().map { it?.stack }, effects.visible(),
+    )
 
     /**
      * Shows the client the other players. Everyone in the game is on its
      * player list, this player included, which is where the client finds
      * their skins. Those in the chunks it has appear, move, sneak, sprint,
-     * change what they hold and go, as they do. Run once a tick.
+     * change what they hold and wear, and go, as they do. Run once a tick.
      */
     fun syncPlayers() {
         if (state != State.IN_GAME) return
@@ -2500,6 +2507,8 @@ class Session(
             val before = shownPlayers.put(other.entityId, now)
             if (before == null) {
                 packets += other.addPlayer(now)
+                if (now.offhand != null) packets += ShowEquipment(other.entityId, now.offhand, 0, OFFHAND_WINDOW)
+                if (now.armour.any { it != null }) packets += ShowArmour(other.entityId, now.armour)
                 log.debug("{} sees {}", player?.displayName, other.player?.displayName)
                 continue
             }
@@ -2510,6 +2519,8 @@ class Session(
                 packets += SetActorData(other.entityId, listOf(flagsItem(shownFlags(now)), FloatItem(ActorDataId.HEIGHT, heightOf(now))))
             }
             if (now.held != before.held || now.heldSlot != before.heldSlot) packets += ShowEquipment(other.entityId, now.held, now.heldSlot)
+            if (now.offhand != before.offhand) packets += ShowEquipment(other.entityId, now.offhand, 0, OFFHAND_WINDOW)
+            if (now.armour != before.armour) packets += ShowArmour(other.entityId, now.armour)
             if (now.effects != before.effects) packets += SetActorData(other.entityId, listOf(LongItem(ActorDataId.VISIBLE_MOB_EFFECTS, now.effects)))
         }
         if (packets.isNotEmpty()) send(*packets.toTypedArray())

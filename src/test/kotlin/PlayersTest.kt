@@ -1,8 +1,10 @@
 package org.koremc
 
+import io.netty.buffer.ByteBuf
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
 import org.cloudburstmc.nbt.NbtMap
+import org.cloudburstmc.nbt.NbtType
 import org.koremc.auth.MultiplayerTokenVerifier
 import org.koremc.auth.TestAuthority
 import org.koremc.auth.ecKeyPair
@@ -15,8 +17,10 @@ import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.LevelSoundEvent
 import org.koremc.protocol.MovePlayer
+import org.koremc.protocol.OFFHAND_WINDOW
 import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.SetActorData
+import org.koremc.protocol.ShowArmour
 import org.koremc.protocol.ShowEquipment
 import org.koremc.protocol.Text
 import org.koremc.protocol.clientDataToken
@@ -29,6 +33,8 @@ import org.koremc.protocol.readVarUInt
 import org.koremc.protocol.readVarULong
 import org.koremc.protocol.readVec3
 import org.koremc.protocol.tokenAuthentication
+import org.koremc.protocol.writeBlockPos
+import org.koremc.protocol.writeByteArray
 import org.koremc.protocol.writeString
 import org.koremc.protocol.writeVarInt
 import org.koremc.protocol.writeVarUInt
@@ -37,10 +43,17 @@ import org.koremc.registry.AIR
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
 import org.koremc.registry.CreativeInventory
+import org.koremc.registry.ItemDefinition
+import org.koremc.registry.ItemStack
+import org.koremc.registry.ItemStacks
+import org.koremc.registry.ItemVersion
+import org.koremc.storage.PlayerSaves
+import org.koremc.world.BlockPos
 import org.koremc.world.Drops
 import org.koremc.world.FlatWorld
 import org.koremc.world.Vec3
 import java.security.interfaces.ECPublicKey
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -53,6 +66,8 @@ private const val PROTOCOL = 2193
 private const val ADD_PLAYER = 12
 private const val REMOVE_ACTOR = 14
 private const val PLAYER_LIST = 63
+private const val MOB_EQUIPMENT = 31
+private const val MOB_ARMOR_EQUIPMENT = 32
 
 /** The input flag set on every tick a player sneaks. */
 private const val SNEAKING = 8
@@ -66,7 +81,23 @@ class PlayersTest {
     private val palette = BlockPalette(listOf(BlockState(AIR, NbtMap.EMPTY, version = 18168865), stone))
     private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(emptyList(), emptyList())
-    private val game = GameData(world, emptyList(), org.koremc.protocol.BlockDefinitions(emptyList()), creative, emptyMap(), Drops(emptyList(), creative, palette))
+    private val helmet = item("minecraft:iron_helmet", 1)
+    private val chestplate = item("minecraft:iron_chestplate", 2)
+    private val shield = item("minecraft:shield", 3)
+
+    /** What every player had when they last left, or null for players new to the world. */
+    private var saved: NbtMap? = null
+    private val game = GameData(
+        world, emptyList(), org.koremc.protocol.BlockDefinitions(emptyList()), creative, emptyMap(), Drops(emptyList(), creative, palette),
+        items = ItemStacks(listOf(helmet, chestplate, shield), creative, palette),
+        players = object : PlayerSaves {
+            override fun load(player: UUID) = saved
+
+            override fun save(player: UUID, data: NbtMap) {}
+        },
+    )
+
+    private fun item(name: String, id: Int) = ItemDefinition(name, id, componentBased = false, ItemVersion.NONE, maxStackSize = 1)
 
     private val clients = mutableListOf<Client>()
 
@@ -196,6 +227,46 @@ class PlayersTest {
         assertContentEquals(Animate(Animate.SWING_ARM, 2, swingSource = "mine").encode(), steve.received().single())
         assertTrue(alex.received().isEmpty()) // Their own client already showed it
     }
+
+    @Test
+    fun `players see what each other wear and hold in their offhand, as they appear and as it changes`() {
+        // Everyone joins with the helmet and shield they left with, and a chestplate in hand.
+        saved = NbtMap.builder()
+            .putList("Inventory", NbtType.COMPOUND, listOf(ItemStacks.nbtOf(ItemStack(chestplate), 0)))
+            .putList("Armor", NbtType.COMPOUND, listOf(ItemStacks.nbtOf(ItemStack(helmet), 0)))
+            .putList("Offhand", NbtType.COMPOUND, listOf(ItemStacks.nbtOf(ItemStack(shield), 0)))
+            .build()
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        tick()
+
+        val seen = steve.received()
+        assertEquals(listOf(PLAYER_LIST, ADD_PLAYER, MOB_EQUIPMENT, MOB_ARMOR_EQUIPMENT), seen.map(::idOf))
+        assertContentEquals(ShowEquipment(2, ItemStack(shield), 0, OFFHAND_WINDOW).encode(), seen[2])
+        assertContentEquals(ShowArmour(2, listOf(ItemStack(helmet), null, null, null)).encode(), seen[3])
+
+        // Alex puts the chestplate on, using it from their hand.
+        alex.sends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(30).writeVarInt(-38388).writeBoolean(false).writeVarUInt(2)
+                    .writeVarUInt(1).writeVarUInt(0).writeBoolean(true).writeByte(0).writeBoolean(false).writeVarUInt(0).heldItem(2).heldItem(0)
+                    .writeVarInt(1).writeByte(1).writeBlockPos(BlockPos(0, 0, 0)).writeByte(255).writeVarInt(0).writeByte(0)
+                    .heldItem(2)
+                    .writeFloatLE(0.5f).writeFloatLE(-61.38f).writeFloatLE(0.5f)
+                    .writeFloatLE(0f).writeFloatLE(0f).writeFloatLE(0f)
+                    .writeVarUInt(0).writeBoolean(false).writeByte(0),
+            ),
+        )
+        tick()
+        assertEquals(
+            listOf(ShowEquipment(2, null, 0).encode().toList(), ShowArmour(2, listOf(ItemStack(helmet), ItemStack(chestplate), null, null)).encode().toList()),
+            steve.received().map { it.toList() },
+        )
+    }
+
+    /** A stack of one of the item [id], as the client describes what it holds, the first stack it was given, or nothing for 0. */
+    private fun ByteBuf.heldItem(id: Int): ByteBuf = writeShortLE(id).writeShortLE(if (id == 0) 0 else 1).writeVarUInt(0).writeBoolean(id != 0)
+        .apply { if (id != 0) writeVarInt(1) }.writeVarUInt(0).writeByteArray(ByteArray(10))
 
     @Test
     fun `players go from view when they walk out of it, and from the list when they leave`() {
