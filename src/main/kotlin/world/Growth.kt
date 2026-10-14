@@ -568,6 +568,21 @@ private fun FlatWorld.waterNear(pos: BlockPos): Boolean {
     return false
 }
 
+/** How far, at the least, something has to fall onto farmland to have any chance of trampling it. */
+private const val TRAMPLING_FALL = 0.5f
+
+/**
+ * Something landing on the block at [pos], having fallen [distance]
+ * blocks: farmland is trampled back to dirt, by a chance of the distance
+ * less half a block, so always from a block and a half up. Returns whether
+ * it was.
+ */
+fun FlatWorld.landOn(pos: BlockPos, distance: Float, random: Random = Random.Default): Boolean {
+    if (stateAt(pos)?.name != FARMLAND || random.nextFloat() >= distance - TRAMPLING_FALL) return false
+    set(pos, blocks.defaultOf(DIRT) ?: return false)
+    return true
+}
+
 /** Farmland with a whole block over it can't stay farmland, and goes back to dirt. */
 internal fun FlatWorld.farmlandCovered(pos: BlockPos) = stateAt(pos.above)?.isFullCube == true
 

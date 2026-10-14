@@ -85,6 +85,7 @@ import org.koremc.world.Drops
 import org.koremc.world.tickItems
 import org.koremc.world.Face
 import org.koremc.world.FlatWorld
+import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.blockStateNbt
 import org.koremc.world.Vec3
 import org.koremc.world.chunksAround
@@ -113,6 +114,7 @@ private const val SNEAKING = 8
 private const val START_SPRINTING = 25
 private const val STOP_SPRINTING = 26
 private const val START_FLYING = 42
+private const val VERTICAL_COLLISION = 50
 
 /** The runtime IDs of the oak planks, oak door, oak fence, wooden pickaxe, stone hoe, poppy, bucket, music disc and leather cap items. */
 private const val PLANKS_ITEM = 5
@@ -180,6 +182,8 @@ class SessionTest {
     private val sign = state("minecraft:standing_sign", "ground_sign_direction" to 0)
     private val grass = BlockState("minecraft:grass_block", NbtMap.EMPTY, version = 18168865)
     private val farmland = state("minecraft:farmland", "moisturized_amount" to 0)
+    private val dirt = BlockState("minecraft:dirt", NbtMap.EMPTY, version = 18168865)
+    private val wheat = state("minecraft:wheat", "growth" to 0)
     /** An item frame on the floor, and a flower pot, empty and full. */
     private val frame = state("minecraft:frame", "facing_direction" to 1, "item_frame_map_bit" to 0.toByte(), "item_frame_photo_bit" to 0.toByte())
     private val pots = (0..1).map { full -> state("minecraft:flower_pot", "update_bit" to full.toByte()) }
@@ -188,7 +192,7 @@ class SessionTest {
     private val cauldrons = (0..6).map { level -> state("minecraft:cauldron", "cauldron_liquid" to "water", "fill_level" to level) }
     private val jukebox = BlockState("minecraft:jukebox", NbtMap.EMPTY, version = 18168865)
     private val noteBlock = BlockState("minecraft:noteblock", NbtMap.EMPTY, version = 18168865)
-    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, frame, poppy, jukebox, noteBlock) + pots + cauldrons + levers + buttons + doors + fences + water)
+    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, dirt, wheat, frame, poppy, jukebox, noteBlock) + pots + cauldrons + levers + buttons + doors + fences + water)
     private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
@@ -738,6 +742,30 @@ class SessionTest {
         world[held] = grass
         clientSends(placeBlock(against = held, face = 1, slot = 0, held = HOE_ITEM, predictedToWork = false, repeated = true))
         assertEquals(grass, world.stateAt(held))
+    }
+
+    @Test
+    fun `a player falling onto farmland from high enough tramples it back to dirt, and the crop on it breaks, but walking on it doesn't`() {
+        spawn()
+        val field = BlockPos(0, -64, 0)
+        world[field] = farmland
+        world[field.side(Face.UP)] = wheat
+        val top = field.y + 15 / 16f + PLAYER_EYE_HEIGHT // A player's eyes, standing on farmland
+
+        // Walking onto it, no fall.
+        clientSends(playerAuthInput(Vec3(0.5f, top, 0.5f), inputs = listOf(VERTICAL_COLLISION)))
+        assertEquals(farmland, world.stateAt(field))
+
+        // Two blocks fallen before the tick they land, which, as in the game, doesn't count.
+        clientSends(playerAuthInput(Vec3(0.5f, top + 3, 0.5f)))
+        clientSends(playerAuthInput(Vec3(0.5f, top + 2, 0.5f)))
+        clientSends(playerAuthInput(Vec3(0.5f, top + 1, 0.5f)))
+        sent.clear()
+        clientSends(playerAuthInput(Vec3(0.5f, top, 0.5f), inputs = listOf(VERTICAL_COLLISION)))
+        assertEquals(dirt, world.stateAt(field))
+        assertTrue(receivedPackets().any { it.contentEquals(UpdateBlock(field, dirt.networkId).encode()) })
+        listOf(session).tickBlocks(game, dropItems = false)
+        assertEquals(air, world.stateAt(field.side(Face.UP)))
     }
 
     @Test

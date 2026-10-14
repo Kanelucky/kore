@@ -255,7 +255,9 @@ import org.koremc.world.isJukebox
 import org.koremc.world.isLectern
 import org.koremc.world.isNoteBlock
 import org.koremc.world.isSign
+import org.koremc.world.isWet
 import org.koremc.world.knockBookOff
+import org.koremc.world.landOn
 import org.koremc.world.lecternBook
 import org.koremc.world.less
 import org.koremc.world.liquid
@@ -343,6 +345,15 @@ private const val FALLING_BLOCK_NETWORK_OFFSET = 0.49f
 
 /** What snow that falls where it can't land drops. */
 private const val SNOWBALL = "minecraft:snowball"
+
+/** How far under a player's feet the block they land on is looked for: a little, so that farmland, a little short of a block, counts. */
+private const val LANDING_DEPTH = 0.2f
+
+/** What players climb, and so don't fall on: ladders, vines and scaffolding. */
+private val CLIMBABLE = setOf(
+    "minecraft:ladder", "minecraft:vine", "minecraft:scaffolding", "minecraft:cave_vines", "minecraft:cave_vines_body_with_berries",
+    "minecraft:cave_vines_head_with_berries", "minecraft:twisting_vines", "minecraft:weeping_vines",
+)
 
 /** How long after knocking an item out of a frame a break of that frame is the same hit, reported again, in milliseconds. */
 private const val KNOCK_OUT_MILLIS = 250L
@@ -732,6 +743,9 @@ class Session(
     /** How the player last moved, as the client reported it. */
     private var delta = Vec3(0f, 0f, 0f)
 
+    /** How far the player has fallen since they last stood on something, in blocks. */
+    private var fallDistance = 0f
+
     /** Whether the player has a lectern's book open, which closes with no window of its own. */
     private var reading = false
 
@@ -1017,6 +1031,7 @@ class Session(
             }
             teleportedTo = null
         }
+        val fellFrom = feet.y
         position = reported
         delta = packet.delta
         if (pistonWatch > 0) {
@@ -1028,6 +1043,7 @@ class Session(
         headYaw = packet.headYaw
         onGround = InputFlag.VERTICAL_COLLISION in packet.inputs
         onInputs(packet)
+        fall(fellFrom)
 
         val chunk = reported.toBlockPos().chunk
         val radius = chunkRadius ?: return
@@ -1038,6 +1054,37 @@ class Session(
         viewCentre = chunk
         val sent = updateView(radius)
         log.debug("{}'s view moved to chunk {}, {}, so {} chunks came into it", player?.displayName, chunk.x, chunk.z, sent)
+    }
+
+    /**
+     * Counts how far the player falls, their feet having been at [fromY]:
+     * every block down while they're off the ground, as the game counts it,
+     * and none in water, on something they climb, or flying. Once they land,
+     * they land on what's under them, having fallen that far.
+     */
+    private fun fall(fromY: Float) {
+        val at = feet.toBlockPos()
+        when {
+            flying || gameMode == GameMode.SPECTATOR || world.isWet(at) || world.stateAt(at)?.name in CLIMBABLE -> fallDistance = 0f
+            onGround && delta.y <= 0f -> {
+                if (fallDistance > 0f) landOn(fallDistance)
+                fallDistance = 0f
+            }
+            feet.y < fromY -> fallDistance += fromY - feet.y
+        }
+    }
+
+    /**
+     * The player landing, having fallen [distance] blocks, on the block just
+     * under their feet: farmland may be trampled back to dirt, which breaks
+     * the crop on it a tick later, as everyone with the chunk sees.
+     */
+    private fun landOn(distance: Float) {
+        val on = BlockPos(floor(feet.x).toInt(), floor(feet.y - LANDING_DEPTH).toInt(), floor(feet.z).toInt())
+        if (!world.landOn(on, distance)) return
+        val changes = world.settle(listOf(on))
+        showAround(world.packetsFor(Changes(emptyMap(), (listOf(on) + changes.reshaped).distinct())))
+        log.debug("{} trampled the farmland at {}", player?.displayName, on)
     }
 
     /**
@@ -2704,6 +2751,7 @@ class Session(
         this.pitch = pitch
         headYaw = yaw
         teleportedTo = position
+        fallDistance = 0f
         send(MovePlayer(entityId, position, pitch, yaw, yaw, onGround = false, teleport = true))
         viewCentre = position.toBlockPos().chunk
         chunkRadius?.let { updateView(it) }

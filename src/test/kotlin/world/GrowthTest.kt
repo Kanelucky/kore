@@ -9,6 +9,7 @@ import kotlin.random.Random
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
@@ -111,6 +112,19 @@ class GrowthTest {
         }
         world.tickBlocks()
         assertTrue((0 until 7).all { nameAt(BlockPos(it * 2, above.y, 0)) == "minecraft:farmland" })
+    }
+
+    @Test
+    fun `falling onto farmland tramples it, likelier the further the fall, and never from half a block`() {
+        put(above, "minecraft:farmland")
+        assertTrue((1..100).none { world.landOn(above, 0.5f, Random(it)) })
+        assertEquals("minecraft:farmland", nameAt(above))
+        val tries = (1..1000).count { put(above, "minecraft:farmland"); world.landOn(above, 1f, Random(it)) }
+        assertTrue(tries in 400..600, "$tries") // Half the time from a block up
+        put(above, "minecraft:farmland")
+        assertTrue(world.landOn(above, 1.5f))
+        assertEquals("minecraft:dirt", nameAt(above))
+        assertFalse(world.landOn(ground, 10f)) // Stone takes it
     }
 
     @Test
