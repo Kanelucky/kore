@@ -22,6 +22,9 @@ private const val BAMBOO_LEAVES = "bamboo_leaf_size"
 private const val BAMBOO_THICKNESS = "bamboo_stalk_thickness"
 internal const val BAMBOO_DONE = "age_bit"
 
+/** A sapling's age: whether it's past its first stage, and grows into its tree next. */
+internal const val SAPLING_AGE = "age_bit"
+
 internal const val GRASS_BLOCK = "minecraft:grass_block"
 internal const val MYCELIUM = "minecraft:mycelium"
 internal const val REEDS = "minecraft:reeds"
@@ -50,8 +53,8 @@ private const val ICE = "minecraft:ice"
 private const val FROSTED_ICE = "minecraft:frosted_ice"
 private const val BUDDING_AMETHYST = "minecraft:budding_amethyst"
 private const val DRIPSTONE_BLOCK = "minecraft:dripstone_block"
-private const val MUD = "minecraft:mud"
-private const val CLAY = "minecraft:clay"
+internal const val MUD = "minecraft:mud"
+internal const val CLAY = "minecraft:clay"
 
 /** The crops that grow through eight stages on farmland, from seed to harvest. */
 internal val CROPS = setOf("minecraft:wheat", "minecraft:carrots", "minecraft:potatoes", "minecraft:beetroot")
@@ -90,8 +93,8 @@ private const val GROWING_LIGHT = 9
 /** The blocks' light at which ice and snow melt, from it up. */
 private const val MELTING_LIGHT = 12
 
-/** How far from wood, in steps through leaves, leaves stay. */
-private const val LEAF_REACH = 4
+/** How far from wood, in steps through leaves, leaves stay: far enough for the furthest leaves of the trees the game grows. */
+private const val LEAF_REACH = 7
 
 /** How far around itself a block of copper looks at other copper as it weathers. */
 private const val WEATHERING_REACH = 4
@@ -113,7 +116,7 @@ private const val DRIPSTONE_LENGTH = 7
 private val BUD_STAGES = listOf("minecraft:small_amethyst_bud", "minecraft:medium_amethyst_bud", "minecraft:large_amethyst_bud", "minecraft:amethyst_cluster")
 
 /** Wood, which keeps the leaves near it on their tree: logs and wood of every kind, stripped or not, and the nether's stems. */
-private val BlockState.holdsLeaves: Boolean
+internal val BlockState.holdsLeaves: Boolean
     get() = name.endsWith("_log") || name.endsWith("_wood") || name.endsWith("_hyphae") ||
         name.removePrefix("minecraft:stripped_").removePrefix("minecraft:") in setOf("crimson_stem", "warped_stem")
 
@@ -145,6 +148,8 @@ private val RANDOM_TICKERS = listOf(
     RandomTicker({ it.isCaveVines }, FlatWorld::growCaveVines),
     RandomTicker({ it.name == TWISTING_VINES || it.name == WEEPING_VINES }, FlatWorld::growNetherVines),
     RandomTicker({ it.name == MANGROVE_PROPAGULE }, FlatWorld::growPropagule),
+    RandomTicker({ it.isSapling }, FlatWorld::growSapling),
+    RandomTicker({ it.isMushroom }, FlatWorld::spreadMushroom),
     RandomTicker({ it.name == GRASS_BLOCK || it.name == MYCELIUM }, FlatWorld::spreadGrass),
     RandomTicker({ it.name == FARMLAND }, FlatWorld::moisten),
     RandomTicker({ it.fallsWithoutWood }, FlatWorld::decay),
@@ -483,10 +488,33 @@ internal fun FlatWorld.growNetherVines(end: BlockPos, state: BlockState, length:
     }
 }
 
-/** A mangrove propagule hanging from leaves growing a stage. One on the ground grows into a tree, which Kore doesn't grow yet. */
+/** A mangrove propagule hanging from leaves growing a stage, or one planted growing into a mangrove a seventh of the time. */
 private fun FlatWorld.growPropagule(pos: BlockPos, state: BlockState, growing: Growing) {
     val stage = state.number(PROPAGULE_STAGE)
-    if (state.properties[HANGING] == 1.toByte() && stage < MAX_PROPAGULE_STAGE) grow(pos, state, growing, PROPAGULE_STAGE to stage + 1)
+    if (state.properties[HANGING] == 1.toByte()) {
+        if (stage < MAX_PROPAGULE_STAGE) grow(pos, state, growing, PROPAGULE_STAGE to stage + 1)
+    } else if (growing.random.nextInt(7) == 0) {
+        growTree(pos, state, growing.random)?.let(growing.changed::addAll)
+    }
+}
+
+/** A sapling growing a stage a seventh of the time, in light enough above it: first older, then into its tree, if there's room. */
+private fun FlatWorld.growSapling(pos: BlockPos, state: BlockState, growing: Growing) {
+    if (growing.random.nextInt(7) == 0 && internalLightAt(pos.above) >= GROWING_LIGHT) advanceSapling(pos, state, growing.random, growing.changed)
+}
+
+/**
+ * The sapling [state] at [pos] a stage on: older, or once older, into its
+ * tree, if there's room. Notes where blocks changed in [changed]. Returns
+ * whether anything did.
+ */
+internal fun FlatWorld.advanceSapling(pos: BlockPos, state: BlockState, random: Random, changed: MutableCollection<BlockPos>): Boolean {
+    if (state.properties[SAPLING_AGE] == 0.toByte()) {
+        set(pos, blocks.find(state.name, state.properties + (SAPLING_AGE to bit(true))) ?: return false)
+        changed += pos
+        return true
+    }
+    return growTree(pos, state, random)?.let(changed::addAll) != null
 }
 
 /**
@@ -543,7 +571,7 @@ internal fun FlatWorld.farmlandCovered(pos: BlockPos) = stateAt(pos.above)?.isFu
 
 /**
  * Leaves of a tree that something beside changed looking again for wood:
- * those with wood within four steps through leaves stay, and stop
+ * those with wood within seven steps through leaves stay, and stop
  * looking, and the rest decay, dropping what leaves drop.
  */
 private fun FlatWorld.decay(pos: BlockPos, state: BlockState, growing: Growing) {
@@ -570,11 +598,14 @@ private fun FlatWorld.woodNear(pos: BlockPos): Boolean {
 /**
  * Marks the leaves of trees beside [changed] to look again for wood the
  * next time a random tick lands on them, as anything beside leaves
- * changing does. Returns where they were.
+ * changing does. Leaves that changed themselves, as a tree's own do as it
+ * grows, aren't. Returns where they were.
  */
 internal fun FlatWorld.wakeLeaves(changed: Collection<BlockPos>): List<BlockPos> {
     val woken = mutableListOf<BlockPos>()
+    val itself = changed.toHashSet()
     for (at in changed.flatMap { pos -> Face.entries.map(pos::side) }.distinct()) {
+        if (at in itself) continue
         val leaves = stateAt(at)?.takeIf { it.fallsWithoutWood && it.properties[LEAF_UPDATE] == 0.toByte() } ?: continue
         set(at, blocks.find(leaves.name, leaves.properties + (LEAF_UPDATE to bit(true))) ?: continue)
         woken += at
@@ -722,9 +753,12 @@ private fun FlatWorld.growStalagmite(tip: BlockPos, state: BlockState, growing: 
  * Whether [block], one that stands on the ground, can stand on [ground]:
  * crops and stems on farmland, sugar cane on sand or the like, or more
  * cane, cactus on sand or more cactus, nether wart on soul sand, and
- * berries on dirt of some kind. Null for a plant that stands on anything.
+ * berries and saplings on dirt of some kind, and a planted mangrove
+ * propagule on clay too. Null for a plant that stands on anything.
  */
 internal fun standsOn(block: BlockState, ground: BlockState): Boolean? = when {
+    block.isSapling -> ground.name in DIRTS
+    block.name == MANGROVE_PROPAGULE && block.properties[HANGING] == 0.toByte() -> ground.name in DIRTS || ground.name == CLAY
     block.name in CROPS || block.name in STEM_FRUIT || block.name == TORCHFLOWER_CROP -> ground.name == FARMLAND
     block.name == PITCHER_CROP -> if (block.properties[UPPER_BLOCK] == 1.toByte()) ground.name == PITCHER_CROP else ground.name == FARMLAND
     block.name == REEDS -> ground.name == REEDS || ground.name in CANE_SOIL

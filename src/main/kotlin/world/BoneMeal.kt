@@ -58,6 +58,13 @@ private const val FLOWER_TRIES = 8
 /** How tall a small dripleaf grows into a big one with bone meal, from the least to the most. */
 private val DRIPLEAF_HEIGHT = 2..5
 
+/** The azaleas, which bone meal grows into azalea trees. */
+private val AZALEAS = setOf("minecraft:azalea", "minecraft:flowering_azalea")
+
+/** The chance a bone meal grows a sapling a stage, or an azalea or propagule into a tree, and a mushroom or fungus huge. */
+private const val TREE_CHANCE = 0.45
+private const val HUGE_CHANCE = 0.4
+
 /**
  * Bone meal used on the block at [pos], [state], as Bedrock has it, if it
  * grows it. Crops and stems grow two to five stages, and torchflower and
@@ -69,6 +76,11 @@ private val DRIPLEAF_HEIGHT = 2..5
  * hanging moss grow on, and bushes and dry grass spread beside them. A big
  * dripleaf grows a block taller, and a small one into a big one. Rooted
  * dirt grows hanging roots below it, and mangrove leaves a propagule.
+ * Saplings grow a stage now and then, azaleas and planted propagules into
+ * trees, and mushrooms and fungi on their own ground into huge ones, if
+ * there's room: a bone meal that doesn't bring that about is still used
+ * up, but one that would, but for the room, isn't. Nylium sprouts roots
+ * and fungi round it, and netherrack beside nylium turns to it.
  *
  * Returns what it did, with bone meal's particles, using up a bone meal,
  * and what dropped, made with [items], or null for a block bone meal does
@@ -125,14 +137,27 @@ fun FlatWorld.fertilize(pos: BlockPos, state: BlockState, items: ItemStacks, ran
         name == SMALL_DRIPLEAF -> growSmallDripleaf(pos, state, random, changed)
         name == ROOTED_DIRT -> hangBelow(pos, HANGING_ROOTS, changed)
         name == MANGROVE_LEAVES -> hangBelow(pos, MANGROVE_PROPAGULE, changed, HANGING to bit(true))
-        name == MANGROVE_PROPAGULE -> state.properties[HANGING] == 1.toByte() && state.number(PROPAGULE_STAGE) < MAX_PROPAGULE_STAGE &&
+        name == MANGROVE_PROPAGULE && state.properties[HANGING] == 1.toByte() -> state.number(PROPAGULE_STAGE) < MAX_PROPAGULE_STAGE &&
             change(pos, state, changed, PROPAGULE_STAGE to state.number(PROPAGULE_STAGE) + 1)
+        state.isSapling -> canGrowTree(pos, state) && (random.nextDouble() >= TREE_CHANCE || advanceSapling(pos, state, random, changed))
+        name == MANGROVE_PROPAGULE || name in AZALEAS -> liquidHere(pos.above) == null &&
+            (random.nextDouble() >= TREE_CHANCE || growTree(pos, state, random)?.let(changed::addAll) != null)
+        state.isMushroom -> stateAt(pos.below)?.name.let { it in DIRTS || it in setOf(MYCELIUM, "minecraft:podzol", CRIMSON_NYLIUM, WARPED_NYLIUM) } &&
+            (random.nextDouble() >= HUGE_CHANCE || growHugeMushroom(pos, state, random)?.let(changed::addAll) != null)
+        name == CRIMSON_FUNGUS || name == WARPED_FUNGUS -> onOwnNylium(pos, state) &&
+            (random.nextDouble() >= HUGE_CHANCE || growHugeFungus(pos, state, random)?.let(changed::addAll) != null)
+        name == CRIMSON_NYLIUM || name == WARPED_NYLIUM -> {
+            val room = stateAt(pos.above)?.name == AIR
+            if (room) sproutNylium(pos, state, random, changed)
+            room
+        }
+        name == NETHERRACK -> nyliumBeside(pos).takeIf { it.isNotEmpty() }?.let { change(pos, blocks.defaultOf(it.random(random)) ?: return null, changed) } == true
         name in BUSHES -> spreadBeside(pos, name, changed, random) { it.name in DIRTS }
         name == TALL_DRY_GRASS -> spreadBeside(pos, SHORT_DRY_GRASS, changed, random) { it.name in DIRTS || it.name in DRY_SOIL || it.name.endsWith("terracotta") }
         else -> false
     }
     if (!grew) return null
-    val area = name == GRASS_BLOCK || name in SPREADING_FLOWERS
+    val area = name == GRASS_BLOCK || name in SPREADING_FLOWERS || name == CRIMSON_NYLIUM || name == WARPED_NYLIUM
     return ItemUsedOn(
         changed, held = HeldAfter.USED_UP, dropped = dropped, dropAt = pos,
         events = listOf(WorldEvent(pos, GROWTH_PARTICLES, if (area) 1 else 0, centred = false)),

@@ -88,7 +88,8 @@ private val LEAF_SAPLINGS = mapOf(
     "oak" to "oak_sapling", "spruce" to "spruce_sapling", "birch" to "birch_sapling", "jungle" to "jungle_sapling",
     "acacia" to "acacia_sapling", "dark_oak" to "dark_oak_sapling", "cherry" to "cherry_sapling", "pale_oak" to "pale_oak_sapling",
     "azalea" to "azalea",
-).entries.associate { (kind, sapling) -> "minecraft:${kind}_leaves" to "minecraft:$sapling" } + ("minecraft:azalea_leaves_flowered" to "minecraft:flowering_azalea")
+).entries.associate { (kind, sapling) -> "minecraft:${kind}_leaves" to "minecraft:$sapling" } + ("minecraft:azalea_leaves_flowered" to "minecraft:flowering_azalea") +
+    listOf("orange", "yellow", "red").associate { "minecraft:${it}_poplar_leaves" to "minecraft:poplar_sapling" }
 
 // The chance of each of what leaves drop, by Fortune's level: a sapling, a jungle sapling, sticks, and an apple from oak and dark oak.
 private val SAPLING_CHANCE = listOf(1 / 20.0, 1 / 16.0, 1 / 12.0, 1 / 10.0)
@@ -216,6 +217,12 @@ class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: Bl
                     stacks.of("minecraft:apple")?.let(::add)
                 }
             }
+            // Up to two of the mushroom a huge mushroom's cap is of, most of the time none, and nothing from its stem.
+            name == "minecraft:brown_mushroom_block" || name == "minecraft:red_mushroom_block" -> {
+                val count = random.nextInt(-6, 3)
+                if (count > 0) listOfNotNull(stacks.of(name.removeSuffix("_block"), count)) else emptyList()
+            }
+            name == "minecraft:mushroom_stem" -> emptyList()
             name in setOf("minecraft:short_grass", "minecraft:fern", "minecraft:tall_grass", "minecraft:large_fern") ->
                 if (random.nextDouble() < SEED_CHANCE) listOfNotNull(stacks.of("minecraft:wheat_seeds", 1 + random.nextInt(fortune * 2 + 1))) else emptyList()
             else -> null

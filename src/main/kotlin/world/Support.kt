@@ -234,7 +234,8 @@ internal fun FlatWorld.holdsUp(holderPos: BlockPos, face: Face, block: BlockStat
 
 /**
  * Whether [state] can stay at [pos]: whatever holds it up is still there,
- * a cactus has no block beside it, and sugar cane has water by it.
+ * a cactus has no block beside it, sugar cane has water by it, and a
+ * mushroom is on its own ground, or in dim light.
  * Scaffolding stays within reach of what holds it, and vines and glow
  * lichen keep at least one face. Farmland can't stay farmland under a
  * whole block.
@@ -244,6 +245,7 @@ internal fun FlatWorld.survives(pos: BlockPos, state: BlockState): Boolean {
     if (holder != null && !holdsUp(pos.side(holder), holder.opposite, state)) return false
     if (state.name == CACTUS && AROUND.any { stateAt(pos.side(it))?.isFullCube == true }) return false
     if (state.name == REEDS && !caneWatered(pos)) return false
+    if (state.isMushroom && !mushroomSurvives(pos)) return false
     if (state.name == SCAFFOLDING && scaffoldingDistance(pos) >= SCAFFOLDING_MAX_DISTANCE) return false
     if (state.name == FARMLAND && farmlandCovered(pos)) return false
     return true

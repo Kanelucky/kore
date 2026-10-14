@@ -166,7 +166,7 @@ class GrowthTest {
     }
 
     @Test
-    fun `leaves decay once their wood is gone, but not those a player placed, nor those with wood within four`() {
+    fun `leaves decay once their wood is gone, but not those a player placed, nor those with wood within seven`() {
         put(above, "minecraft:oak_log")
         put(twoUp, "minecraft:oak_leaves")
         world[above] = blocks.stateOf(AIR)
@@ -179,12 +179,13 @@ class GrowthTest {
         tick(twoUp)
         assertEquals("minecraft:oak_leaves", nameAt(twoUp))
 
-        // A row of leaves from a log: the fourth along stays, and stops looking.
+        // A row of leaves from a log: the seventh along stays, and stops looking, but the eighth decays.
         val log = BlockPos(10, above.y, 0)
         put(log, "minecraft:oak_log")
-        for (step in 1..4) put(log.side(Face.EAST, step), "minecraft:oak_leaves", LEAF_UPDATE to 1.toByte())
-        tick(log.side(Face.EAST, 4))
-        assertEquals(0.toByte(), world.stateAt(log.side(Face.EAST, 4))?.properties?.get(LEAF_UPDATE))
+        for (step in 1..8) put(log.side(Face.EAST, step), "minecraft:oak_leaves", LEAF_UPDATE to 1.toByte())
+        tick(log.side(Face.EAST, 7))
+        assertEquals(0.toByte(), world.stateAt(log.side(Face.EAST, 7))?.properties?.get(LEAF_UPDATE))
+        assertTrue(log.side(Face.EAST, 8) in tick(log.side(Face.EAST, 8)).broken)
     }
 
     @Test

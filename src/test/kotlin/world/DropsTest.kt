@@ -121,6 +121,14 @@ class DropsTest {
     }
 
     @Test
+    fun `poplar leaves drop poplar saplings, and huge mushrooms up to two mushrooms, but nothing from their stems`() {
+        assertTrue((1..2000).flatMap { dropOf("minecraft:red_poplar_leaves") }.contains("minecraft:poplar_sapling"))
+        assertEquals((0..2).toSet(), counts("minecraft:brown_mushroom_block", null).toSet())
+        assertTrue(dropOf("minecraft:red_mushroom_block").all { it == "minecraft:red_mushroom" })
+        assertEquals(emptyList(), dropOf("minecraft:mushroom_stem"))
+    }
+
+    @Test
     fun `what a frame or flower pot holds drops with it`() {
         val diamond = ItemStack(data.items.first { it.name == "minecraft:diamond" })
         val frame = NbtMap.builder().putString("id", "ItemFrame").putCompound("Item", ItemStacks.nbtOf(diamond, 0)).build()
