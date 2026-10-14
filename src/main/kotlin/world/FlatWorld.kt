@@ -2,6 +2,7 @@ package org.koremc.world
 
 import org.cloudburstmc.nbt.NbtMap
 import org.koremc.inventory.Container
+import org.koremc.protocol.Difficulty
 import org.koremc.registry.AIR
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockPalette
@@ -315,6 +316,9 @@ class FlatWorld(
 
     /** The climate of [biome]: how warm it is, and what falls from the sky when it rains, and how deep snow piles up. */
     var climate = climate
+
+    /** How hard the game is, which fire spreads faster the harder it is, and lightning sets fires at all only at normal or hard. */
+    var difficulty = Difficulty.NORMAL
 
     /** The weather. */
     var weather = Weather()

@@ -167,3 +167,6 @@ private fun FlatWorld.snowOn(top: BlockPos): BlockPos? {
     set(at, settled)
     return at
 }
+
+/** Whether rain is falling at [pos]: it's raining, it's rain rather than snow there, and nothing's above it. */
+internal fun FlatWorld.rainingAt(pos: BlockPos): Boolean = weather.raining && precipitationAt(pos) == Precipitation.RAIN && topOf(pos.x, pos.z).y <= pos.y

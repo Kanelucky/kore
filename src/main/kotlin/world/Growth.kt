@@ -156,6 +156,7 @@ private val RANDOM_TICKERS = listOf(
     RandomTicker({ it.name == FARMLAND }, FlatWorld::moisten),
     RandomTicker({ it.fallsWithoutWood }, FlatWorld::decay),
     RandomTicker({ it.name == ICE }, FlatWorld::meltIce),
+    RandomTicker({ it.liquid == Liquid.LAVA }, FlatWorld::lavaSetsFire),
     RandomTicker({ it.name == SNOW_LAYER }, FlatWorld::meltSnow),
     RandomTicker({ weathers(it) }, FlatWorld::weather),
     RandomTicker({ it.name == BUDDING_AMETHYST }, FlatWorld::growBud),

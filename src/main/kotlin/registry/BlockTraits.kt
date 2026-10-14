@@ -30,14 +30,18 @@ data class BlockTrait(
     val holdsWater: Boolean = false,
     /** How bright the light the block gives off is, from none to 15, as a torch's 14. */
     val lightEmission: Int = 0,
+    /** How readily fire beside the block catches on it, spreading to the air around it, from none up. */
+    val flameOdds: Int = 0,
+    /** How readily fire beside the block burns it away, from none up. */
+    val burnOdds: Int = 0,
 )
 
 /**
  * What the game says of every block state besides its name and
  * properties, by network ID: the colour it shows on maps, how much light
- * it stops and gives off, and what liquid does to it. A block state with
- * nothing said shows nothing on maps, stops no light and gives off none,
- * stops liquid and holds none.
+ * it stops and gives off, what liquid does to it, and how it burns. A
+ * block state with nothing said shows nothing on maps, stops no light and
+ * gives off none, stops liquid and holds none, and doesn't burn.
  */
 class BlockTraits(private val byNetworkId: Map<Int, BlockTrait>) {
     operator fun get(networkId: Int): BlockTrait = byNetworkId[networkId] ?: NOTHING
@@ -65,6 +69,8 @@ private class StateEntry(
     val lightEmission: Int = 0,
     val liquidReactionOnTouch: String = "BLOCKING",
     val canContainLiquidSource: Boolean = false,
+    val flameOdds: Int = 0,
+    val burnOdds: Int = 0,
 )
 
 /** What blocks do when liquid flows into them, by the names AllayMC's data gives them. */
@@ -92,6 +98,7 @@ internal fun readBlockTraits(text: String): BlockTraits {
             entry.blockStateHash.toInt() to BlockTrait(
                 argb, TINTS[entry.tintMethod] ?: Tint.NONE, entry.lightDampening,
                 LIQUID_REACTIONS[entry.liquidReactionOnTouch] ?: LiquidReaction.BLOCKING, entry.canContainLiquidSource, entry.lightEmission,
+                entry.flameOdds, entry.burnOdds,
             )
         },
     )

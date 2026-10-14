@@ -123,7 +123,8 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 - **Maps:** drawn as players explore, locator maps, and zooming out, copying and locking them.
 - **Redstone:** levers, buttons, pressure plates, redstone blocks, torches, dust, repeaters, comparators and observers, powering doors, trapdoors, fence gates, lamps, note blocks, hoppers, dispensers and droppers.
 - **Water and lava:** flowing as in the game, buckets, water inside blocks like fences and stairs, lava and water making obsidian, cobblestone and stone, and concrete powder hardening.
-- **Time and weather:** day and night, rain and thunderstorms in their own time, lightning drawn to lightning rods, rain filling cauldrons, daylight detectors, and the game rules, saved with the world.
+- **Time and weather:** day and night, rain and thunderstorms in their own time, lightning drawn to lightning rods, rain and snow filling cauldrons, snow settling and water freezing in the cold, daylight detectors, and the game rules, saved with the world.
+- **Fire:** flint and steel and fire charges, fire spreading, burning and burning out, started by lightning and lava, and nether portals opening in obsidian frames.
 - **Growth:** light, crops, stems, sugar cane, cactus, bamboo, berries and vines growing, saplings growing into every kind of tree, huge mushrooms and fungi, grass spreading, farmland drying, leaves decaying, ice and snow melting, copper weathering, amethyst and dripstone, bone meal, and picking berries.
 - **Pistons:** pushing and pulling blocks, slime and honey, flying machines, chests and furnaces with their contents, and the players, items and orbs in the way or on top.
 - **Finding the server:** its name and players in the server list, and listed with LAN games on the local network.

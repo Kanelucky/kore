@@ -157,7 +157,8 @@ internal fun FlatWorld.topOf(x: Int, z: Int): BlockPos {
  * Strikes lightning at [pos], or at the nearest lightning rod that draws
  * it there. A rod it strikes gives power for a moment, and copper it
  * strikes, or a rod's on, is scraped clean, with copper around it a stage
- * cleaner here and there, where blocks change going in [changed] and the
+ * cleaner here and there, and fires start where it strikes, as
+ * [lightningFires] has it, where blocks change going in [changed] and the
  * particles in [events]. Returns the bolt.
  */
 internal fun FlatWorld.strike(pos: BlockPos, changed: MutableList<BlockPos>, events: MutableList<WorldEvent>, random: Random = Random.Default): LightningBolt {
@@ -171,6 +172,7 @@ internal fun FlatWorld.strike(pos: BlockPos, changed: MutableList<BlockPos>, eve
         schedule(struck, ROD_POWER_TICKS, BlockUpdate.ROD)
     }
     cleanCopper(struck, changed, events, random)
+    changed += lightningFires(target, random)
     return bolt
 }
 

@@ -243,6 +243,10 @@ import org.koremc.world.facing
 import org.koremc.world.fertilize
 import org.koremc.world.fillBucket
 import org.koremc.world.fillPortalFrame
+import org.koremc.world.FIRE_CHARGE
+import org.koremc.world.FLINT_AND_STEEL
+import org.koremc.world.ignite
+import org.koremc.world.putOutFire
 import org.koremc.world.furnaceKind
 import org.koremc.world.goesOnLectern
 import org.koremc.world.harvests
@@ -1790,7 +1794,8 @@ class Session(
      * jukebox, composter or cauldron, or on a note block, which a click
      * tunes, but for a head put on its top. Whether or not, bone meal grows
      * what it grows, as [fertilize] has it, an eye of ender goes into an end
-     * portal frame, and a tool or honeycomb works on the block, as
+     * portal frame, flint and steel or a fire charge starts a fire, as
+     * [ignite] has it, and a tool or honeycomb works on the block, as
      * [useToolOn] has it. Everyone with the chunk sees and hears it, and a
      * disc going into a jukebox says what's playing. Outside creative, what's
      * used up goes from the player's hand, or swaps for what's left of it,
@@ -1817,6 +1822,7 @@ class Session(
             blockFirst && clicked.isCauldron -> world.useCauldron(pos, clicked, held, game.items)
             boneMeal -> world.fertilize(pos, clicked, game.items)
             held?.item?.name == ENDER_EYE -> world.fillPortalFrame(pos, clicked)
+            held?.item?.name == FLINT_AND_STEEL || held?.item?.name == FIRE_CHARGE -> world.ignite(pos, face, held)
             held != null -> world.useToolOn(pos, face, held, facing(yaw), game.items)
             else -> null
         } ?: return false
@@ -2591,17 +2597,29 @@ class Session(
      * carries at the client's [tick]. Everyone with the chunk sees cracks
      * spread over a block the player starts on, at the pace it breaks at,
      * and bits fly off it each tick. In creative, blocks break at once, so
-     * there's nothing to see.
+     * there's nothing to see. Starting on a block with fire on the face
+     * they hit puts the fire out instead, in creative too.
      */
     private fun onBlockActions(actions: List<BlockAction>, tick: Long) {
-        if (gameMode != GameMode.SURVIVAL) return
         for (action in actions) {
+            if (action.action == PlayerAction.START_DESTROY_BLOCK && putOutFire(action.position, action.face)) continue
+            if (gameMode != GameMode.SURVIVAL) continue
             when (action.action) {
                 PlayerAction.START_DESTROY_BLOCK -> startBreaking(action.position, tick)
                 PlayerAction.CRACK_BLOCK -> crack(action.position, action.face)
                 PlayerAction.ABORT_DESTROY_BLOCK, PlayerAction.STOP_DESTROY_BLOCK -> stopBreaking()
             }
         }
+    }
+
+    /** Puts out the fire on the [face] of the block at [pos], for everyone around to see and hear, if the player can. Returns whether there was fire there. */
+    private fun putOutFire(pos: BlockPos, face: Int): Boolean {
+        val side = Face.of(face) ?: return false
+        if (!canBuild() || !inReach(pos)) return false
+        val changes = world.putOutFire(pos, side) ?: return false
+        showAround(world.packetsFor(changes))
+        log.debug("{} put out the fire at {}", player?.displayName, pos.side(side))
+        return true
     }
 
     private fun startBreaking(pos: BlockPos, tick: Long) {

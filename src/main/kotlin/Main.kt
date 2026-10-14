@@ -96,6 +96,7 @@ fun main() {
     // A world made before keeps its own game mode, unless force-gamemode says otherwise, and its own seed.
     val running = config.copy(gameMode = storage.settings.gameMode, seed = storage.settings.seed)
     storage.world.features = config.features
+    storage.world.difficulty = config.difficulty
     config.features.off.takeIf { it.isNotEmpty() }?.let { log.info("Running without {}, as {} switches them off", it.joinToString(), KORE_JSON) }
     // One thread carries every client's UDP traffic and runs every session, so the world needs no locks.
     val loop = NioEventLoopGroup(1)

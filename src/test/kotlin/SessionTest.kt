@@ -83,6 +83,7 @@ import org.koremc.registry.withDamage
 import org.koremc.registry.withEnchantments
 import org.koremc.world.BlockPos
 import org.koremc.world.ChunkPos
+import org.koremc.world.centre
 import org.koremc.world.Drops
 import org.koremc.world.tickItems
 import org.koremc.world.Face
@@ -194,7 +195,8 @@ class SessionTest {
     private val cauldrons = (0..6).map { level -> state("minecraft:cauldron", "cauldron_liquid" to "water", "fill_level" to level) }
     private val jukebox = BlockState("minecraft:jukebox", NbtMap.EMPTY, version = 18168865)
     private val noteBlock = BlockState("minecraft:noteblock", NbtMap.EMPTY, version = 18168865)
-    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, dirt, wheat, frame, poppy, jukebox, noteBlock) + pots + cauldrons + levers + buttons + doors + fences + water)
+    private val fire = state("minecraft:fire", "age" to 0)
+    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, dirt, wheat, frame, poppy, jukebox, noteBlock, fire) + pots + cauldrons + levers + buttons + doors + fences + water)
     private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
@@ -1042,6 +1044,23 @@ class SessionTest {
 
         clientSends(breakingInput(tick = 202, ABORT_DESTROY to ground))
         assertContentEquals(LevelEvent(LevelEvent.STOP_BLOCK_CRACKING, Vec3(1f, -64f, 0f), 0).encode(), receivedPacket())
+    }
+
+    @Test
+    fun `hitting a block with fire on the face hit puts the fire out, with its sound, and leaves the block, in creative too`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        val ground = BlockPos(1, -64, 0)
+        val onTop = ground.side(Face.UP)
+        world[onTop] = fire
+        sent.clear()
+
+        clientSends(breakingInput(tick = 200, START_DESTROY to ground))
+        assertEquals(air, world.stateAt(onTop))
+        assertEquals(stone, world.stateAt(ground))
+        val packets = receivedPackets()
+        assertTrue(packets.any { it.contentEquals(UpdateBlock(onTop, air.networkId).encode()) })
+        assertTrue(packets.any { it.contentEquals(LevelSoundEvent("extinguish.fire", onTop.centre, -1).encode()) })
     }
 
     @Test

@@ -4,6 +4,7 @@ import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
+import kotlin.random.Random
 
 /**
  * A block that broke, with the data it kept, like a bed's colour, which
@@ -98,6 +99,9 @@ enum class BlockUpdate {
 
     /** A struck lightning rod stopping giving power. */
     ROD,
+
+    /** Fire burning what's around it, spreading or burning out. */
+    FIRE,
 }
 
 /**
@@ -109,7 +113,8 @@ enum class BlockUpdate {
  */
 internal val BlockState.dueFor: List<BlockUpdate>
     get() {
-        val held = heldFrom != null || name == CACTUS || name == SCAFFOLDING || name == FARMLAND || MULTI_FACE in properties || VINE_FACES in properties
+        val held = heldFrom != null || name == CACTUS || name == SCAFFOLDING || name == FARMLAND || MULTI_FACE in properties || VINE_FACES in properties ||
+            isFire || name == NETHER_PORTAL
         val own = when {
             isRedstoneTorch -> BlockUpdate.TORCH
             isRepeater -> BlockUpdate.REPEATER
@@ -124,6 +129,7 @@ internal val BlockState.dueFor: List<BlockUpdate>
             name.endsWith("button") -> BlockUpdate.BUTTON
             name == COMPOSTER -> BlockUpdate.COMPOST
             rodPowered -> BlockUpdate.ROD
+            name == FIRE -> BlockUpdate.FIRE
             fallsFreely -> BlockUpdate.FALL
             liquid != null -> BlockUpdate.FLOW
             else -> null
@@ -238,9 +244,12 @@ internal fun FlatWorld.holdsUp(holderPos: BlockPos, face: Face, block: BlockStat
  * mushroom is on its own ground, or in dim light.
  * Scaffolding stays within reach of what holds it, and vines and glow
  * lichen keep at least one face. Farmland can't stay farmland under a
- * whole block.
+ * whole block. Fire needs something to burn on, as [fireStays] has it, and
+ * a nether portal its frame.
  */
 internal fun FlatWorld.survives(pos: BlockPos, state: BlockState): Boolean {
+    if (state.isFire) return fireStays(pos, state)
+    if (state.name == NETHER_PORTAL) return portalHeld(pos, state)
     val holder = state.heldFrom
     if (holder != null && !holdsUp(pos.side(holder), holder.opposite, state)) return false
     if (state.name == CACTUS && AROUND.any { stateAt(pos.side(it))?.isFullCube == true }) return false
@@ -318,8 +327,9 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
  * with nothing under them fall, and falling blocks fall on, landing or
  * dropping as items. Coral out of water dies, big dripleaves tip over or
  * right themselves, pressed buttons pop back out, full composters ready
- * their bone meal, jukebox songs end, and cauldrons under water fill with
- * it. The world settles around what changed, which can leave more for
+ * their bone meal, jukebox songs end, fire burns, by [random], and
+ * cauldrons under water fill with it. A nether portal out of its frame
+ * closes. The world settles around what changed, which can leave more for
  * later ticks. Run once a tick. Returns what broke, where blocks changed
  * shape, the sounds they made, and the falling blocks that drop as items.
  *
@@ -327,7 +337,7 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
  * falling, with snow and dripstone breaking instead, no flowing, and no
  * redstone component answering what powers it.
  */
-fun FlatWorld.tickBlocks(): Changes {
+fun FlatWorld.tickBlocks(random: Random = Random.Default): Changes {
     blockTicks++
     val reshaped = LinkedHashSet<BlockPos>()
     val data = LinkedHashSet<BlockPos>()
@@ -351,6 +361,10 @@ fun FlatWorld.tickBlocks(): Changes {
         val state = stateAt(at)?.takeIf { it.name != AIR } ?: continue
         when (update) {
             BlockUpdate.SUPPORT -> if (!survives(at, state) || remainingFaces(at, state)?.isEmpty() == true) {
+                if (state.name == NETHER_PORTAL) {
+                    closeNetherPortal(at, broken)
+                    continue
+                }
                 if (state.name == FARMLAND) {
                     set(at, blocks.defaultOf(DIRT) ?: continue)
                     changed += at
@@ -396,6 +410,7 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.COMPOST -> if (readyCompost(at, state, sounds)) reshaped += at
             BlockUpdate.SONG -> endSong(at)
             BlockUpdate.ROD -> if (endRodPower(at, state)) reshaped += at
+            BlockUpdate.FIRE -> changed += tickFire(at, state, random)
         }
     }
     if (features.liquids) changed += fillFromAbove(since, events)
