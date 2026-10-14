@@ -255,8 +255,9 @@ internal fun FlatWorld.clip(box: Box, axis: Axis, by: Double): Double {
         if (by > 0 && box.max[a] <= block.min[a] + TOUCHING) allowed = minOf(allowed, block.min[a] - box.max[a])
         if (by < 0 && box.min[a] >= block.max[a] - TOUCHING) allowed = maxOf(allowed, block.max[a] - box.min[a])
     }
-    // Rounding can leave a hair of a gap either way, which isn't worth moving across.
-    return if (abs(allowed) < TOUCHING) 0.0 else allowed
+    // Rounding can leave the box a hair inside a block, which would move it back out the way it came: it stays put instead.
+    // A hair of a gap the way it's going it crosses, so it comes to rest on what it meets, rather than hovering just short of it.
+    return if (allowed * by < 0) 0.0 else allowed
 }
 
 private fun blocksAcross(box: Box, axis: Int) = floor(box.min[axis]).toInt()..floor(box.max[axis] - TOUCHING).toInt()

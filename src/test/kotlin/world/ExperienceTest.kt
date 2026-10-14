@@ -58,6 +58,19 @@ class ExperienceTest {
     }
 
     @Test
+    fun `an orb falling to a hair above the ground lands on it, rather than hovering there`() {
+        val stone = BlockState("minecraft:stone", NbtMap.EMPTY, 1)
+        val world = FlatWorld(BlockPalette(listOf(BlockState(AIR, NbtMap.EMPTY, 1), stone)), listOf(stone))
+        // Less than the hair that counts as touching above the ground, as a fall can leave an orb at the end of a tick.
+        val orb = world.spawnOrb(1, Vec3(0.5f, -62.99995f, 0.5f), Vec3(0f, 0f, 0f))
+
+        world.tickOrbs(emptyList())
+
+        assertEquals(-63f, orb.position.y)
+        assertTrue(orb.onGround)
+    }
+
+    @Test
     fun `a fraction of experience is the whole of it, and one more as often as the fraction says`() {
         val rolls = List(1000) { wholeExperience(2.25f) }
         assertTrue(rolls.all { it == 2 || it == 3 })
