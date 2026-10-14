@@ -4,6 +4,7 @@ import org.koremc.protocol.ContainerType
 import org.koremc.registry.BlockState
 import org.koremc.registry.Fuel
 import org.koremc.registry.ItemStack
+import org.koremc.registry.ItemStacks
 import org.koremc.registry.Recipes
 import kotlin.random.Random
 
@@ -44,9 +45,9 @@ class Dispenser(val kind: DispenserKind) : Machine(DISPENSER_SLOTS) {
 /**
  * A dispenser or dropper at [pos] firing out of its [facing] side, as
  * players see and hear it: an item coming out, with smoke, or, with
- * nothing in it to fire, a click.
+ * nothing in it to fire, a click, and what bone meal it fired [grew].
  */
-data class Fired(val pos: BlockPos, val facing: Face, val dispensed: Boolean)
+data class Fired(val pos: BlockPos, val facing: Face, val dispensed: Boolean, val grew: ItemUsedOn? = null)
 
 /**
  * Items a dispenser does more with than drop, which wait in it until Kore
@@ -56,7 +57,7 @@ data class Fired(val pos: BlockPos, val facing: Face, val dispensed: Boolean)
  */
 private val HELD = setOf(
     "arrow", "egg", "snowball", "experience_bottle", "splash_potion", "lingering_potion", "firework_rocket", "fire_charge",
-    "wind_charge", "trident", "tnt", "flint_and_steel", "bone_meal", "shears", "brush", "armor_stand", "carved_pumpkin",
+    "wind_charge", "trident", "tnt", "flint_and_steel", "shears", "brush", "armor_stand", "carved_pumpkin",
     "wither_skeleton_skull",
 )
 private val HELD_ENDINGS = listOf("_spawn_egg", "shulker_box")
@@ -67,17 +68,28 @@ private val HELD_ENDINGS = listOf("_spawn_egg", "shulker_box")
  * any, goes out of its front. A dropper passes it into the container it
  * faces, if there is one, by the face it reaches, as a hopper would, and
  * keeps it while that's full. Otherwise the item drops out, flying from
- * the front. A dispenser drops what Kore doesn't do more with yet, and
- * keeps the rest, as well as a minecart with a rail in front of it. With
- * nothing in it, it clicks. Returns what players see and hear, if
- * anything: passing an item into a container is quiet.
+ * the front. A dispenser uses bone meal on what's in front of it, or the
+ * seabed under the water there, as a player does, or clicks and keeps it
+ * if nothing grows, and what dropped out of what grew is made with
+ * [items]. It drops what Kore doesn't do more with yet, and keeps the
+ * rest, as well as a minecart with a rail in front of it. With nothing in
+ * it, it clicks. Returns what players see and hear, if anything: passing
+ * an item into a container is quiet.
  */
-internal fun FlatWorld.fire(pos: BlockPos, dispenser: Dispenser, recipes: Recipes, fuel: Fuel): Fired? {
+internal fun FlatWorld.fire(pos: BlockPos, dispenser: Dispenser, recipes: Recipes, fuel: Fuel, items: ItemStacks? = null): Fired? {
     val state = stateAt(pos) ?: return null
     val facing = Face.of(state.properties[FACING_DIRECTION] as? Int ?: Face.DOWN.ordinal) ?: Face.DOWN
     val slot = (0 until DISPENSER_SLOTS).filter { dispenser.slots[it] != null }.randomOrNull() ?: return Fired(pos, facing, dispensed = false)
     val there = dispenser.slots[slot]!!
     val front = pos.side(facing)
+    if (dispenser.kind == DispenserKind.DISPENSER && there.stack.item.name == BONE_MEAL) {
+        val inFront = stateAt(front) ?: return Fired(pos, facing, dispensed = false)
+        val grew = items?.let { fertilize(front, inFront, it) } ?: if (isWaterSource(front)) fertilizeSeabed(front.side(Face.DOWN)) else null
+        if (grew == null) return Fired(pos, facing, dispensed = false)
+        dispenser.slots[slot] = there.less(1)
+        if (grew.dropped.isNotEmpty()) dropFromBlock(grew.dropAt ?: front, grew.dropped)
+        return Fired(pos, facing, dispensed = true, grew = grew)
+    }
     if (dispenser.kind == DispenserKind.DROPPER) {
         val target = hopperReach(front, facing.opposite, recipes, fuel)
         if (target != null) {

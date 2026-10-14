@@ -1,11 +1,14 @@
 package org.koremc.world
 
+import org.koremc.inventory.SlotStack
 import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
+import org.koremc.registry.Fuel
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.VanillaData
 import org.koremc.registry.assumeGameData
 import org.koremc.registry.gameData
+import kotlin.math.abs
 import kotlin.random.Random
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -142,6 +145,98 @@ class BoneMealTest {
         assertEquals(CAVE_VINES, nameAt(vines))
         fertilize(vines)
         assertEquals(CAVE_VINES_BERRIES_HEAD, nameAt(vines))
+    }
+
+    /** The blocks [height] up from the ground, five each way across from the middle. */
+    private fun layer(height: Int) = (-5..5).flatMap { x -> (-5..5).map { z -> BlockPos(x, MIN_Y + height, z) } }
+
+    @Test
+    fun `moss spreads a patch of itself over the stone around it, growing azaleas, grass and carpets, and pale moss its own`() {
+        put(above, MOSS_BLOCK)
+        assertTrue(fertilize(above)!!.changed.isNotEmpty())
+        assertTrue(layer(0).count { nameAt(it) == MOSS_BLOCK } >= 4, "stone covered")
+        val plants = setOf("minecraft:azalea", "minecraft:flowering_azalea", "minecraft:short_grass", "minecraft:tall_grass", "minecraft:moss_carpet")
+        assertTrue(layer(1).any { nameAt(it) in plants })
+
+        startWorld()
+        put(above, PALE_MOSS_BLOCK)
+        fertilize(above, seed = 2)
+        assertTrue(layer(0).count { nameAt(it) == PALE_MOSS_BLOCK } >= 4)
+        assertTrue((layer(1) + layer(2)).none { nameAt(it).let { name -> name == "minecraft:azalea" || name == "minecraft:moss_carpet" } })
+        put(above.side(Face.UP), "minecraft:stone")
+        assertNull(fertilize(above), "nothing grows under a block")
+    }
+
+    @Test
+    fun `glow lichen spreads by a face, over the wall it's on`() {
+        for (z in -1..1) for (y in 1..3) put(BlockPos(0, MIN_Y + y, z), "minecraft:stone")
+        val lichen = BlockPos(1, MIN_Y + 2, 0)
+        put(lichen, "minecraft:glow_lichen", MULTI_FACE to MULTI_FACE_BITS.getValue(Face.WEST))
+        fun faces() = layer(1).plus(layer(2)).plus(layer(3)).sumOf { at ->
+            world.stateAt(at)?.takeIf { it.name == "minecraft:glow_lichen" }?.let { Integer.bitCount(it.properties[MULTI_FACE] as Int) } ?: 0
+        }
+        repeat(3) { fertilize(lichen, it) }
+        assertEquals(4, faces())
+    }
+
+    @Test
+    fun `seagrass in still water grows tall`() {
+        for (height in 1..3) world[BlockPos(0, MIN_Y + height, 0)] = world.liquidState(Liquid.WATER, 0)
+        put(above, "minecraft:seagrass")
+        fertilize(above)
+        assertEquals("double_bot", numberAt(above, "sea_grass_type"))
+        assertEquals("double_top", numberAt(twoUp, "sea_grass_type"))
+        assertNull(fertilize(above), "tall already")
+    }
+
+    @Test
+    fun `sea pickles on living coral spread over the coral around them, growing to four, but not on stone`() {
+        layer(1).forEach { put(it, "minecraft:tube_coral_block") }
+        layer(2).plus(layer(3)).forEach { world[it] = world.liquidState(Liquid.WATER, 0) }
+        val pickles = BlockPos(0, MIN_Y + 2, 0)
+        put(pickles, "minecraft:sea_pickle")
+        repeat(5) { fertilize(pickles, it) }
+        assertEquals(3, numberAt(pickles, "cluster_count"))
+        val spread = layer(2).filter { it != pickles && nameAt(it) == "minecraft:sea_pickle" }
+        assertTrue(spread.isNotEmpty() && spread.all { abs(it.x) + abs(it.z) <= 2 })
+
+        put(BlockPos(4, MIN_Y + 1, 4), "minecraft:stone")
+        put(BlockPos(4, MIN_Y + 2, 4), "minecraft:sea_pickle")
+        assertNull(fertilize(BlockPos(4, MIN_Y + 2, 4)))
+    }
+
+    @Test
+    fun `bone meal on the seabed under two blocks of water grows seagrass around it, but not under one`() {
+        layer(1).forEach { put(it, "minecraft:sand") }
+        layer(2).plus(layer(3)).forEach { world[it] = world.liquidState(Liquid.WATER, 0) }
+        assertTrue(world.fertilizeSeabed(above, Random(1))!!.changed.isNotEmpty())
+        assertTrue(layer(2).any { nameAt(it) == "minecraft:seagrass" })
+
+        layer(3).forEach { world[it] = block(AIR) }
+        assertNull(world.fertilizeSeabed(BlockPos(3, MIN_Y + 1, 3), Random(1)))
+        assertNull(world.fertilizeSeabed(ground, Random(1)), "stone isn't seabed")
+    }
+
+    @Test
+    fun `a dispenser uses bone meal on what's in front of it, or clicks and keeps it if nothing grows`() {
+        val at = BlockPos(0, MIN_Y + 2, 0)
+        put(at, "minecraft:dispenser", FACING_DIRECTION to Face.EAST.ordinal)
+        val dispenser = world.dispenserAt(at)!!
+        dispenser.slots[0] = SlotStack(items.of(BONE_MEAL, 2)!!, 1)
+        val fuel = Fuel(data.recipes, items.of("minecraft:bucket"))
+        val front = at.side(Face.EAST)
+        put(front.side(Face.DOWN), "minecraft:farmland")
+        put(front, "minecraft:wheat")
+
+        val fired = world.fire(at, dispenser, data.recipes, fuel, items)!!
+        assertTrue(fired.dispensed)
+        assertTrue(numberAt(front, GROWTH) as Int >= 2)
+        assertEquals(listOf(front), fired.grew?.changed)
+        assertEquals(1, dispenser.slots[0]?.stack?.count)
+
+        put(front, "minecraft:stone")
+        assertEquals(Fired(at, Face.EAST, dispensed = false), world.fire(at, dispenser, data.recipes, fuel, items))
+        assertEquals(1, dispenser.slots[0]?.stack?.count, "kept")
     }
 
     private companion object {

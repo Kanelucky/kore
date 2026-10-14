@@ -265,6 +265,33 @@ class GrowthTest {
         assertEquals(0, numberAt(twoUp, GROWTH))
     }
 
+    @Test
+    fun `vines spread along, up and down the wall they're on, now and then, always holding on to it`() {
+        for (z in -3..3) for (y in 1..6) put(BlockPos(0, MIN_Y + y, z), "minecraft:stone")
+        val start = BlockPos(1, MIN_Y + 4, 0)
+        put(start, VINE, VINE_FACES to VINE_BITS.getValue(Face.WEST))
+        val area = (-2..4).flatMap { x -> (MIN_Y + 1..MIN_Y + 8).flatMap { y -> (-4..4).map { z -> BlockPos(x, y, z) } } }
+        repeat(30) { seed -> area.filter { nameAt(it) == VINE }.forEach { tick(it, seed = seed * 100 + it.y) } }
+
+        val vines = area.filter { nameAt(it) == VINE }
+        assertTrue(vines.size > 3, "${vines.size} vines")
+        assertTrue(vines.any { it.y < start.y } && vines.any { it.z != 0 }, "$vines")
+        for (vine in vines) {
+            assertEquals(1, vine.x, "on the wall's face")
+            assertTrue(Face.WEST in facesIn(VINE_BITS, world.stateAt(vine)!!.properties[VINE_FACES] as Int))
+        }
+
+        // Up is a side picked one time in six, and only while few vines are near: a vine on its own climbs, now and then.
+        val climbed = (0 until 300).any { seed ->
+            startWorld()
+            for (y in 1..6) put(BlockPos(0, MIN_Y + y, 0), "minecraft:stone")
+            put(start, VINE, VINE_FACES to VINE_BITS.getValue(Face.WEST))
+            tick(start, seed = seed)
+            nameAt(start.side(Face.UP)) == VINE
+        }
+        assertTrue(climbed)
+    }
+
     private companion object {
         val data: VanillaData by lazy { VanillaData.load(gameData) }
     }

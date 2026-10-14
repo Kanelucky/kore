@@ -489,7 +489,7 @@ class FlatWorld(
                     }
                 }
                 is Hopper -> tickHopper(pos, machine, machineTicks, recipes, fuel, items, changed, sounds, songs)
-                is Dispenser -> if (machine.fireIn > 0 && --machine.fireIn == 0) fire(pos, machine, recipes, fuel)?.let(fired::add)
+                is Dispenser -> if (machine.fireIn > 0 && --machine.fireIn == 0) fire(pos, machine, recipes, fuel, items)?.let(fired::add)
                 is Crafter -> if (tickCrafter(pos, machine, state, recipes, fuel, sounds)) changed += pos
             }
         }

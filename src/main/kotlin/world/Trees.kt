@@ -1,5 +1,6 @@
 package org.koremc.world
 
+import org.cloudburstmc.nbt.NbtMap
 import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
 import kotlin.math.PI
@@ -753,6 +754,49 @@ private val POPLAR_LEAVES = listOf("minecraft:orange_poplar_leaves", "minecraft:
 private const val FANCY_OAK_CHANCE = 0.1
 private const val MEGA_PINE_CHANCE = 0.5
 
+/** The saplings whose trees grow a bee nest now and then, with flowers near, and how often. */
+private val BEE_SAPLINGS = setOf("minecraft:oak_sapling", "minecraft:birch_sapling", "minecraft:cherry_sapling")
+private const val BEE_NEST_CHANCE = 0.05f
+private const val BEE_NEST = "minecraft:bee_nest"
+
+/** How far from a sapling, across, flowers make a bee nest on its tree likely, and up or down. */
+private const val FLOWERS_ACROSS = 2
+private const val FLOWERS_UP = 1
+
+/** Flowers, and what flowers, which bees come to. */
+private val FLOWERS = setOf(
+    "dandelion", "golden_dandelion", "poppy", "blue_orchid", "allium", "azure_bluet", "red_tulip", "orange_tulip", "white_tulip", "pink_tulip",
+    "oxeye_daisy", "cornflower", "lily_of_the_valley", "wither_rose", "torchflower", "open_eyeblossom", "closed_eyeblossom", "sunflower",
+    "lilac", "rose_bush", "peony", "pitcher_plant", "flowering_azalea", "azalea_leaves_flowered", "cherry_leaves", "pink_petals", "wildflowers",
+    "mangrove_propagule", "chorus_flower", "spore_blossom", "cactus_flower",
+).mapTo(HashSet()) { "minecraft:$it" }
+
+/** Whether there are flowers within two blocks of [pos], across, and one up or down. */
+private fun FlatWorld.flowersNear(pos: BlockPos): Boolean {
+    for (x in -FLOWERS_ACROSS..FLOWERS_ACROSS) for (y in -FLOWERS_UP..FLOWERS_UP) for (z in -FLOWERS_ACROSS..FLOWERS_ACROSS) {
+        val at = BlockPos(pos.x + x, pos.y + y, pos.z + z)
+        if (at.y in MIN_Y..MAX_Y && stateAt(at)?.name in FLOWERS) return true
+    }
+    return false
+}
+
+/**
+ * A bee nest on the trunk the tree just grew, as the game puts one: on
+ * the east, south or west side of a log just under its lowest leaves,
+ * picked at random, facing south, where it and the space in front of it
+ * are air. Its bees will come with mobs.
+ */
+private fun Tree.beeNest() {
+    val logs = changed.filter { nameAt(it)?.endsWith("_log") == true }.sortedBy { it.y }
+    val leaves = changed.filter { stateAt(it)?.isLeaves == true }.sortedBy { it.y }
+    if (logs.isEmpty()) return
+    val y = if (leaves.isNotEmpty()) maxOf(leaves.first().y - 1, logs.first().y + 1) else minOf(logs.first().y + 1 + random.nextInt(3), logs.last().y)
+    val spots = logs.filter { it.y == y }.flatMap { log -> listOf(Face.EAST, Face.SOUTH, Face.WEST).map(log::side) }.shuffled(random)
+    val at = spots.firstOrNull { isAir(it) && isAir(it.side(Face.SOUTH)) } ?: return
+    put(at, BEE_NEST, DIRECTION to Face.SOUTH.legacyIndex)
+    world.setBlockEntity(at, NbtMap.builder().putString("id", "Beehive").build())
+}
+
 /**
  * The north-west corner of the square of four saplings like [sapling]
  * that the one at [pos] is part of, or null if it's in none.
@@ -778,11 +822,23 @@ internal fun FlatWorld.canGrowTree(pos: BlockPos, sapling: BlockState): Boolean 
  * does, if it has room, or the tree an azalea or a planted mangrove
  * propagule grows. Four saplings of a spruce or jungle tree in a square
  * grow a mega tree, and dark oaks and pale oaks grow only that way. An oak
- * grows a fancy oak now and then. Returns where blocks changed, or null if
- * no tree grew.
+ * grows a fancy oak now and then. An oak, birch or cherry with flowers
+ * near now and then grows a bee nest. Returns where blocks changed, or
+ * null if no tree grew.
  */
 internal fun FlatWorld.growTree(pos: BlockPos, sapling: BlockState, random: Random = Random.Default): List<BlockPos>? {
     val tree = Tree(this, random)
+    val name = sapling.name
+    // Whether a bee nest may grow on it, from what's near the sapling before it grows.
+    val bees = name in BEE_SAPLINGS && flowersNear(pos)
+    val grown = growTreeFrom(tree, pos, sapling) ?: return null
+    if (bees && random.nextFloat() < BEE_NEST_CHANCE) tree.beeNest()
+    return grown + tree.changed.filter { it !in grown }
+}
+
+/** Grows the tree [tree] that the sapling [sapling] at [pos] grows into, if it can. Returns where blocks changed, or null if it didn't grow. */
+private fun FlatWorld.growTreeFrom(tree: Tree, pos: BlockPos, sapling: BlockState): List<BlockPos>? {
+    val random = tree.random
     val name = sapling.name
     val kind = name.removePrefix("minecraft:").removeSuffix("_sapling")
     var at = pos

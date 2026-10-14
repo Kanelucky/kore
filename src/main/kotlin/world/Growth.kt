@@ -155,6 +155,7 @@ private val RANDOM_TICKERS = listOf(
     RandomTicker({ it.name == GRASS_BLOCK || it.name == MYCELIUM }, FlatWorld::spreadGrass),
     RandomTicker({ it.name == FARMLAND }, FlatWorld::moisten),
     RandomTicker({ it.fallsWithoutWood }, FlatWorld::decay),
+    RandomTicker({ it.name == VINE }, FlatWorld::spreadVine),
     RandomTicker({ it.name == ICE }, FlatWorld::meltIce),
     RandomTicker({ it.liquid == Liquid.LAVA }, FlatWorld::lavaSetsFire),
     RandomTicker({ it.name == SNOW_LAYER }, FlatWorld::meltSnow),
@@ -632,6 +633,68 @@ internal fun FlatWorld.wakeLeaves(changed: Collection<BlockPos>): List<BlockPos>
         woken += at
     }
     return woken
+}
+
+/** How far around vines, across and up or down, they count other vines, and how many they stop spreading at. */
+private const val VINE_CROWD_REACH = 4
+private const val VINE_CROWD = 5
+
+/**
+ * Vines at [pos], [state], spreading, one random tick in four, toward a
+ * side picked at random, as the game spreads them, while there are fewer
+ * than five vines, these among them, within four blocks across and one up
+ * or down. Toward a side they don't cover: onto the block there, if it's
+ * solid, or into the air there, across a block beside it they cover, or
+ * round the corner of that block. Up: into the air above, over some of
+ * the faces they cover that have a block to hang on. Down, or toward any
+ * other side: into the air or vines below, over some of their faces.
+ */
+private fun FlatWorld.spreadVine(pos: BlockPos, state: BlockState, growing: Growing) {
+    val random = growing.random
+    if (random.nextInt(4) != 0) return
+    val faces = facesIn(VINE_BITS, state.number(VINE_FACES))
+    val toward = Face.entries[random.nextInt(Face.entries.size)]
+    fun vines(on: Collection<Face>) = blocks.find(VINE, mapOf(VINE_FACES to faceBits(VINE_BITS, on)))
+    fun hold(at: BlockPos, face: Face) = stateAt(at)?.hasFullFace(face.opposite) == true
+    fun isAir(at: BlockPos) = at.y in MIN_Y..MAX_Y && stateAt(at)?.name == AIR
+    fun put(at: BlockPos, on: Collection<Face>) = vines(on)?.let { set(at, it); growing.changed += at }
+    if (toward.horizontal && toward !in faces) {
+        if (crowdedWithVines(pos)) return
+        val target = pos.side(toward)
+        if (isAir(target)) {
+            val (right, left) = toward.clockwise to toward.counterClockwise
+            when {
+                right in faces && hold(target.side(right), right) -> put(target, listOf(right))
+                left in faces && hold(target.side(left), left) -> put(target, listOf(left))
+                right in faces && isAir(target.side(right)) && hold(pos.side(right), toward.opposite) -> put(target.side(right), listOf(toward.opposite))
+                left in faces && isAir(target.side(left)) && hold(pos.side(left), toward.opposite) -> put(target.side(left), listOf(toward.opposite))
+            }
+        } else if (hold(target, toward)) {
+            put(pos, faces + toward)
+        }
+        return
+    }
+    val above = pos.side(Face.UP)
+    if (toward == Face.UP && isAir(above)) {
+        if (crowdedWithVines(pos)) return
+        val up = AROUND.filter { it in faces && !random.nextBoolean() && hold(above.side(it), it) }
+        if (up.isNotEmpty()) put(above, up)
+        return
+    }
+    val below = pos.side(Face.DOWN)
+    val under = stateAt(below)?.takeIf { below.y >= MIN_Y && (it.name == AIR || it.name == VINE) } ?: return
+    val had = if (under.name == VINE) facesIn(VINE_BITS, under.number(VINE_FACES)) else emptySet()
+    val down = had + AROUND.filter { random.nextBoolean() && it in faces }
+    if (down != had && down.isNotEmpty()) put(below, down)
+}
+
+/** Whether there are five or more vines within four blocks of [pos] across and one up or down, which stops them spreading. */
+private fun FlatWorld.crowdedWithVines(pos: BlockPos): Boolean {
+    var vines = 0
+    for (x in -VINE_CROWD_REACH..VINE_CROWD_REACH) for (y in -1..1) for (z in -VINE_CROWD_REACH..VINE_CROWD_REACH) {
+        if (stateAt(BlockPos(pos.x + x, pos.y + y, pos.z + z))?.name == VINE && ++vines >= VINE_CROWD) return true
+    }
+    return false
 }
 
 /** Ice melting into water, with blocks' light beside it brighter than 11. The sky's doesn't melt it. */

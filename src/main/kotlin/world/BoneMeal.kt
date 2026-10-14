@@ -4,6 +4,7 @@ import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
+import kotlin.math.abs
 import kotlin.random.Random
 
 /** The particles of a plant growing, as bone meal makes it, over the block, or over an area for data 1, as on grass. */
@@ -61,6 +62,34 @@ private val DRIPLEAF_HEIGHT = 2..5
 /** The azaleas, which bone meal grows into azalea trees. */
 private val AZALEAS = setOf("minecraft:azalea", "minecraft:flowering_azalea")
 
+private const val GLOW_LICHEN = "minecraft:glow_lichen"
+internal const val SEAGRASS = "minecraft:seagrass"
+private const val SEAGRASS_TYPE = "sea_grass_type"
+private const val SEAGRASS_SHORT = "default"
+internal const val SEA_PICKLE = "minecraft:sea_pickle"
+internal const val PICKLE_DEAD = "dead_bit"
+private const val PICKLES = "cluster_count"
+private const val MOST_PICKLES = 3
+
+/** How far around them, counting across, sea pickles spread, and how unlikely they are to spread to each spot in reach. */
+private const val PICKLE_REACH = 2
+private const val PICKLE_ONE_IN = 6
+
+/** Living coral blocks, which sea pickles spread over. */
+private val LIVING_CORAL_BLOCKS = listOf("tube", "brain", "bubble", "fire", "horn").mapTo(HashSet()) { "minecraft:${it}_coral_block" }
+
+/** Coral and coral fans, which bone meal on the seabed grows now and then, rather than seagrass. */
+private val SEABED_CORALS = listOf("tube", "brain", "bubble", "fire", "horn").flatMap { listOf("minecraft:${it}_coral", "minecraft:${it}_coral_fan") }
+
+/** The seabed bone meal grows seagrass on, as Bedrock has it, and how it plants it: how many tries, and how unlikely coral, or seagrass growing tall, is on each. */
+private val SEABED = setOf("dirt", "coarse_dirt", "sand", "red_sand", "gravel", "clay").mapTo(HashSet()) { "minecraft:$it" }
+private const val SEABED_TRIES = 128
+private const val CORAL_ONE_IN = 4
+private const val TALL_SEAGRASS_ONE_IN = 10
+
+/** Blocks bone meal spreads more of over what's around them, whose particles cover an area. */
+private val SPREADERS = setOf(MOSS_BLOCK, PALE_MOSS_BLOCK, GLOW_LICHEN, SEA_PICKLE)
+
 /** The chance a bone meal grows a sapling a stage, or an azalea or propagule into a tree, and a mushroom or fungus huge. */
 private const val TREE_CHANCE = 0.45
 private const val HUGE_CHANCE = 0.4
@@ -80,7 +109,10 @@ private const val HUGE_CHANCE = 0.4
  * trees, and mushrooms and fungi on their own ground into huge ones, if
  * there's room: a bone meal that doesn't bring that about is still used
  * up, but one that would, but for the room, isn't. Nylium sprouts roots
- * and fungi round it, and netherrack beside nylium turns to it.
+ * and fungi round it, and netherrack beside nylium turns to it. Moss
+ * spreads a patch of itself, glow lichen spreads by a face, seagrass in
+ * still water grows tall, and sea pickles on living coral spread over the
+ * coral around them.
  *
  * Returns what it did, with bone meal's particles, using up a bone meal,
  * and what dropped, made with [items], or null for a block bone meal does
@@ -154,12 +186,19 @@ fun FlatWorld.fertilize(pos: BlockPos, state: BlockState, items: ItemStacks, ran
             room
         }
         name == NETHERRACK -> nyliumBeside(pos).takeIf { it.isNotEmpty() }?.let { change(pos, blocks.defaultOf(it.random(random)) ?: return null, changed) } == true
+        // Moss with air above it, and a sea pickle on living coral, take the bone meal however far they spread.
+        name == MOSS_BLOCK || name == PALE_MOSS_BLOCK -> (stateAt(pos.above)?.name == AIR).also { if (it) changed += spreadMoss(pos, random) }
+        name == SEA_PICKLE -> (state.properties[PICKLE_DEAD] == bit(false) && stateAt(pos.below)?.name in LIVING_CORAL_BLOCKS).also {
+            if (it) spreadPickles(pos, state, random, changed)
+        }
+        name == GLOW_LICHEN -> spreadLichen(pos, state, random, changed)
+        name == SEAGRASS -> state.properties[SEAGRASS_TYPE] == SEAGRASS_SHORT && isWaterSource(pos.above) && growTallSeagrass(pos, changed)
         name in BUSHES -> spreadBeside(pos, name, changed, random) { it.name in DIRTS }
         name == TALL_DRY_GRASS -> spreadBeside(pos, SHORT_DRY_GRASS, changed, random) { it.name in DIRTS || it.name in DRY_SOIL || it.name.endsWith("terracotta") }
         else -> false
     }
     if (!grew) return null
-    val area = name == GRASS_BLOCK || name in SPREADING_FLOWERS || name == CRIMSON_NYLIUM || name == WARPED_NYLIUM
+    val area = name == GRASS_BLOCK || name in SPREADING_FLOWERS || name == CRIMSON_NYLIUM || name == WARPED_NYLIUM || name in SPREADERS
     return ItemUsedOn(
         changed, held = HeldAfter.USED_UP, dropped = dropped, dropAt = pos,
         events = listOf(WorldEvent(pos, GROWTH_PARTICLES, if (area) 1 else 0, centred = false)),
@@ -363,4 +402,117 @@ private inline fun FlatWorld.spreadBeside(pos: BlockPos, name: String, changed: 
         return true
     }
     return false
+}
+
+/**
+ * Spreads the glow lichen at [pos], [state], over another face, as bone
+ * meal does: from a face it covers, picked at random, toward a side picked
+ * at random, onto that side of its own space, onto the same face of the
+ * space beside it, or round the edge of the block it's on, whichever comes
+ * first with a whole face to cover and room. Returns whether it spread.
+ */
+private fun FlatWorld.spreadLichen(pos: BlockPos, state: BlockState, random: Random, changed: MutableCollection<BlockPos>): Boolean {
+    val faces = facesIn(MULTI_FACE_BITS, state.number(MULTI_FACE))
+    for (face in Face.entries.shuffled(random).filter { it in faces }) {
+        for (toward in Face.entries.shuffled(random)) {
+            if (toward == face || toward == face.opposite || toward in faces) continue
+            val beside = pos.side(toward)
+            for ((at, onto) in listOf(pos to toward, beside to face, beside.side(face) to toward.opposite)) {
+                if (coverWithLichen(at, onto)) {
+                    changed += at
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
+/**
+ * Covers the [face] of the space at [pos] with glow lichen, if the space
+ * is air, still water, or lichen not covering that face yet, and the block
+ * across that face has a whole side there. Returns whether it did.
+ */
+private fun FlatWorld.coverWithLichen(pos: BlockPos, face: Face): Boolean {
+    if (pos.y !in MIN_Y..MAX_Y) return false
+    val there = stateAt(pos) ?: return false
+    val covered = when {
+        there.name == GLOW_LICHEN -> there.number(MULTI_FACE)
+        there.name == AIR || isWaterSource(pos) -> 0
+        else -> return false
+    }
+    val bit = MULTI_FACE_BITS.getValue(face)
+    if (covered and bit != 0 || stateAt(pos.side(face))?.hasFullFace(face.opposite) != true) return false
+    set(pos, blocks.find(GLOW_LICHEN, mapOf(MULTI_FACE to (covered or bit))) ?: return false)
+    return true
+}
+
+/** Grows the seagrass at [pos] two blocks tall, into the water above it. Returns whether it grew. */
+private fun FlatWorld.growTallSeagrass(pos: BlockPos, changed: MutableCollection<BlockPos>): Boolean {
+    val bottom = blocks.find(SEAGRASS, mapOf(SEAGRASS_TYPE to "double_bot")) ?: return false
+    val top = blocks.find(SEAGRASS, mapOf(SEAGRASS_TYPE to "double_top")) ?: return false
+    set(pos, bottom)
+    set(pos.above, top)
+    changed += pos
+    changed += pos.above
+    return true
+}
+
+/**
+ * Sea pickles at [pos], [state], spreading over the living coral around
+ * them, as bone meal does: water within two blocks of them, counting
+ * across, at their height or a block below, with living coral under it,
+ * takes from one to four pickles, one spot in six, and the pickles the
+ * bone meal was used on grow to four.
+ */
+private fun FlatWorld.spreadPickles(pos: BlockPos, state: BlockState, random: Random, changed: MutableCollection<BlockPos>) {
+    for (dx in -PICKLE_REACH..PICKLE_REACH) for (dz in -PICKLE_REACH..PICKLE_REACH) {
+        if (abs(dx) + abs(dz) > PICKLE_REACH) continue
+        for (y in pos.y - 1..pos.y) {
+            val at = BlockPos(pos.x + dx, y, pos.z + dz)
+            if (at == pos || random.nextInt(PICKLE_ONE_IN) != 0 || stateAt(at)?.liquid != Liquid.WATER) continue
+            if (stateAt(at.below)?.name !in LIVING_CORAL_BLOCKS) continue
+            blocks.find(SEA_PICKLE, mapOf(PICKLES to random.nextInt(MOST_PICKLES + 1), PICKLE_DEAD to bit(false)))?.let { set(at, it); changed += at }
+        }
+    }
+    blocks.find(SEA_PICKLE, state.properties + (PICKLES to MOST_PICKLES))?.let { set(pos, it); changed += pos }
+}
+
+/**
+ * Bone meal used on the top of the seabed at [ground]: dirt, sand,
+ * gravel or clay under at least two blocks of water, the lower still, as
+ * Bedrock has it. Seagrass grows on the seabed around it, as the game
+ * plants it, from 128 tries, each wandering further from the water above
+ * the block, and spoilt by any solid block on the way: now and then coral
+ * or a coral fan instead, wherever the sea is, and seagrass already there
+ * now and then grows tall. Null if it isn't seabed bone meal grows on, or
+ * growth is switched off.
+ */
+fun FlatWorld.fertilizeSeabed(ground: BlockPos, random: Random = Random.Default): ItemUsedOn? {
+    if (!features.growth || stateAt(ground)?.name !in SEABED) return null
+    val water = ground.above
+    if (!isWaterSource(water) || stateAt(water.above)?.liquid != Liquid.WATER) return null
+    val changed = mutableListOf<BlockPos>()
+    for (tried in 0 until SEABED_TRIES) {
+        val at = wanderUnderwater(water, tried / 16, random) ?: continue
+        val plant = if (random.nextInt(CORAL_ONE_IN) == 0) SEABED_CORALS.random(random) else SEAGRASS
+        if (stateAt(at.below)?.hasFullFace(Face.UP) != true) continue
+        val there = stateAt(at)
+        when {
+            isWaterSource(at) -> blocks.defaultOf(plant)?.let { set(at, it); changed += at }
+            there?.name == SEAGRASS && there.properties[SEAGRASS_TYPE] == SEAGRASS_SHORT && isWaterSource(at.above) && random.nextInt(TALL_SEAGRASS_ONE_IN) == 0 ->
+                growTallSeagrass(at, changed)
+        }
+    }
+    return ItemUsedOn(changed, held = HeldAfter.USED_UP, events = listOf(WorldEvent(water, GROWTH_PARTICLES, 1, centred = false)))
+}
+
+/** Where [steps] random steps from [from] lead, each a block or none each way, up or down only now and then, or null if a solid block's in the way. */
+private fun FlatWorld.wanderUnderwater(from: BlockPos, steps: Int, random: Random): BlockPos? {
+    var at = from
+    repeat(steps) {
+        at = BlockPos(at.x + random.nextInt(3) - 1, at.y + (random.nextInt(3) - 1) * random.nextInt(3) / 2, at.z + random.nextInt(3) - 1)
+        if (at.y !in MIN_Y..MAX_Y || stateAt(at)?.isFullCube == true) return null
+    }
+    return at
 }

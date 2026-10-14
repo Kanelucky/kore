@@ -203,6 +203,30 @@ class TreesTest {
         assertTrue(growing.changed.any { nameAt(it) == "minecraft:brown_mushroom" })
     }
 
+    /** How many of [tries] oak, birch or cherry trees, each grown afresh, [kind], with a poppy beside the sapling or not, grew a bee nest. */
+    private fun nests(kind: String, flowers: Boolean, tries: Int = 200) = (0 until tries).count { seed ->
+        startWorld()
+        put(above, "minecraft:${kind}_sapling")
+        if (flowers) put(above.side(Face.EAST, 2), "minecraft:poppy")
+        val grown = grow(above, seed) ?: return@count false
+        val nest = grown.singleOrNull { nameAt(it) == "minecraft:bee_nest" } ?: return@count false
+        // On the trunk, facing south, with room in front, and its block entity.
+        assertEquals(0, world.stateAt(nest)?.properties?.get(DIRECTION))
+        assertEquals("Beehive", world.blockEntityAt(nest)?.getString("id"))
+        assertEquals(AIR, nameAt(nest.side(Face.SOUTH)))
+        assertTrue(Face.entries.any { nameAt(nest.side(it))?.endsWith("_log") == true })
+        true
+    }
+
+    @Test
+    fun `an oak, birch or cherry grown with flowers near now and then grows a bee nest on its trunk, and never without`() {
+        for (kind in listOf("oak", "birch", "cherry")) {
+            assertTrue(nests(kind, flowers = true) in 1..30, kind)
+            assertEquals(0, nests(kind, flowers = false, tries = 50), kind)
+        }
+        assertEquals(0, nests("spruce", flowers = true, tries = 50))
+    }
+
     private companion object {
         val data: VanillaData by lazy { VanillaData.load(gameData) }
     }

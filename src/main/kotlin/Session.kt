@@ -241,6 +241,7 @@ import org.koremc.world.emptyBucket
 import org.koremc.world.facesFront
 import org.koremc.world.facing
 import org.koremc.world.fertilize
+import org.koremc.world.fertilizeSeabed
 import org.koremc.world.fillBucket
 import org.koremc.world.fillPortalFrame
 import org.koremc.world.FIRE_CHARGE
@@ -1829,7 +1830,7 @@ class Session(
             blockFirst && clicked.isJukebox -> world.useJukebox(pos, held, game.items)
             blockFirst && clicked.isComposter -> world.useComposter(pos, clicked, held, game.items)
             blockFirst && clicked.isCauldron -> world.useCauldron(pos, clicked, held, game.items)
-            boneMeal -> world.fertilize(pos, clicked, game.items)
+            boneMeal -> world.fertilize(pos, clicked, game.items) ?: if (face == Face.UP) world.fertilizeSeabed(pos) else null
             held?.item?.name == ENDER_EYE -> world.fillPortalFrame(pos, clicked)
             held?.item?.name == FLINT_AND_STEEL || held?.item?.name == FIRE_CHARGE -> world.ignite(pos, face, held)
             held != null -> world.useToolOn(pos, face, held, facing(yaw), game.items)
@@ -3132,9 +3133,9 @@ private fun GameData.dropBroken(pos: BlockPos, broken: BrokenBlock, harvested: B
  * Works the furnaces, brewing stands, hoppers, dispensers and droppers in
  * [game]'s world for a tick, for these players to see if they have the
  * chunks: furnaces lighting up and going out, the bottles on brewing
- * stands, the sound of a brew finishing, dispensers firing, composters
- * filling and emptying, and jukeboxes playing what hoppers put in them,
- * and what's playing. Run once a tick, after items move, so that the items
+ * stands, the sound of a brew finishing, dispensers firing, and what
+ * their bone meal grew, composters filling and emptying, and jukeboxes
+ * playing what hoppers put in them, and what's playing. Run once a tick, after items move, so that the items
  * hoppers take in go from the world as players see it.
  */
 internal fun Collection<Session>.tickMachines(game: GameData) {
@@ -3147,6 +3148,7 @@ internal fun Collection<Session>.tickMachines(game: GameData) {
     showAround(
         changed.map { it to UpdateBlock(it, world.blockAt(it)) } + songs.mapNotNull { (at) -> world.blockEntityAt(at)?.let { at to BlockActorData(at, it) } } +
             brewed.map { it to LevelSoundEvent(BREWED, it.centre, -1) } + fired.flatMap(::firing) +
+            fired.mapNotNull { it.grew }.flatMap { world.packetsFor(Changes(emptyMap(), it.changed, events = it.events)) } +
             sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) } + songs.flatMap(::songPackets) + songs.mapNotNull { world.nowPlaying(it.pos) },
     )
 }
