@@ -10,7 +10,7 @@ import org.koremc.world.Vec3
 import java.io.IOException
 
 private const val UPDATE_BLOCK = 21
-private const val BLOCK_ACTOR_DATA = 56
+internal const val BLOCK_ACTOR_DATA = 56
 private const val LEVEL_EVENT = 25
 internal const val INVENTORY_TRANSACTION = 30
 internal const val MOB_EQUIPMENT = 31
@@ -22,6 +22,9 @@ private const val DAMAGE = "Damage"
 
 /** The client's prediction for an item use that works. One that fails is 0. */
 private const val PREDICTED_SUCCESS = 1
+
+/** What triggers an item use the client repeats, each tick the player holds the button down. A click of theirs is 1. */
+private const val HELD_DOWN = 2
 
 /** What the player did with their item. Declared in wire order: each is sent as its ordinal. */
 enum class ItemUseAction { PLACE, USE, DESTROY, USE_AS_ATTACK }
@@ -45,6 +48,8 @@ data class ItemUse(
     val clickedBlock: Int,
     /** Whether the client found the use works, and so changed its world as it expects the server to. */
     val predictedToWork: Boolean,
+    /** Whether the client is trying the use again because the player holds the button down, rather than because they clicked. */
+    val repeated: Boolean = false,
 )
 
 /**
@@ -316,7 +321,7 @@ private fun ByteBuf.readActions() = readList {
 
 private fun ByteBuf.readItemUse(): ItemUse {
     val action = readVarInt().let { ItemUseAction.entries.getOrNull(it) ?: throw PacketException("unknown item use action $it") }
-    readUnsignedByte() // What triggered it: the player's input, or that input held down since an earlier tick
+    val repeated = readUnsignedByte().toInt() == HELD_DOWN
     val position = readBlockPos()
     val face = readUnsignedByte().toInt()
     val hotbarSlot = readVarInt()
@@ -327,7 +332,7 @@ private fun ByteBuf.readItemUse(): ItemUse {
     val clickedBlock = readVarUInt()
     val predictedToWork = readUnsignedByte().toInt() == PREDICTED_SUCCESS
     readUnsignedByte() // Whether the item was cooling down
-    return ItemUse(action, position, face, hotbarSlot, heldItem, clickPosition, clickedBlock, predictedToWork)
+    return ItemUse(action, position, face, hotbarSlot, heldItem, clickPosition, clickedBlock, predictedToWork, repeated)
 }
 
 /**

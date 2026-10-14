@@ -30,6 +30,18 @@ class BlocksTest {
     }
 
     @Test
+    fun `a use the client tries again, with the button held down, says so`() {
+        val packet = packet(30) {
+            writeVarInt(0).writeBoolean(false)
+            writeVarUInt(2)
+            writeVarUInt(0)
+            itemUse(action = 0, face = 1, trigger = 2)
+        }
+
+        assertEquals(true, (decodeClientPacket(packet) as InventoryTransaction).use?.repeated)
+    }
+
+    @Test
     fun `a legacy request's ID and the slot changes the client predicts are read`() {
         val packet = packet(30) {
             writeVarInt(-2).writeBoolean(true).writeVarUInt(1).writeByte(28).writeByteArray(bytes(4)) // Resend hotbar slot 4
@@ -174,8 +186,8 @@ class BlocksTest {
     }
 
     /** The item use itself, with the player holding item 5 in hotbar slot 4 and clicking grass. */
-    private fun ByteBuf.itemUse(action: Int, face: Int) {
-        writeVarInt(action).writeByte(1).writeBlockPos(clicked).writeByte(face).writeVarInt(4).writeByte(0)
+    private fun ByteBuf.itemUse(action: Int, face: Int, trigger: Int = 1) {
+        writeVarInt(action).writeByte(trigger).writeBlockPos(clicked).writeByte(face).writeVarInt(4).writeByte(0)
         item(id = 5, stackId = 3)
         writeVec3(Vec3(2.5f, -58.38f, -1f)).writeVec3(click).writeVarUInt(GRASS)
         writeByte(1).writeByte(0) // Predicted to work, not cooling down

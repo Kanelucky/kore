@@ -4,18 +4,22 @@ import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.read.ListAppender
 import io.netty.buffer.ByteBuf
+import io.netty.buffer.ByteBufOutputStream
 import io.netty.buffer.ByteBufUtil
 import io.netty.buffer.Unpooled
 import org.cloudburstmc.nbt.NbtMap
+import org.cloudburstmc.nbt.NbtUtils
 import org.koremc.auth.MultiplayerTokenVerifier
 import org.koremc.auth.TestAuthority
 import org.koremc.auth.XUID
 import org.koremc.auth.ecKeyPair
+import org.koremc.protocol.Animate
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.ActorDataId
 import org.koremc.protocol.ActorEvent
 import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.BiomeDefinitionList
+import org.koremc.protocol.BlockActorData
 import org.koremc.protocol.BlockDefinitions
 import org.koremc.protocol.ContainerClose
 import org.koremc.protocol.ContainerOpen
@@ -24,6 +28,7 @@ import org.koremc.protocol.GameMode
 import org.koremc.protocol.LevelEvent
 import org.koremc.protocol.InventorySlot
 import org.koremc.protocol.LevelSoundEvent
+import org.koremc.protocol.OpenSign
 import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateBlock
@@ -57,6 +62,7 @@ import org.koremc.registry.CreativeItem
 import org.koremc.registry.EnchantmentLevel
 import org.koremc.registry.ItemDefinition
 import org.koremc.registry.ItemStack
+import org.koremc.registry.ItemStacks
 import org.koremc.registry.ItemVersion
 import org.koremc.registry.MENDING
 import org.koremc.registry.Mining
@@ -70,9 +76,14 @@ import org.koremc.world.Drops
 import org.koremc.world.tickItems
 import org.koremc.world.Face
 import org.koremc.world.FlatWorld
+import org.koremc.world.blockStateNbt
 import org.koremc.world.Vec3
 import org.koremc.world.chunksAround
+import org.koremc.world.frameData
+import org.koremc.world.frameItem
+import org.koremc.world.plantInPot
 import org.koremc.world.side
+import org.koremc.world.signData
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
 import kotlin.test.Test
@@ -94,11 +105,13 @@ private const val START_SPRINTING = 25
 private const val STOP_SPRINTING = 26
 private const val START_FLYING = 42
 
-/** The runtime IDs of the oak planks, oak door, oak fence and wooden pickaxe items. */
+/** The runtime IDs of the oak planks, oak door, oak fence, wooden pickaxe, stone hoe and poppy items. */
 private const val PLANKS_ITEM = 5
 private const val DOOR_ITEM = 324
 private const val FENCE_ITEM = 85
 private const val PICKAXE_ITEM = 310
+private const val HOE_ITEM = 333
+private const val POPPY_ITEM = 38
 
 /** The PlayerAction for breaking a block in creative. */
 private const val CREATIVE_DESTROY_BLOCK = 13
@@ -150,7 +163,15 @@ class SessionTest {
     }
     private val sand = BlockState("minecraft:sand", NbtMap.EMPTY, version = 18168865)
     private val water = listOf("minecraft:water", "minecraft:flowing_water").map { BlockState(it, NbtMap.builder().putInt("liquid_depth", 0).build(), version = 18168865) }
-    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand) + levers + buttons + doors + fences + water)
+    /** An oak sign on the floor, facing south. */
+    private val sign = state("minecraft:standing_sign", "ground_sign_direction" to 0)
+    private val grass = BlockState("minecraft:grass_block", NbtMap.EMPTY, version = 18168865)
+    private val farmland = state("minecraft:farmland", "moisturized_amount" to 0)
+    /** An item frame on the floor, and a flower pot, empty and full. */
+    private val frame = state("minecraft:frame", "facing_direction" to 1, "item_frame_map_bit" to 0.toByte(), "item_frame_photo_bit" to 0.toByte())
+    private val pots = (0..1).map { full -> state("minecraft:flower_pot", "update_bit" to full.toByte()) }
+    private val poppy = BlockState("minecraft:poppy", NbtMap.EMPTY, version = 18168865)
+    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, frame, poppy) + pots + levers + buttons + doors + fences + water)
     private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
@@ -163,6 +184,8 @@ class SessionTest {
     )
 
     private val pickaxe = ItemDefinition("minecraft:wooden_pickaxe", PICKAXE_ITEM, componentBased = false, ItemVersion.NONE, maxDurability = 59)
+    private val hoe = ItemDefinition("minecraft:stone_hoe", HOE_ITEM, componentBased = false, ItemVersion.NONE, maxDurability = 131)
+    private val poppyItem = ItemDefinition("minecraft:poppy", POPPY_ITEM, componentBased = false, ItemVersion.NONE)
 
     private val sent = mutableListOf<ByteArray>()
 
@@ -171,7 +194,10 @@ class SessionTest {
     private val blockDefinitions = BlockDefinitions(listOf(BlockDefinition("minecraft:white_wool_stairs", NbtMap.builder().putInt("molangVersion", 13).build())))
     /** Stone takes 150 ticks to break by hand, as it needs a pickaxe. */
     private val mining = mapOf(stone.name to Mining(1.5, ToolKind.PICKAXE, harvestTier = 0))
-    private val game = GameData(world, listOf(itemRegistry, biomes), blockDefinitions, creative, mining, Drops(creative.items.map { it.stack.item }, creative, palette))
+    private val game = GameData(
+        world, listOf(itemRegistry, biomes), blockDefinitions, creative, mining, Drops(creative.items.map { it.stack.item }, creative, palette),
+        ItemStacks(creative.items.map { it.stack.item } + pickaxe + hoe + poppyItem, creative, palette),
+    )
     private val session: Session by lazy {
         // The only player, so the only one to see what they change.
         Session(
@@ -671,6 +697,95 @@ class SessionTest {
     }
 
     @Test
+    fun `a hoe tills grass on a click the client leaves to the server, but not each time it tries again as the button's held`() {
+        spawn()
+        session.give(ItemStack(hoe))
+        val tilled = BlockPos(1, -64, 0)
+        world[tilled] = grass
+        sent.clear()
+
+        // The client finds tilling does nothing, as it leaves it to the server.
+        clientSends(placeBlock(against = tilled, face = 1, slot = 0, held = HOE_ITEM, predictedToWork = false))
+        assertEquals(farmland, world.stateAt(tilled))
+        val packets = receivedPackets()
+        assertTrue(packets.any { it.contentEquals(UpdateBlock(tilled, farmland.networkId).encode()) })
+        assertTrue(packets.any { it.contentEquals(InventorySlot(0, ItemStack(hoe).withDamage(1), stackId = 1).encode()) }) // Worn a use
+        assertTrue(packets.any { it.contentEquals(Animate(Animate.SWING_ARM, 7, swingSource = "interact").encode()) }) // Swinging the player's arm
+
+        val held = BlockPos(2, -64, 0)
+        world[held] = grass
+        clientSends(placeBlock(against = held, face = 1, slot = 0, held = HOE_ITEM, predictedToWork = false, repeated = true))
+        assertEquals(grass, world.stateAt(held))
+    }
+
+    @Test
+    fun `punching a frame in survival knocks its item out, and leaves the frame`() {
+        spawn()
+        val at = BlockPos(1, -63, 0)
+        world[at] = frame
+        world.setBlockEntity(at, frameData(frame).toBuilder().putCompound("Item", ItemStacks.nbtOf(creative.items[0].stack.copy(count = 1), 0)).build())
+        sent.clear()
+
+        // The client starts breaking it and stops at once.
+        clientSends(breakingInput(tick = 200, START_DESTROY to at, ABORT_DESTROY to at))
+
+        assertNull(world.frameItem(at, game.items))
+        assertEquals(frame, world.stateAt(at))
+        assertEquals("minecraft:oak_planks", world.items.single().stack.item.name)
+    }
+
+    @Test
+    fun `a full flower pot takes a click with a plant, rather than the plant going beside it`() {
+        spawn()
+        session.give(ItemStack(poppyItem, block = poppy))
+        val pot = BlockPos(1, -63, 0)
+        world[pot] = pots[1]
+        world.setBlockEntity(pot, NbtMap.builder().putString("id", "FlowerPot").putCompound("PlantBlock", blockStateNbt(poppy)).build())
+
+        clientSends(placeBlock(against = pot, face = 1, slot = 0, held = POPPY_ITEM))
+
+        assertEquals(AIR, world.stateAt(pot.side(Face.UP))?.name)
+        assertEquals(poppy, world.plantInPot(pot))
+        assertEquals(1, session.heldStack?.count)
+    }
+
+    @Test
+    fun `clicking a sign opens the side the player sees to write on, and what they write goes on it for everyone`() {
+        spawn()
+        // North of the player, facing south, so they see its front.
+        val at = BlockPos(1, -63, -1)
+        world[at] = sign
+        world.setBlockEntity(at, signData(sign))
+
+        clientSends(placeBlock(against = at, face = 1, slot = 0, held = 0))
+        assertContentEquals(OpenSign(at, front = true).encode(), receivedPacket())
+        sent.clear()
+
+        clientSends(blockActorData(at, NbtMap.builder().putCompound("FrontText", NbtMap.builder().putString("Text", "Hello").build()).build()))
+        val written = world.blockEntityAt(at)!!
+        assertEquals("Hello", written.getCompound("FrontText").getString("Text"))
+        assertEquals("", written.getCompound("BackText").getString("Text"))
+        assertContentEquals(BlockActorData(at, written).encode(), receivedPacket())
+    }
+
+    @Test
+    fun `a waxed sign doesn't open, but says so, and what a client writes on it anyway is put back`() {
+        spawn()
+        val at = BlockPos(1, -63, -1)
+        world[at] = sign
+        world.setBlockEntity(at, signData(sign).toBuilder().putBoolean("IsWaxed", true).build())
+
+        clientSends(placeBlock(against = at, face = 1, slot = 0, held = 0))
+        assertContentEquals(LevelSoundEvent("block.sign.waxed_interact_fail", Vec3(1.5f, -62.5f, -0.5f), -1).encode(), receivedPacket())
+        sent.clear()
+
+        clientSends(blockActorData(at, NbtMap.builder().putCompound("FrontText", NbtMap.builder().putString("Text", "Hello").build()).build()))
+        val kept = world.blockEntityAt(at)!!
+        assertEquals("", kept.getCompound("FrontText").getString("Text"))
+        assertContentEquals(BlockActorData(at, kept).encode(), receivedPacket())
+    }
+
+    @Test
     fun `a pressed button pops back out by itself`() {
         spawn()
         val button = BlockPos(1, -63, 0)
@@ -1136,6 +1251,11 @@ class SessionTest {
         Unpooled.buffer().writeVarUInt(36).writeVarULong(7).writeVarInt(action).writeBlockPos(position).writeBlockPos(BlockPos(0, 0, 0)).writeVarInt(1),
     )
 
+    /** A block's data, [data], as a client sends back a sign it's written on. */
+    private fun blockActorData(position: BlockPos, data: NbtMap) = ByteBufUtil.getBytes(
+        Unpooled.buffer().writeVarUInt(56).writeBlockPos(position).also { NbtUtils.createNetworkWriter(ByteBufOutputStream(it)).writeTag(data) },
+    )
+
     /** Picks a stack of oak planks from the creative inventory into hotbar slot 0, and forgets the answer. */
     private fun pickPlanksIntoHotbar() = pickIntoHotbar(creativeItem = 1, slot = 0)
 
@@ -1158,15 +1278,18 @@ class SessionTest {
      * An inventory transaction clicking [face] of the block at [against] in
      * the middle, holding the item [held] in hotbar [slot]: oak planks,
      * unless it says otherwise, or nothing for 0. The client found the
-     * click works unless [predictedToWork] says otherwise.
+     * click works unless [predictedToWork] says otherwise, and the player
+     * clicked, rather than holding the button down, unless [repeated] does.
      */
-    private fun placeBlock(against: BlockPos, face: Int, slot: Int, held: Int = PLANKS_ITEM, predictedToWork: Boolean = true, legacyRequestId: Int = 0) = ByteBufUtil.getBytes(
+    private fun placeBlock(
+        against: BlockPos, face: Int, slot: Int, held: Int = PLANKS_ITEM, predictedToWork: Boolean = true, legacyRequestId: Int = 0, repeated: Boolean = false,
+    ) = ByteBufUtil.getBytes(
         Unpooled.buffer().writeVarUInt(30).writeVarInt(legacyRequestId).writeBoolean(false).writeVarUInt(2)
             .apply {
                 // A legacy request names the slot it changes, here unchanged, as a creative player's is.
                 if (legacyRequestId == 0) writeVarUInt(0) else writeVarUInt(1).writeVarUInt(0).writeBoolean(true).writeByte(0).writeBoolean(false).writeVarUInt(slot).heldItem(held).heldItem(held)
             }
-            .writeVarInt(0).writeByte(1).writeBlockPos(against).writeByte(face).writeVarInt(slot).writeByte(0)
+            .writeVarInt(0).writeByte(if (repeated) 2 else 1).writeBlockPos(against).writeByte(face).writeVarInt(slot).writeByte(0)
             .heldItem(held)
             .writeFloatLE(standing.x).writeFloatLE(standing.y).writeFloatLE(standing.z)
             .writeFloatLE(0.5f).writeFloatLE(1f).writeFloatLE(0.5f)

@@ -465,6 +465,8 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             PLAYER_ACTION -> decodePlayerAction(buffer)
             PLAYER_AUTH_INPUT -> decodePlayerAuthInput(buffer)
             LECTERN_UPDATE -> decodeLecternUpdate(buffer)
+            BLOCK_ACTOR_DATA -> decodeEditedBlockData(buffer)
+            ITEM_FRAME_DROP_ITEM -> decodeItemFrameDropItem(buffer)
             BOOK_EDIT -> decodeBookEdit(buffer)
             PLAYER_TOGGLE_CRAFTER_SLOT_REQUEST -> decodeToggleCrafterSlot(buffer)
             MAP_INFO_REQUEST -> decodeMapInfoRequest(buffer)

@@ -8,18 +8,18 @@ import org.koremc.command.ConsoleSource
 import org.koremc.command.Operators
 import org.koremc.command.Selectable
 import org.koremc.command.logOutput
+import org.koremc.inventory.CURSOR_SLOT
 import org.koremc.inventory.Container
 import org.koremc.inventory.Crafted
 import org.koremc.inventory.Crafter
-import org.koremc.inventory.CURSOR_SLOT
 import org.koremc.inventory.ENCHANTING_INPUT_SLOT
 import org.koremc.inventory.EnchantingOffer
 import org.koremc.inventory.HOTBAR_SIZE
 import org.koremc.inventory.MAX_BOOKSHELVES
 import org.koremc.inventory.OpenContainer
 import org.koremc.inventory.PairedContainer
-import org.koremc.inventory.SlotStack
 import org.koremc.inventory.PlayerInventory
+import org.koremc.inventory.SlotStack
 import org.koremc.inventory.StackRequestHandler
 import org.koremc.inventory.Workstation
 import org.koremc.inventory.offersFor
@@ -38,17 +38,15 @@ import org.koremc.protocol.AddItemActor
 import org.koremc.protocol.AddPlayer
 import org.koremc.protocol.Animate
 import org.koremc.protocol.Attribute
-import org.koremc.protocol.BlockAction
-import org.koremc.protocol.BlockEvent
 import org.koremc.protocol.BatchCodec
+import org.koremc.protocol.BlockAction
 import org.koremc.protocol.BlockActorData
+import org.koremc.protocol.BlockEvent
 import org.koremc.protocol.BookAction
 import org.koremc.protocol.BookEdit
-import org.koremc.protocol.LecternUpdate
-import org.koremc.protocol.ToggleCrafterSlot
 import org.koremc.protocol.ByteItem
-import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ChunkRadiusUpdated
+import org.koremc.protocol.ClientCacheStatus
 import org.koremc.protocol.ClientPacket
 import org.koremc.protocol.ClientboundMapItemData
 import org.koremc.protocol.CommandOutput
@@ -59,21 +57,24 @@ import org.koremc.protocol.ContainerName
 import org.koremc.protocol.ContainerOpen
 import org.koremc.protocol.ContainerSetData
 import org.koremc.protocol.ContainerType
-import org.koremc.protocol.EnchantOption
-import org.koremc.protocol.InventoryContent
 import org.koremc.protocol.Disconnect
+import org.koremc.protocol.EditedBlockData
+import org.koremc.protocol.EnchantOption
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
+import org.koremc.protocol.InputFlag
 import org.koremc.protocol.Interact
-import org.koremc.protocol.InventorySlot
 import org.koremc.protocol.InventoryAction
+import org.koremc.protocol.InventoryContent
+import org.koremc.protocol.InventorySlot
 import org.koremc.protocol.InventoryTransaction
+import org.koremc.protocol.ItemFrameDropItem
 import org.koremc.protocol.ItemStackRequest
 import org.koremc.protocol.ItemStackResponse
 import org.koremc.protocol.ItemUse
 import org.koremc.protocol.ItemUseAction
-import org.koremc.protocol.InputFlag
 import org.koremc.protocol.JigsawStructureData
+import org.koremc.protocol.LecternUpdate
 import org.koremc.protocol.LevelChunk
 import org.koremc.protocol.LevelEvent
 import org.koremc.protocol.LevelSoundEvent
@@ -92,6 +93,7 @@ import org.koremc.protocol.NetworkChunkPublisherUpdate
 import org.koremc.protocol.NetworkSettings
 import org.koremc.protocol.OFFHAND_WINDOW
 import org.koremc.protocol.OfferedEnchantment
+import org.koremc.protocol.OpenSign
 import org.koremc.protocol.PacketException
 import org.koremc.protocol.PermissionLevel
 import org.koremc.protocol.PlayStatus
@@ -100,8 +102,8 @@ import org.koremc.protocol.PlayerAuthInput
 import org.koremc.protocol.PlayerEnchantOptions
 import org.koremc.protocol.PlayerList
 import org.koremc.protocol.PlayerListEntry
-import org.koremc.protocol.RequestChunkRadius
 import org.koremc.protocol.RemoveActor
+import org.koremc.protocol.RequestChunkRadius
 import org.koremc.protocol.RequestNetworkSettings
 import org.koremc.protocol.ResourcePackClientResponse
 import org.koremc.protocol.ResourcePackStack
@@ -113,19 +115,20 @@ import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.SetPlayerGameType
 import org.koremc.protocol.ShortItem
 import org.koremc.protocol.ShowEquipment
-import org.koremc.protocol.StackRequest
-import org.koremc.protocol.UI_WINDOW
 import org.koremc.protocol.Skin
+import org.koremc.protocol.StackRequest
 import org.koremc.protocol.StartGame
 import org.koremc.protocol.StringItem
-import org.koremc.protocol.Text
 import org.koremc.protocol.TakeItemActor
+import org.koremc.protocol.Text
+import org.koremc.protocol.ToggleCrafterSlot
+import org.koremc.protocol.UI_WINDOW
 import org.koremc.protocol.UpdateAbilities
 import org.koremc.protocol.UpdateAttributes
 import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.UpdatePlayerGameType
-import org.koremc.protocol.abilitiesFor
 import org.koremc.protocol.VoxelShapes
+import org.koremc.protocol.abilitiesFor
 import org.koremc.protocol.decodeClientPacket
 import org.koremc.protocol.encode
 import org.koremc.protocol.flagsItem
@@ -139,22 +142,55 @@ import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.MENDING
 import org.koremc.registry.damage
-import org.koremc.registry.sameKindAs
 import org.koremc.registry.levelOf
 import org.koremc.registry.mendedBy
+import org.koremc.registry.sameKindAs
 import org.koremc.registry.worn
+import org.koremc.world.BARREL
+import org.koremc.world.BARREL_OPEN
+import org.koremc.world.BEACON_INTERVAL
+import org.koremc.world.BOOK_PUT
+import org.koremc.world.BREWING_BOTTLES
+import org.koremc.world.BREWING_FUEL
+import org.koremc.world.BREWING_REAGENT
+import org.koremc.world.BREWING_STAND
+import org.koremc.world.BREWS_PER_FUEL
 import org.koremc.world.BlockPos
+import org.koremc.world.BlockSound
+import org.koremc.world.BrewingStand
+import org.koremc.world.BrokenBlock
+import org.koremc.world.CRAFTER_SLOTS
+import org.koremc.world.Cartographed
 import org.koremc.world.Changes
-import org.koremc.world.FALLING_BLOCK_SIZE
-import org.koremc.world.FlatWorld
-import org.koremc.world.Liquid
-import org.koremc.world.liquid
-import org.koremc.world.emptyBucket
-import org.koremc.world.fillBucket
 import org.koremc.world.ChunkPos
+import org.koremc.world.Crafter as CrafterMachine
+import org.koremc.world.DISPENSER_SLOTS
+import org.koremc.world.Dispenser
+import org.koremc.world.EMPTY_MAP
+import org.koremc.world.ENDER_EYE
+import org.koremc.world.Effect
+import org.koremc.world.EffectLevel
+import org.koremc.world.Effects
+import org.koremc.world.ExperienceOrb
+import org.koremc.world.FALLING_BLOCK_SIZE
+import org.koremc.world.FILLED_MAP
+import org.koremc.world.FURNACE_FUEL
+import org.koremc.world.FURNACE_INPUT
+import org.koremc.world.FURNACE_OUTPUT
 import org.koremc.world.Face
+import org.koremc.world.Fired
+import org.koremc.world.FlatWorld
+import org.koremc.world.Furnace
+import org.koremc.world.HOPPER
+import org.koremc.world.HOPPER_SLOTS
+import org.koremc.world.HeldAfter
+import org.koremc.world.Hopper
 import org.koremc.world.ItemEntity
-import org.koremc.world.Placer
+import org.koremc.world.ItemUsedOn
+import org.koremc.world.LOCATOR
+import org.koremc.world.Liquid
+import org.koremc.world.Machine
+import org.koremc.world.MapData
 import org.koremc.world.PISTON_MOVE_TICKS
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
@@ -162,98 +198,79 @@ import org.koremc.world.PLAYER_MAX_AIR
 import org.koremc.world.PLAYER_SNEAKING_HEIGHT
 import org.koremc.world.PLAYER_WALK_SPEED
 import org.koremc.world.PLAYER_WIDTH
-import org.koremc.world.Vec3
-import org.koremc.world.blockPlacedBy
-import org.koremc.world.breakBlock
-import org.koremc.world.breakTicks
-import org.koremc.world.corner
-import org.koremc.world.dropFromBlock
-import org.koremc.world.centre
-import org.koremc.world.chunksAround
-import org.koremc.world.facing
-import org.koremc.world.harvests
-import org.koremc.world.wearFromBreaking
-import org.koremc.world.opensOnClick
-import org.koremc.world.BARREL
-import org.koremc.world.BARREL_OPEN
-import org.koremc.world.BREWING_BOTTLES
-import org.koremc.world.BREWING_FUEL
-import org.koremc.world.BREWING_REAGENT
-import org.koremc.world.BREWING_STAND
-import org.koremc.world.BREWS_PER_FUEL
-import org.koremc.world.BrewingStand
-import org.koremc.world.BlockSound
-import org.koremc.world.BrokenBlock
-import org.koremc.world.ExperienceOrb
-import org.koremc.world.FURNACE_FUEL
-import org.koremc.world.FURNACE_INPUT
-import org.koremc.world.FURNACE_OUTPUT
-import org.koremc.world.Furnace
-import org.koremc.world.BOOK_PUT
-import org.koremc.world.CRAFTER_SLOTS
-import org.koremc.world.Crafter as CrafterMachine
-import org.koremc.world.DISPENSER_SLOTS
-import org.koremc.world.Dispenser
-import org.koremc.world.WRITABLE_BOOK
-import org.koremc.world.WRITTEN_BOOK
-import org.koremc.world.isCrafter
-import org.koremc.world.isLectern
-import org.koremc.world.goesOnLectern
-import org.koremc.world.knockBookOff
-import org.koremc.world.lecternBook
-import org.koremc.world.less
-import org.koremc.world.putOnLectern
-import org.koremc.world.toggleCrafterSlot
-import org.koremc.world.turnPage
-import org.koremc.world.Fired
-import org.koremc.world.HOPPER
-import org.koremc.world.HOPPER_SLOTS
-import org.koremc.world.Hopper
-import org.koremc.world.dispenserKind
-import org.koremc.world.smokeDirection
-import org.koremc.world.Machine
+import org.koremc.world.Placer
 import org.koremc.world.PlayerExperience
-import org.koremc.world.dropExperience
-import org.koremc.world.furnaceKind
-import org.koremc.world.wholeExperience
 import org.koremc.world.SNOW_LAYER
 import org.koremc.world.STORAGE_SLOTS
 import org.koremc.world.Storage
-import org.koremc.world.bit
-import org.koremc.world.chestHalves
-import org.koremc.world.isBlockedOpen
-import org.koremc.world.storage
-import org.koremc.world.otherHalf
-import org.koremc.world.place
-import org.koremc.world.settle
-import org.koremc.world.side
-import org.koremc.world.movingFrom
-import org.koremc.world.pistonMotions
-import org.koremc.world.pressPlates
-import org.koremc.world.snapsUp
-import org.koremc.world.stepOn
-import org.koremc.world.BEACON_INTERVAL
-import org.koremc.world.Cartographed
-import org.koremc.world.EMPTY_MAP
-import org.koremc.world.Effect
-import org.koremc.world.EffectLevel
-import org.koremc.world.Effects
-import org.koremc.world.FILLED_MAP
-import org.koremc.world.LOCATOR
-import org.koremc.world.MapData
-
+import org.koremc.world.Vec3
+import org.koremc.world.WRITABLE_BOOK
+import org.koremc.world.WRITTEN_BOOK
 import org.koremc.world.beaconLevel
+import org.koremc.world.bit
+import org.koremc.world.blockPlacedBy
+import org.koremc.world.breakBlock
+import org.koremc.world.breakTicks
+import org.koremc.world.centre
+import org.koremc.world.chestHalves
+import org.koremc.world.chunksAround
+import org.koremc.world.corner
+import org.koremc.world.dispenserKind
 import org.koremc.world.drawMap
+import org.koremc.world.dropExperience
+import org.koremc.world.dropFromBlock
+import org.koremc.world.emptyBucket
+import org.koremc.world.facesFront
+import org.koremc.world.facing
+import org.koremc.world.fillBucket
+import org.koremc.world.fillPortalFrame
+import org.koremc.world.furnaceKind
+import org.koremc.world.goesOnLectern
+import org.koremc.world.harvests
+import org.koremc.world.isBlockedOpen
+import org.koremc.world.isCrafter
+import org.koremc.world.isFlowerPot
+import org.koremc.world.isItemFrame
+import org.koremc.world.isLectern
+import org.koremc.world.isSign
+import org.koremc.world.knockBookOff
+import org.koremc.world.lecternBook
+import org.koremc.world.less
+import org.koremc.world.liquid
 import org.koremc.world.lookAtBeacons
 import org.koremc.world.mapId
+import org.koremc.world.markSign
+import org.koremc.world.movingFrom
+import org.koremc.world.opensOnClick
+import org.koremc.world.otherHalf
+import org.koremc.world.pistonMotions
+import org.koremc.world.place
+import org.koremc.world.pressPlates
+import org.koremc.world.putOnLectern
 import org.koremc.world.setBeaconPowers
+import org.koremc.world.settle
 import org.koremc.world.showing
+import org.koremc.world.side
+import org.koremc.world.signWaxed
+import org.koremc.world.smokeDirection
+import org.koremc.world.snapsUp
+import org.koremc.world.stepOn
+import org.koremc.world.storage
+import org.koremc.world.takeFromFrame
 import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
 import org.koremc.world.tickOrbs
-import org.koremc.world.usable
+import org.koremc.world.toggleCrafterSlot
+import org.koremc.world.turnPage
 import org.koremc.world.updatePower
+import org.koremc.world.usable
 import org.koremc.world.use
+import org.koremc.world.useFrame
+import org.koremc.world.usePot
+import org.koremc.world.useToolOn
+import org.koremc.world.wearFromBreaking
+import org.koremc.world.wholeExperience
+import org.koremc.world.writeSign
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
 import java.util.UUID
@@ -294,6 +311,12 @@ private const val FALLING_BLOCK_NETWORK_OFFSET = 0.49f
 
 /** What snow that falls where it can't land drops. */
 private const val SNOWBALL = "minecraft:snowball"
+
+/** How long after knocking an item out of a frame a break of that frame is the same hit, reported again, in milliseconds. */
+private const val KNOCK_OUT_MILLIS = 250L
+
+/** What the client says swung a player's arm as they used something on a block. */
+private const val INTERACT_SWING = "interact"
 
 /** Buckets: empty, and full of each liquid. */
 private const val BUCKET = "minecraft:bucket"
@@ -774,6 +797,8 @@ class Session(
                 is Animate -> if (packet.action == Animate.SWING_ARM) viewers().forEach { it.showSwing(entityId, packet.swingSource) }
                 is LevelSoundEvent -> onSound(packet)
                 is LecternUpdate -> onLecternUpdate(packet)
+                is EditedBlockData -> onEditedBlockData(packet)
+                is ItemFrameDropItem -> knockOutOfFrame(packet.position)
                 is BookEdit -> onBookEdit(packet)
                 is ToggleCrafterSlot -> onToggleCrafterSlot(packet)
                 is MapInfoRequest -> onMapInfoRequest(packet)
@@ -1550,23 +1575,142 @@ class Session(
      * a face to stand on, or whether a block would go inside its player.
      * When it finds a click does nothing, it changes nothing, and Kore
      * leaves it at that. While the player holds the button down, the
-     * client tries again every frame, so that's often.
+     * client tries again every frame, so that's often. It leaves some uses
+     * to the server, though, and finds they do nothing: a hoe tilling, or
+     * an axe stripping a log. Kore does those, when the player clicks.
      */
     private fun onClick(use: ItemUse) {
-        if (!use.predictedToWork) return
         val clicked = world.stateAt(use.position)
+        // With something in hand, sneaking passes over what a block does when it's clicked, but not what the item does to it.
+        val blockFirst = !sneaking || use.heldItem == 0
+        if (!use.predictedToWork) {
+            // Not each time the client tries again, which would scrape copper bare as the button's held.
+            if (!use.repeated && clicked != null) useItemOn(use, clicked, blockFirst)
+            return
+        }
         when {
-            sneaking && use.heldItem != 0 -> onPlace(use)
-            clicked?.usable == true -> useBlock(use.position)
-            clicked?.isLectern == true && useLectern(use) -> {}
+            blockFirst && clicked?.usable == true -> useBlock(use.position)
+            blockFirst && clicked?.isLectern == true && useLectern(use) -> {}
             // A chest, anvil or the like opens for the client, which Kore can't show yet. Either way, nothing's placed.
-            clicked?.storage != null -> openStorage(use.position, clicked.storage!!)
-            clicked?.name in WORKSTATIONS -> WORKSTATIONS.getValue(clicked!!.name).let { (workstation, type) -> openWorkstation(use.position, workstation, type) }
-            clicked?.furnaceKind != null || clicked?.name == BREWING_STAND || clicked?.name == HOPPER || clicked?.dispenserKind != null || clicked?.isCrafter == true ->
+            blockFirst && clicked?.storage != null -> openStorage(use.position, clicked.storage!!)
+            blockFirst && clicked?.name in WORKSTATIONS -> WORKSTATIONS.getValue(clicked!!.name).let { (workstation, type) -> openWorkstation(use.position, workstation, type) }
+            blockFirst && (clicked?.furnaceKind != null || clicked?.name == BREWING_STAND || clicked?.name == HOPPER || clicked?.dispenserKind != null || clicked?.isCrafter == true) ->
                 openMachine(use.position)
-            clicked?.opensOnClick == true -> log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
+            blockFirst && clicked?.isSign == true -> useSign(use, clicked)
+            clicked != null && useItemOn(use, clicked, blockFirst) -> {}
+            blockFirst && clicked?.opensOnClick == true -> log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
             else -> onPlace(use)
         }
+    }
+
+    /**
+     * What the player holds, used on the block they clicked, [clicked]:
+     * into an item frame or flower pot, if [blockFirst], and, whether or
+     * not, an eye of ender into an end portal frame, or a tool or honeycomb
+     * on the block, as [useToolOn] has it. A use the client found does
+     * nothing can only be a tool's, which it leaves to Kore. Everyone with
+     * the chunk sees and hears it. Outside creative, what's used up goes
+     * from the player's hand, and a tool wears. Returns whether it did
+     * anything, if the player can build and reach the block.
+     */
+    private fun useItemOn(use: ItemUse, clicked: BlockState, blockFirst: Boolean): Boolean {
+        val face = Face.of(use.face) ?: return false
+        if (use.hotbarSlot in 0 until HOTBAR_SIZE) heldSlot = use.hotbarSlot
+        val held = inventory.items[heldSlot]?.stack?.takeIf { use.hotbarSlot == heldSlot && it.item.runtimeId == use.heldItem }
+        if ((use.heldItem != 0 && held == null) || !canBuild() || !inReach(use.position)) return false
+        val pos = use.position
+        val used = when {
+            !use.predictedToWork -> held?.let { world.useToolOn(pos, face, it, facing(yaw), game.items) }
+            blockFirst && clicked.isItemFrame -> world.useFrame(pos, clicked, held)
+            blockFirst && clicked.isFlowerPot -> world.usePot(pos, clicked, held, held?.let { it.block ?: world.blocks.blockPlacedBy(it.item.name) }, game.items)
+            held?.item?.name == ENDER_EYE -> world.fillPortalFrame(pos, clicked)
+            held != null -> world.useToolOn(pos, face, held, facing(yaw), game.items)
+            else -> null
+        } ?: return false
+        showUsed(used, pos.side(face))
+        // Nor does the client swing the player's arm for a use it left to Kore, so Kore swings it, for them and everyone around.
+        if (!use.predictedToWork) {
+            send(Animate(Animate.SWING_ARM, entityId, swingSource = INTERACT_SWING))
+            viewers().forEach { it.showSwing(entityId, INTERACT_SWING) }
+        }
+        log.debug("{} used {} on {} at {}", player?.displayName, held?.item?.name ?: "their hand", clicked.name, pos)
+        return true
+    }
+
+    /**
+     * Shows everyone with the chunk what using an item on a block did, [used],
+     * and settles the player's hand: what was used up goes, outside creative,
+     * and a tool wears, which the client hears of as the use is answered.
+     * What came out of the block drops at [out], and what the player was
+     * handed goes among their items.
+     */
+    private fun showUsed(used: ItemUsedOn, out: BlockPos) {
+        showAround(world.packetsFor(Changes(emptyMap(), used.changed, listOfNotNull(used.sound), events = used.events)))
+        if (!creative) {
+            when (used.held) {
+                HeldAfter.USED_UP -> inventory.remove(heldSlot)
+                HeldAfter.WORN -> wearHeld(1)
+                HeldAfter.KEPT -> {}
+            }
+        }
+        if (used.dropped.isNotEmpty()) world.dropFromBlock(out, used.dropped)
+        used.given?.let(::give)
+    }
+
+    /**
+     * A click on the sign [sign]: a dye, glow ink sac, ink sac or honeycomb
+     * marks the side the player sees, as [markSign] has it, and anything
+     * else opens that side to write on. A waxed sign does neither, and says
+     * so.
+     */
+    private fun useSign(use: ItemUse, sign: BlockState) {
+        val pos = use.position
+        if (gameMode == GameMode.SPECTATOR || !inReach(pos)) return
+        val front = facesFront(pos, sign, position)
+        if (use.hotbarSlot in 0 until HOTBAR_SIZE) heldSlot = use.hotbarSlot
+        val held = inventory.items[heldSlot]?.stack?.takeIf { use.hotbarSlot == heldSlot && it.item.runtimeId == use.heldItem }
+        val marked = if (canBuild()) world.markSign(pos, front, held) else null
+        when {
+            marked != null -> showUsed(marked, pos)
+            !world.signWaxed(pos) && canBuild() -> send(OpenSign(pos, front))
+        }
+    }
+
+    /**
+     * What the player wrote on a sign, as their client sends it back: it
+     * goes on the sign, if they can reach it and it isn't waxed, and
+     * everyone with the chunk sees it. Otherwise, the client hears what the
+     * sign says.
+     */
+    private fun onEditedBlockData(packet: EditedBlockData) {
+        val pos = packet.position
+        val written = world.stateAt(pos)?.isSign == true && canBuild() && inReach(pos) && world.writeSign(pos, packet.data)
+        val now = world.blockEntityAt(pos) ?: return
+        if (written) {
+            showAround(pos, BlockActorData(pos, now))
+            log.debug("{} wrote on the sign at {}", player?.displayName, pos)
+        } else {
+            log.debug("Refused {} writing on {} at {}", player?.displayName, world.stateAt(pos)?.name, pos)
+            send(BlockActorData(pos, now))
+        }
+    }
+
+    /** When the player last knocked an item out of a frame, and which, to tell the break the client reports with it from another. */
+    private var knockedOut: Pair<BlockPos, Long>? = null
+
+    /**
+     * Knocks the item out of the frame at [pos], as hitting it does, if the
+     * player can reach it: it drops, outside creative, and everyone with the
+     * chunk sees the frame empty and hears it. Returns whether there was one.
+     */
+    private fun knockOutOfFrame(pos: BlockPos): Boolean {
+        if (!canBuild() || !inReach(pos)) return false
+        val item = world.takeFromFrame(pos, game.items) ?: return false
+        knockedOut = pos to System.currentTimeMillis()
+        showAround(world.packetsFor(Changes(emptyMap(), listOf(pos), listOf(BlockSound(pos, "block.itemframe.remove_item", -1)))))
+        if (!creative) world.dropFromBlock(pos, listOf(item))
+        log.debug("{} knocked {} out of the frame at {}", player?.displayName, item.item.name, pos)
+        return true
     }
 
     /**
@@ -1706,6 +1850,8 @@ class Session(
             val changes = world.settle(placed)
             showAround(placed.flatMap(world::withData) + sound + world.packetsFor(changes))
             if (world.stateAt(first)?.storage == Storage.SHULKER_BOX) fillShulkerBox(first, stack!!)
+            // A sign just put up opens to write on, on its front, which faces the player.
+            if (world.stateAt(first)?.isSign == true) send(OpenSign(first, front = true))
             if (!creative) inventory.remove(heldSlot)
             log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.let { it.name + it.properties }, first)
         }
@@ -1800,6 +1946,11 @@ class Session(
         // Air is what a break leaves, so it's a break the client has already reported another way. Nor can anyone break
         // water or lava, which a block holding water leaves when it breaks.
         if (state?.name == AIR || state?.liquid != null) return
+        // Hitting a frame with an item in it knocks the item out, and leaves the frame, which the client may report as the frame breaking.
+        if (state?.isItemFrame == true && (knockOutOfFrame(pos) || knockedOut?.let { (at, time) -> at == pos && System.currentTimeMillis() - time < KNOCK_OUT_MILLIS } == true)) {
+            send(*world.withData(pos).map { it.second }.toTypedArray())
+            return
+        }
 
         val ticks = state?.let { ticksToBreak(it.name) }
         val unbreakable = state != null && game.mining[state.name]?.unbreakable == true
@@ -1815,10 +1966,11 @@ class Session(
         showAround(world.packetsFor(changes))
         val held = heldItem()
         changes.broken.forEach { (at, broken) ->
-            // What the player broke drops only if what they hold harvests it. What fell with it always drops.
+            // What the player broke drops only if what they hold harvests it, as the tool has it drop. What fell with it always drops.
             val byHand = at == pos || broken.state.otherHalf(at) == pos
             val harvested = !creative && (!byHand || game.mining[broken.state.name]?.let { harvests(it, held) } != false)
-            game.dropBroken(at, broken, harvested)
+            game.dropBroken(at, broken, harvested, tool = heldStack.takeIf { byHand })
+            if (byHand && harvested) game.drops.experienceOf(broken.state, heldStack).takeIf { it > 0 }?.let { world.dropExperience(at.centre, it) }
         }
         viewers().forEach { it.containerBroke(changes.broken.keys) }
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
@@ -2190,8 +2342,9 @@ class Session(
     private fun startBreaking(pos: BlockPos, tick: Long) {
         stopBreaking()
         val state = world.stateAt(pos)?.takeIf { it.name != AIR } ?: return
-        // In Bedrock, punching a lectern knocks its book off.
+        // In Bedrock, punching a lectern knocks its book off, and punching a frame with an item in it knocks the item out, leaving the frame.
         if (state.isLectern && world.knockBookOff(pos)) showAround(pos, BlockActorData(pos, world.blockEntityAt(pos)!!))
+        if (state.isItemFrame && knockOutOfFrame(pos)) return
         val ticks = ticksToBreak(state.name)
         breaking = Breaking(pos, tick, ticks)
         if (ticks != null && ticks > 0) showAround(pos, LevelEvent(LevelEvent.START_BLOCK_CRACKING, pos.corner, CRACKED / ticks))
@@ -2666,14 +2819,14 @@ private fun GameData.dropFallen(at: Vec3, state: BlockState) {
 
 /**
  * Drops what the [broken] block at [pos] leaves in the world: the block,
- * if it was [harvested], with the data it kept, and what it held, even if
- * not, a shulker box keeping that inside itself as it drops, and any other
- * container dropping it loose. The experience a furnace's work earned that
- * nobody took drops too.
+ * if it was [harvested], with the data it kept, as broken with [tool], and
+ * what it held, even if not, a shulker box keeping that inside itself as
+ * it drops, and any other container dropping it loose. The experience a
+ * furnace's work earned that nobody took drops too.
  */
-private fun GameData.dropBroken(pos: BlockPos, broken: BrokenBlock, harvested: Boolean) {
+private fun GameData.dropBroken(pos: BlockPos, broken: BrokenBlock, harvested: Boolean, tool: ItemStack? = null) {
     val keepsItems = broken.state.storage == Storage.SHULKER_BOX
-    if (harvested || (keepsItems && broken.contents.any { it != null })) world.dropFromBlock(pos, drops.of(broken.state, broken.blockEntity, broken.contents))
+    if (harvested || (keepsItems && broken.contents.any { it != null })) world.dropFromBlock(pos, drops.of(broken.state, broken.blockEntity, broken.contents, tool))
     if (!keepsItems) world.dropFromBlock(pos, broken.contents.filterNotNull())
     wholeExperience(broken.experience).takeIf { it > 0 }?.let { world.dropExperience(pos.centre, it) }
 }

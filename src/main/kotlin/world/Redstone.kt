@@ -534,9 +534,10 @@ private fun FlatWorld.comparatorBack(pos: BlockPos, state: BlockState): Int {
  * 1 for anything in it at all, up to 15 with every slot full. A cake reads
  * more for each slice left, a composter for each level, a respawn anchor
  * for each charge, and a beehive or bee nest for its honey. An end portal
- * frame reads full with an eye in it, a lectern by how far through its
- * book the reader is, and a crafter by how many of its slots are full or
- * switched off.
+ * frame reads full with an eye in it, an item frame by which of its eight
+ * ways its item is turned, a lectern by how far through its book the
+ * reader is, and a crafter by how many of its slots are full or switched
+ * off.
  */
 internal fun FlatWorld.fullness(pos: BlockPos): Int? {
     val state = stateAt(pos) ?: return null
@@ -547,6 +548,7 @@ internal fun FlatWorld.fullness(pos: BlockPos): Int? {
         "minecraft:respawn_anchor" -> return (properties["respawn_anchor_charge"] as? Int ?: 0) * MAX_POWER / 4
         "minecraft:beehive", "minecraft:bee_nest" -> return properties["honey_level"] as? Int ?: 0
         "minecraft:end_portal_frame" -> return if (properties["end_portal_eye_bit"] == 1.toByte()) MAX_POWER else 0
+        "minecraft:frame", "minecraft:glow_frame" -> return frameTurns(pos)?.plus(1) ?: 0
         LECTERN -> return lecternPower(pos)
         CRAFTER -> return crafterAt(pos)?.taken ?: 0
     }

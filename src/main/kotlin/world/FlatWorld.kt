@@ -262,7 +262,7 @@ class FlatWorld(
      * redstone lamp is whether lit or not, and a repeater or comparator
      * whether powered or not.
      */
-    private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: when (state.name) {
+    private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: copperKind(state.name) ?: when (state.name) {
         UNLIT_REDSTONE_TORCH -> REDSTONE_TORCH
         LIT_REDSTONE_LAMP -> REDSTONE_LAMP
         POWERED_REPEATER -> UNPOWERED_REPEATER
