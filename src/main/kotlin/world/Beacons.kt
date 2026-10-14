@@ -103,9 +103,11 @@ class BeaconsLooked(val sounds: List<BlockSound>, val shining: List<Shining>)
  * A beacon's beam shines while it stands on a pyramid with nothing above
  * blocking it, and comes on or goes out with a sound. One that shines with
  * a power chosen gives it, as far as its pyramid allows: a secondary only
- * on four layers, the primary's level II if that's what was chosen.
+ * on four layers, the primary's level II if that's what was chosen. With
+ * machines switched off, none shine.
  */
 fun FlatWorld.lookAtBeacons(traits: BlockTraits): BeaconsLooked {
+    if (!features.machines) return BeaconsLooked(emptyList(), emptyList())
     val sounds = mutableListOf<BlockSound>()
     val shining = mutableListOf<Shining>()
     for ((pos, was) in beacons.toList()) {

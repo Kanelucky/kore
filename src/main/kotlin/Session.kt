@@ -2122,7 +2122,7 @@ class Session(
             val byHand = at == pos || broken.state.otherHalf(at) == pos
             val harvested = !creative && (!byHand || game.mining[broken.state.name]?.let { harvests(it, held) } != false)
             game.dropBroken(at, broken, harvested, tool = heldStack.takeIf { byHand })
-            if (byHand && harvested) game.drops.experienceOf(broken.state, heldStack).takeIf { it > 0 }?.let { world.dropExperience(at.centre, it) }
+            if (byHand && harvested && world.rules.doTileDrops) game.drops.experienceOf(broken.state, heldStack).takeIf { it > 0 }?.let { world.dropExperience(at.centre, it) }
         }
         viewers().forEach { it.containerBroke(changes.broken.keys) }
         log.debug("{} broke {} at {}", player?.displayName, state.name, pos)
@@ -3020,14 +3020,16 @@ private fun GameData.dropFallen(at: Vec3, state: BlockState) {
 
 /**
  * Drops what the [broken] block at [pos] leaves in the world: the block,
- * if it was [harvested], with the data it kept, as broken with [tool], and
- * what it held, even if not, a shulker box keeping that inside itself as
- * it drops, and any other container dropping it loose. The experience a
- * furnace's work earned that nobody took drops too.
+ * if it was [harvested] and the `doTileDrops` rule lets blocks drop, with
+ * the data it kept, as broken with [tool], and what it held, even if not,
+ * a shulker box keeping that inside itself as it drops, and any other
+ * container dropping it loose. The experience a furnace's work earned that
+ * nobody took drops too.
  */
 private fun GameData.dropBroken(pos: BlockPos, broken: BrokenBlock, harvested: Boolean, tool: ItemStack? = null) {
     val keepsItems = broken.state.storage == Storage.SHULKER_BOX
-    if (harvested || (keepsItems && broken.contents.any { it != null })) world.dropFromBlock(pos, drops.of(broken.state, broken.blockEntity, broken.contents, tool))
+    val dropping = harvested && world.rules.doTileDrops
+    if (dropping || (keepsItems && broken.contents.any { it != null })) world.dropFromBlock(pos, drops.of(broken.state, broken.blockEntity, broken.contents, tool))
     if (!keepsItems) world.dropFromBlock(pos, broken.contents.filterNotNull())
     wholeExperience(broken.experience).takeIf { it > 0 }?.let { world.dropExperience(pos.centre, it) }
 }

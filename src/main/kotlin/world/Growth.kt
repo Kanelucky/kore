@@ -175,10 +175,11 @@ internal fun FlatWorld.randomTickers(): Set<Int> = randomTicking ?: blocks.state
  * as the `randomTickSpeed` rule says. What grows grows a stage, or spreads,
  * now and then, and what dries, decays, melts or weathers does so. Run
  * once a tick. Returns what broke, like leaves with no wood left, and
- * where blocks changed, with the world settled around them.
+ * where blocks changed, with the world settled around them. With growth
+ * switched off, none land.
  */
 fun FlatWorld.tickRandomly(players: Collection<ChunkPos>, random: Random = Random.Default): Changes {
-    val speed = rules.randomTickSpeed
+    val speed = if (features.growth) rules.randomTickSpeed else 0
     if (speed <= 0 || players.isEmpty()) return Changes(emptyMap(), emptyList())
     val tickers = randomTickers()
     val growing = Growing(random)
@@ -574,11 +575,12 @@ private const val TRAMPLING_FALL = 0.5f
 /**
  * Something landing on the block at [pos], having fallen [distance]
  * blocks: farmland is trampled back to dirt, by a chance of the distance
- * less half a block, so always from a block and a half up. Returns whether
+ * less half a block, so always from a block and a half up, unless growth
+ * is switched off. Returns whether
  * it was.
  */
 fun FlatWorld.landOn(pos: BlockPos, distance: Float, random: Random = Random.Default): Boolean {
-    if (stateAt(pos)?.name != FARMLAND || random.nextFloat() >= distance - TRAMPLING_FALL) return false
+    if (!features.growth || stateAt(pos)?.name != FARMLAND || random.nextFloat() >= distance - TRAMPLING_FALL) return false
     set(pos, blocks.defaultOf(DIRT) ?: return false)
     return true
 }

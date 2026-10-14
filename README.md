@@ -88,7 +88,7 @@ The console logs at `INFO`. Each run also writes everything at `DEBUG` to its ow
 
 ### ⚙️ Configuration
 
-Settings live in `server.properties`, with the dedicated server's names, and Kore's own in `kore.json`. Kore writes both on first run. Behind NAT, set `advertisedAddresses` in `kore.json` to your public IP so clients get a candidate they can reach. When moving to a new client release, update `protocol` and `version` in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) and the data together.
+Settings live in `server.properties`, with the dedicated server's names, and Kore's own in `kore.json`. Kore writes both on first run. Behind NAT, set `advertisedAddresses` in `kore.json` to your public IP so clients get a candidate they can reach. Its `features` switch whole game systems off, for a server without them: `redstone`, `liquids`, `fallingBlocks`, `growth` and `machines`. When moving to a new client release, update `protocol` and `version` in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) and the data together.
 
 ### 🔑 The Operator Key
 

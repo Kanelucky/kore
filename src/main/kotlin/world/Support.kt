@@ -306,7 +306,7 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
         reshaped += at
         around(at)
     }
-    reshaped += wakeLeaves(changed + reshaped)
+    if (features.growth) reshaped += wakeLeaves(changed + reshaped)
     return Changes(emptyMap(), reshaped.toList())
 }
 
@@ -322,6 +322,10 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
  * it. The world settles around what changed, which can leave more for
  * later ticks. Run once a tick. Returns what broke, where blocks changed
  * shape, the sounds they made, and the falling blocks that drop as items.
+ *
+ * With [features] switched off, what's part of them doesn't happen: no
+ * falling, with snow and dripstone breaking instead, no flowing, and no
+ * redstone component answering what powers it.
  */
 fun FlatWorld.tickBlocks(): Changes {
     blockTicks++
@@ -334,8 +338,8 @@ fun FlatWorld.tickBlocks(): Changes {
     val changed = mutableListOf<BlockPos>()
     // What changed since the last tick may make blocks fall, liquid flow, or lava and concrete powder harden.
     val since = blockChanges.toList().also { blockChanges.clear() }
-    lookForFalls(since)
-    changed += lookForFlows(since, sounds)
+    if (features.fallingBlocks) lookForFalls(since)
+    if (features.liquids) changed += lookForFlows(since, sounds)
     val moved = mutableListOf<BlockPos>()
     val events = mutableListOf<WorldEvent>()
     val dropped = mutableListOf<Pair<Vec3, BlockState>>()
@@ -352,7 +356,7 @@ fun FlatWorld.tickBlocks(): Changes {
                     changed += at
                     continue
                 }
-                if (state.fallsUnheld) {
+                if (state.fallsUnheld && features.fallingBlocks) {
                     changed += fallFrom(at, state)
                     continue
                 }
@@ -375,17 +379,17 @@ fun FlatWorld.tickBlocks(): Changes {
                 sounds += sound
                 reshaped += at
             }
-            BlockUpdate.TORCH -> if (tickTorch(at, state, sounds)) reshaped += at
-            BlockUpdate.REPEATER -> if (tickRepeater(at, state)) reshaped += at
-            BlockUpdate.COMPARATOR -> if (tickComparator(at, state)) reshaped += at
-            BlockUpdate.PISTON -> movePiston(at, state, broken, reshaped, sounds, moved)
-            BlockUpdate.OBSERVER -> if (tickObserver(at, state)) reshaped += at
-            BlockUpdate.LAMP -> if (tickLamp(at, state)) reshaped += at
+            BlockUpdate.TORCH -> if (features.redstone && tickTorch(at, state, sounds)) reshaped += at
+            BlockUpdate.REPEATER -> if (features.redstone && tickRepeater(at, state)) reshaped += at
+            BlockUpdate.COMPARATOR -> if (features.redstone && tickComparator(at, state)) reshaped += at
+            BlockUpdate.PISTON -> if (features.redstone) movePiston(at, state, broken, reshaped, sounds, moved)
+            BlockUpdate.OBSERVER -> if (features.redstone && tickObserver(at, state)) reshaped += at
+            BlockUpdate.LAMP -> if (features.redstone && tickLamp(at, state)) reshaped += at
             BlockUpdate.PLATE -> if (checkPlate(at, state, sounds)) reshaped += at
             BlockUpdate.LECTERN -> if (endPagePulse(at, state)) reshaped += at
             BlockUpdate.BUTTON -> if (releaseButton(at, sounds)) reshaped += at
-            BlockUpdate.FLOW -> changed += flow(at, broken, sounds)
-            BlockUpdate.FALL -> if (canFall(at, state)) {
+            BlockUpdate.FLOW -> if (features.liquids) changed += flow(at, broken, sounds)
+            BlockUpdate.FALL -> if (features.fallingBlocks && canFall(at, state)) {
                 startFalling(at, state)
                 changed += at
             }
@@ -394,7 +398,7 @@ fun FlatWorld.tickBlocks(): Changes {
             BlockUpdate.ROD -> if (endRodPower(at, state)) reshaped += at
         }
     }
-    changed += fillFromAbove(since, events)
+    if (features.liquids) changed += fillFromAbove(since, events)
     reshaped += changed
     reshaped += settle(changed).reshaped
     reshaped.removeAll(broken.keys)

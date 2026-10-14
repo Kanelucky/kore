@@ -88,7 +88,7 @@ fun FlatWorld.tickSky(players: Collection<ChunkPos>, random: Random = Random.Def
             if (random.nextDouble() < PRECIPITATION_CHANCE) rainOn(randomTop(chunk, random).side(Face.DOWN), random)?.let(changed::add)
         }
     }
-    if (gameTime % DAYLIGHT_PERIOD == 0L) changed += senseDaylight()
+    if (features.redstone && gameTime % DAYLIGHT_PERIOD == 0L) changed += senseDaylight()
     return SkyChanges(weatherChanged, strikes, changed, events)
 }
 
@@ -161,7 +161,7 @@ internal fun FlatWorld.strike(pos: BlockPos, changed: MutableList<BlockPos>, eve
     bolts[bolt.id] = bolt
     val struck = target.side(Face.DOWN)
     val state = stateAt(struck) ?: return bolt
-    if (LIGHTNING_ROD in state.name) {
+    if (LIGHTNING_ROD in state.name && features.redstone) {
         blocks.find(state.name, state.properties + (ROD_POWERED to bit(true)))?.let { set(struck, it); changed += struck }
         schedule(struck, ROD_POWER_TICKS, BlockUpdate.ROD)
     }

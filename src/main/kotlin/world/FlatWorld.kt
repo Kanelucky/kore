@@ -236,7 +236,7 @@ class FlatWorld(
         if (state.isComparator) comparators += pos else comparators -= pos
         if (state.name == BEACON) beacons.putIfAbsent(pos, 0)
         if (state.isDaylightDetector) daylightDetectors += pos else daylightDetectors -= pos
-        powerChanges += pos
+        if (features.redstone) powerChanges += pos
         blockChanges += pos
     }
 
@@ -276,6 +276,9 @@ class FlatWorld(
 
     /** The world's game rules. */
     var rules = GameRules()
+
+    /** The game's systems that run in this world, as kore.json switches them. */
+    var features = Features()
 
     /** The weather. */
     var weather = Weather()
@@ -417,7 +420,7 @@ class FlatWorld(
      * dispensers and droppers that fired in [fired], the sounds crafters and
      * composters made in [sounds], and the songs of the jukeboxes hoppers put
      * a disc in, in [songs]. Hoppers take bone meal out of composters made
-     * with [items].
+     * with [items]. With machines switched off, none work.
      */
     fun tickMachines(
         recipes: Recipes,
@@ -428,6 +431,7 @@ class FlatWorld(
         items: ItemStacks? = null,
         songs: MutableList<SongChange> = mutableListOf(),
     ): List<BlockPos> {
+        if (!features.machines) return emptyList()
         val changed = mutableListOf<BlockPos>()
         machineTicks++
         for ((pos, machine) in machines.toList()) {

@@ -248,9 +248,11 @@ private val BlockState.torchHeldFrom: Face get() = heldFrom ?: Face.DOWN
  * gate opens as power reaches it, and shuts as the power goes, a door if
  * either half is powered. Between times, a player can open or shut a
  * wooden one by hand, and it stays so until the power changes. Returns
- * where blocks changed, the sounds they made, and the notes played.
+ * where blocks changed, the sounds they made, and the notes played: none
+ * with redstone switched off.
  */
 fun FlatWorld.updatePower(): Changes {
+    if (!features.redstone) return Changes(emptyMap(), emptyList())
     val changed = LinkedHashSet<BlockPos>()
     val sounds = mutableListOf<BlockSound>()
     val notes = mutableListOf<NotePlayed>()

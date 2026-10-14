@@ -4,6 +4,7 @@ import org.koremc.network.JoinInfo
 import org.koremc.protocol.Difficulty
 import org.koremc.protocol.GameMode
 import org.koremc.storage.LevelType
+import org.koremc.world.Features
 import java.nio.file.Path
 
 /**
@@ -59,6 +60,8 @@ data class ServerConfig(
     val seed: Long? = null,
     /** The most chunks around each player Kore will send, whatever the client asks for. */
     val viewDistance: Int = 8,
+    /** The game's systems Kore runs, all of them unless kore.json switches some off. */
+    val features: Features = Features(),
     // Must match the client's protocol number and version string.
     val protocol: Int = 2193,
     val version: String = "1.26.50",

@@ -84,9 +84,11 @@ private const val HUGE_CHANCE = 0.4
  *
  * Returns what it did, with bone meal's particles, using up a bone meal,
  * and what dropped, made with [items], or null for a block bone meal does
- * nothing for, as it is. Chance comes from [random].
+ * nothing for, as it is, or with growth switched off. Chance comes from
+ * [random].
  */
 fun FlatWorld.fertilize(pos: BlockPos, state: BlockState, items: ItemStacks, random: Random = Random.Default): ItemUsedOn? {
+    if (!features.growth) return null
     val changed = mutableListOf<BlockPos>()
     val dropped = mutableListOf<ItemStack>()
     val name = state.name

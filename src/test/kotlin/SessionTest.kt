@@ -1059,6 +1059,18 @@ class SessionTest {
     }
 
     @Test
+    fun `with the doTileDrops rule off, a survival break drops nothing`() {
+        spawn()
+        world.rules.set("doTileDrops", false)
+        val block = BlockPos(1, -63, 0)
+        world[block] = planks
+        clientSends(breakingInput(tick = 200, START_DESTROY to block))
+        clientSends(breakingInput(tick = 260, STOP_DESTROY to block, destroying = block))
+        assertEquals(AIR_NETWORK_ID, world.blockAt(block))
+        assertTrue(world.items.isEmpty())
+    }
+
+    @Test
     fun `a survival break drops the block, which the player sees land and picks up`() {
         spawn()
         val block = BlockPos(1, -63, 0)

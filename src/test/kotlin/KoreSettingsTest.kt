@@ -1,5 +1,6 @@
 package org.koremc
 
+import org.koremc.world.Features
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.readText
 import kotlin.io.path.writeText
@@ -33,13 +34,51 @@ class KoreSettingsTest {
                 "operatorDomain": "localhost",
 
                 // What players still on the server are told as it stops.
-                "shutdownMessage": "Server closed"
+                "shutdownMessage": "Server closed",
+
+                // The game's systems Kore runs: all on, the game as it is, and all off, blocks that are only blocks.
+                // Off, a system doesn't run at all, and its blocks do nothing. The game rules switch off the rest,
+                // like the weather with doweathercycle, or blocks' drops with dotiledrops.
+                "features": {
+                    // Power, and all it works: dust, torches, repeaters, comparators, observers, lamps, pistons,
+                    // pressure plates and daylight detectors, and the doors, note blocks, dispensers and hoppers it moves.
+                    // Off, levers and buttons still flip, but power goes nowhere.
+                    "redstone": true,
+
+                    // Water and lava flowing, what they make where they meet, and concrete powder hardening in water.
+                    // Off, they stay as they're put.
+                    "liquids": true,
+
+                    // Sand, gravel, anvils and the like falling with nothing under them.
+                    // Off, they stay where they are, and hanging dripstone and snow break instead.
+                    "fallingBlocks": true,
+
+                    // Random ticks, bone meal and trampling farmland: whatever grows, spreads, dries, decays, melts or weathers.
+                    "growth": true,
+
+                    // Furnaces, brewing stands, hoppers, dispensers, droppers, crafters and beacons working.
+                    // Off, they keep what's put in them, and do nothing with it.
+                    "machines": true
+                }
             }
 
             """.trimIndent(),
             file.readText(),
         )
         assertEquals(ServerConfig(), ServerConfig().withKoreSettings(file))
+    }
+
+    @Test
+    fun `systems switched off in the features are read, and switches the file lacks are added on`() {
+        file.writeText("""{ "features": { "redstone": false, "growth": false } }""")
+
+        val features = ServerConfig().withKoreSettings(file).features
+
+        assertEquals(Features(redstone = false, growth = false), features)
+        assertEquals(listOf("redstone", "growth"), features.off)
+        val written = file.readText()
+        assertTrue("\"redstone\": false" in written && "\"liquids\": true" in written && "\"machines\": true" in written, written)
+        assertEquals(features, ServerConfig().withKoreSettings(file).features)
     }
 
     @Test

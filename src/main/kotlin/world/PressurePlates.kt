@@ -69,9 +69,11 @@ internal class PlateLoad {
  * as it would standing on the block below, which a plate doesn't hold up.
  * Wooden plates press under anything, stone ones only under players, and
  * weighted ones give a step of power for each thing on them, or each ten.
- * Returns where plates changed, and their clicks.
+ * Returns where plates changed, and their clicks. With redstone switched
+ * off, no plate presses.
  */
 fun FlatWorld.pressPlates(players: Collection<Vec3>): Changes {
+    if (!features.redstone) return Changes(emptyMap(), emptyList())
     val loads = HashMap<BlockPos, PlateLoad>()
     fun weigh(box: Box, player: Boolean) {
         for (x in floor(box.min[0]).toInt()..floor(box.max[0]).toInt()) for (z in floor(box.min[2]).toInt()..floor(box.max[2]).toInt()) {
