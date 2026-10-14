@@ -43,6 +43,11 @@ import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.SetActorData
 import org.koremc.protocol.ShowEquipment
+import org.koremc.protocol.SubChunk
+import org.koremc.protocol.SubChunkEntry
+import org.koremc.protocol.SubChunkOffset
+import org.koremc.protocol.SubChunkResult
+import org.koremc.protocol.subChunkPayload
 import org.koremc.protocol.Text
 import org.koremc.protocol.flagsItem
 import org.koremc.protocol.ItemRegistry
@@ -1157,6 +1162,33 @@ class SessionTest {
         assertTrue(packets.any { it.contentEquals(InventorySlot(2, planksStack, stackId = 10).encode()) })
         assertTrue(packets.any { it.contentEquals(InventorySlot(9, stack = null, stackId = 0).encode()) })
         assertTrue(packets.any { it.contentEquals(ShowEquipment(7, planksStack, 2).encode()) })
+    }
+
+    @Test
+    fun `the client gets the sub-chunks it asks for, with the heights to light them by, all air above the ground, and none of chunks it wasn't sent`() {
+        spawn()
+        sent.clear()
+        // From the bottom sub-chunk of chunk 0, 0: itself, the one above, and one in a chunk far out of view.
+        val offsets = listOf(SubChunkOffset(0, 0, 0), SubChunkOffset(0, 1, 0), SubChunkOffset(100, 0, 0))
+        clientSends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(175).writeVarInt(0).writeVarUInt(offsets.size)
+                    .apply { offsets.forEach { writeByte(it.x).writeByte(it.y).writeByte(it.z) } }
+                    .writeIntLE(0).writeIntLE(-4).writeIntLE(0),
+            ),
+        )
+
+        // The stone at the bottom lets no light through, so the heightmap is a block up from the bottom of the world.
+        val stoneLayer = world.chunkAt(ChunkPos(0, 0)).subChunks[0]
+        val expected = SubChunk(
+            0, -4, 0,
+            listOf(
+                SubChunkEntry(offsets[0], SubChunkResult.FOUND, subChunkPayload(0, stoneLayer, null, emptyList()), ByteArray(256) { 1 }),
+                SubChunkEntry(offsets[1], SubChunkResult.ALL_AIR, heights = ByteArray(256) { -1 }),
+                SubChunkEntry(offsets[2], SubChunkResult.NO_CHUNK),
+            ),
+        )
+        assertContentEquals(expected.encode(), receivedPacket())
     }
 
     @Test

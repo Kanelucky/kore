@@ -136,3 +136,17 @@ fun FlatWorld.lightAt(pos: BlockPos): Int = max(skyLightAt(pos), blockLightAt(po
  * brighter. Out in the open, that's 15 at noon and 4 at midnight.
  */
 fun FlatWorld.internalLightAt(pos: BlockPos): Int = max(blockLightAt(pos), skyLightAt(pos) - skyDarkening())
+
+/**
+ * The chunk at [chunk]'s heightmap, as clients light it by: in each column,
+ * z row by row, the height just above the highest block that lets no light
+ * through at all, or the bottom of the world for a column with none.
+ */
+fun FlatWorld.heightMap(chunk: ChunkPos): IntArray {
+    val top = MIN_Y + chunkAt(chunk).subChunks.size * 16 - 1
+    return IntArray(16 * 16) { column ->
+        val x = chunk.x * 16 + (column and 0xF)
+        val z = chunk.z * 16 + (column shr 4)
+        (top downTo MIN_Y).firstOrNull { y -> stateAt(BlockPos(x, y, z))?.let(::dampening) == MAX_LIGHT }?.plus(1) ?: MIN_Y
+    }
+}

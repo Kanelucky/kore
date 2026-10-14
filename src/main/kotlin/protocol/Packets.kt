@@ -490,6 +490,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             PACKET_VIOLATION_WARNING -> PacketViolation(buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(), buffer.readString())
             BLOCK_PICK_REQUEST -> BlockPick(buffer.readBlockPos(), buffer.readBoolean(), buffer.readUnsignedByte().toInt())
+            SUB_CHUNK_REQUEST -> decodeSubChunkRequest(buffer)
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
         }
     } catch (e: IndexOutOfBoundsException) {

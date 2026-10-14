@@ -125,6 +125,12 @@ import org.koremc.protocol.SetTime
 import org.koremc.protocol.ShortItem
 import org.koremc.protocol.ShowArmour
 import org.koremc.protocol.ShowEquipment
+import org.koremc.protocol.SubChunk
+import org.koremc.protocol.SubChunkEntry
+import org.koremc.protocol.SubChunkOffset
+import org.koremc.protocol.SubChunkRequest
+import org.koremc.protocol.SubChunkResult
+import org.koremc.protocol.subChunkPayload
 import org.koremc.protocol.Skin
 import org.koremc.protocol.StackRequest
 import org.koremc.protocol.StartGame
@@ -242,6 +248,9 @@ import org.koremc.world.facesFront
 import org.koremc.world.facing
 import org.koremc.world.fertilize
 import org.koremc.world.fertilizeSeabed
+import org.koremc.world.heightMap
+import org.koremc.world.MIN_Y
+import org.koremc.world.SUB_CHUNK_COUNT
 import org.koremc.world.fillBucket
 import org.koremc.world.fillPortalFrame
 import org.koremc.world.FIRE_CHARGE
@@ -861,6 +870,7 @@ class Session(
             }
             State.LOADING_WORLD -> when (packet) {
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
+                is SubChunkRequest -> onSubChunkRequest(packet)
                 is LoadingScreen -> {} // The loading screen opening, as the world loads
                 else -> unexpected(packet)
             }
@@ -892,6 +902,7 @@ class Session(
                 is Text -> onChat(packet)
                 is CommandRequest -> onCommand(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
+                is SubChunkRequest -> onSubChunkRequest(packet)
                 is SetLocalPlayerAsInitialised -> if (state == State.SPAWNING) onPlayerInitialised(packet) else unexpected(packet)
                 is LoadingScreen -> if (packet.type == LoadingScreen.END) {
                     loadingScreenClosed = true
@@ -1140,7 +1151,8 @@ class Session(
     /**
      * Centres the client's view on [viewCentre], after any packets in
      * [first], then sends the chunks in view that the client doesn't have,
-     * nearest first. Returns how many.
+     * nearest first, each for the client to ask for its sub-chunks. Returns
+     * how many.
      */
     private fun updateView(radius: Int, vararg first: ServerPacket): Int {
         send(*first, NetworkChunkPublisherUpdate(position.toBlockPos(), radius * 16))
@@ -1149,8 +1161,49 @@ class Session(
         // The client drops chunks that fall out of view, so those need sending again if they come back.
         sentChunks.retainAll(inView.toSet())
         val unsent = inView.filter(sentChunks::add)
-        unsent.chunked(CHUNKS_PER_BATCH).forEach { batch -> send(*batch.map { LevelChunk(it, world.chunkAt(it), world.blockEntitiesIn(it)) }.toTypedArray()) }
+        unsent.chunked(CHUNKS_PER_BATCH).forEach { batch -> send(*batch.map { LevelChunk(it, world.chunkAt(it)) }.toTypedArray()) }
         return unsent.size
+    }
+
+    /**
+     * The sub-chunks the client asks for, of the chunks it's been sent, as
+     * [subChunkEntry] has them. Those of chunks it hasn't been sent, or
+     * outside the world, don't come.
+     */
+    private fun onSubChunkRequest(request: SubChunkRequest) {
+        val heightMaps = HashMap<ChunkPos, IntArray>()
+        val entries = request.offsets.map { offset ->
+            val at = ChunkPos(request.x + offset.x, request.z + offset.z)
+            val index = request.y + offset.y - MIN_Y / 16
+            when {
+                index !in 0 until SUB_CHUNK_COUNT -> SubChunkEntry(offset, SubChunkResult.OUT_OF_WORLD)
+                at !in sentChunks -> SubChunkEntry(offset, SubChunkResult.NO_CHUNK)
+                else -> subChunkEntry(at, index, offset, heightMaps.getOrPut(at) { world.heightMap(at) })
+            }
+        }
+        send(SubChunk(request.x, request.y, request.z, entries))
+    }
+
+    /**
+     * The sub-chunk [index] up from the bottom of the world of the chunk at
+     * [at], at [offset], as it is now: its blocks and the data they keep, or
+     * that it's all air, with where the chunk's [heightMap] is in it, in
+     * each column, which the client lights it by.
+     */
+    private fun subChunkEntry(at: ChunkPos, index: Int, offset: SubChunkOffset, heightMap: IntArray): SubChunkEntry {
+        val chunk = world.chunkAt(at)
+        val bottom = MIN_Y + index * 16
+        val heights = heightMap.map { height ->
+            when {
+                height >= bottom + 16 -> 16
+                height < bottom -> -1
+                else -> height - bottom
+            }.toByte()
+        }.toByteArray()
+        val blocks = chunk.subChunks.getOrNull(index)?.takeUnless { it.palette == listOf(AIR_NETWORK_ID) }
+            ?: return SubChunkEntry(offset, SubChunkResult.ALL_AIR, heights = heights)
+        val blockEntities = world.blockEntitiesIn(at).filter { it.getInt("y") in bottom until bottom + 16 }
+        return SubChunkEntry(offset, SubChunkResult.FOUND, subChunkPayload(index, blocks, chunk.liquids.getOrNull(index), blockEntities), heights)
     }
 
     private fun Vec3.within(distance: Float, of: Vec3) = abs(x - of.x) <= distance && abs(y - of.y) <= distance && abs(z - of.z) <= distance
