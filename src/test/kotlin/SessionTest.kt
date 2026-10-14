@@ -203,7 +203,8 @@ class SessionTest {
     private val noteBlock = BlockState("minecraft:noteblock", NbtMap.EMPTY, version = 18168865)
     private val fire = state("minecraft:fire", "age" to 0)
     private val zombieHead = state("minecraft:zombie_head", "facing_direction" to 1)
-    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, dirt, wheat, frame, poppy, jukebox, noteBlock, fire, zombieHead) + pots + cauldrons + levers + buttons + doors + fences + water)
+    private val furnace = state("minecraft:furnace", "minecraft:cardinal_direction" to "north")
+    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, dirt, wheat, frame, poppy, jukebox, noteBlock, fire, zombieHead, furnace) + pots + cauldrons + levers + buttons + doors + fences + water)
     private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
@@ -1189,6 +1190,21 @@ class SessionTest {
             ),
         )
         assertContentEquals(expected.encode(), receivedPacket())
+    }
+
+    @Test
+    fun `a furnace comes with its block entity in its sub-chunk, items and all, though no one's opened it, for the client to open`() {
+        spawn()
+        world[BlockPos(1, -63, 0)] = furnace
+        sent.clear()
+        clientSends(
+            ByteBufUtil.getBytes(
+                Unpooled.buffer().writeVarUInt(175).writeVarInt(0).writeVarUInt(1).writeByte(0).writeByte(0).writeByte(0)
+                    .writeIntLE(0).writeIntLE(-4).writeIntLE(0),
+            ),
+        )
+        val reply = String(receivedPacket(), Charsets.ISO_8859_1)
+        assertTrue("Furnace" in reply && "Items" in reply && "BurnTime" in reply, reply)
     }
 
     @Test

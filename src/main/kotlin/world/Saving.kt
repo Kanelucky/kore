@@ -63,6 +63,37 @@ internal fun FlatWorld.savedBlockEntities(): Map<ChunkPos, List<NbtMap>> {
     return positions.mapNotNull(::savedBlockEntity).groupBy { BlockPos(it.getInt("x"), it.getInt("y"), it.getInt("z")).chunk }
 }
 
+/**
+ * Every block entity in the sub-chunk [index] up from the bottom of the
+ * world of the chunk at [chunk], as the game saves them, as
+ * [savedBlockEntities] has them, which is as clients are sent them too: a
+ * furnace's whole, items and all, and one for every block that has one, a
+ * furnace that's kept nothing yet included.
+ */
+internal fun FlatWorld.savedBlockEntitiesIn(chunk: ChunkPos, index: Int): List<NbtMap> {
+    val bottom = MIN_Y + index * 16
+    fun inside(pos: BlockPos) = pos.chunk == chunk && pos.y in bottom until bottom + 16
+    val positions = LinkedHashSet<BlockPos>()
+    for (data in blockEntitiesIn(chunk)) BlockPos(data.getInt("x"), data.getInt("y"), data.getInt("z")).takeIf(::inside)?.let(positions::add)
+    for (pos in keptContainers.keys + keptMachines.keys + comparators + beacons.keys) if (inside(pos)) positions += pos
+    // And the blocks with one that have kept nothing yet, like a furnace never opened, which keep their empty slots from now.
+    val storage = chunkAt(chunk).subChunks.getOrNull(index)
+    if (storage != null && storage.palette.any { blocks[it]?.let(::savedId) != null }) {
+        for (block in 0 until SUB_CHUNK_VOLUME) {
+            val state = blocks[storage[block]]?.takeIf { savedId(it) != null } ?: continue
+            // Blocks are stored x, then z, then y, each in four bits.
+            val pos = BlockPos(chunk.x * 16 + (block shr 8), bottom + (block and 0xF), chunk.z * 16 + (block shr 4 and 0xF))
+            if (furnaceAt(pos) == null && brewingStandAt(pos) == null && hopperAt(pos) == null && dispenserAt(pos) == null && crafterAt(pos) == null &&
+                state.storage != null && state.storage != Storage.ENDER_CHEST
+            ) {
+                containerAt(pos)
+            }
+            positions += pos
+        }
+    }
+    return positions.mapNotNull(::savedBlockEntity)
+}
+
 /** The block entity at [pos] as the game saves it, with all a container or machine keeps, or null for a block that keeps nothing. */
 internal fun FlatWorld.savedBlockEntity(pos: BlockPos): NbtMap? {
     val state = stateAt(pos) ?: return null

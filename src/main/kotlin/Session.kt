@@ -249,6 +249,7 @@ import org.koremc.world.facing
 import org.koremc.world.fertilize
 import org.koremc.world.fertilizeSeabed
 import org.koremc.world.heightMap
+import org.koremc.world.savedBlockEntitiesIn
 import org.koremc.world.MIN_Y
 import org.koremc.world.SUB_CHUNK_COUNT
 import org.koremc.world.fillBucket
@@ -1186,7 +1187,8 @@ class Session(
 
     /**
      * The sub-chunk [index] up from the bottom of the world of the chunk at
-     * [at], at [offset], as it is now: its blocks and the data they keep, or
+     * [at], at [offset], as it is now: its blocks and the data they keep, as
+     * the game saves it, a furnace's items and all, so the client has them, or
      * that it's all air, with where the chunk's [heightMap] is in it, in
      * each column, which the client lights it by.
      */
@@ -1202,7 +1204,7 @@ class Session(
         }.toByteArray()
         val blocks = chunk.subChunks.getOrNull(index)?.takeUnless { it.palette == listOf(AIR_NETWORK_ID) }
             ?: return SubChunkEntry(offset, SubChunkResult.ALL_AIR, heights = heights)
-        val blockEntities = world.blockEntitiesIn(at).filter { it.getInt("y") in bottom until bottom + 16 }
+        val blockEntities = world.savedBlockEntitiesIn(at, index)
         return SubChunkEntry(offset, SubChunkResult.FOUND, subChunkPayload(index, blocks, chunk.liquids.getOrNull(index), blockEntities), heights)
     }
 
