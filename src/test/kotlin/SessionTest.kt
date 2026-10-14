@@ -130,6 +130,7 @@ private const val WATER_BUCKET_ITEM = 362
 private const val BUCKET_ITEM = 361
 private const val DISC_ITEM = 545
 private const val HELMET_ITEM = 338
+private const val ZOMBIE_HEAD_ITEM = 339
 
 /** The PlayerAction for breaking a block in creative. */
 private const val CREATIVE_DESTROY_BLOCK = 13
@@ -196,7 +197,8 @@ class SessionTest {
     private val jukebox = BlockState("minecraft:jukebox", NbtMap.EMPTY, version = 18168865)
     private val noteBlock = BlockState("minecraft:noteblock", NbtMap.EMPTY, version = 18168865)
     private val fire = state("minecraft:fire", "age" to 0)
-    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, dirt, wheat, frame, poppy, jukebox, noteBlock, fire) + pots + cauldrons + levers + buttons + doors + fences + water)
+    private val zombieHead = state("minecraft:zombie_head", "facing_direction" to 1)
+    private val palette = BlockPalette(listOf(air, stone, planks, torch, sand, sign, grass, farmland, dirt, wheat, frame, poppy, jukebox, noteBlock, fire, zombieHead) + pots + cauldrons + levers + buttons + doors + fences + water)
     private val world = FlatWorld(palette, listOf(stone))
     private val creative = CreativeInventory(
         listOf(CreativeGroup(CreativeCategory.CONSTRUCTION, "", icon = null)),
@@ -215,6 +217,7 @@ class SessionTest {
     private val bucket = ItemDefinition("minecraft:bucket", BUCKET_ITEM, componentBased = false, ItemVersion.NONE, maxStackSize = 16)
     private val disc = ItemDefinition("minecraft:music_disc_cat", DISC_ITEM, componentBased = true, ItemVersion.NONE, maxStackSize = 1)
     private val helmet = ItemDefinition("minecraft:leather_helmet", HELMET_ITEM, componentBased = false, ItemVersion.NONE, maxStackSize = 1, maxDurability = 55)
+    private val zombieHeadItem = ItemDefinition("minecraft:zombie_head", ZOMBIE_HEAD_ITEM, componentBased = false, ItemVersion.NONE)
 
     private val sent = mutableListOf<ByteArray>()
 
@@ -225,7 +228,7 @@ class SessionTest {
     private val mining = mapOf(stone.name to Mining(1.5, ToolKind.PICKAXE, harvestTier = 0))
     private val game = GameData(
         world, listOf(itemRegistry, biomes), blockDefinitions, creative, mining, Drops(creative.items.map { it.stack.item }, creative, palette),
-        ItemStacks(creative.items.map { it.stack.item } + pickaxe + hoe + poppyItem + waterBucket + bucket + disc + helmet, creative, palette),
+        ItemStacks(creative.items.map { it.stack.item } + pickaxe + hoe + poppyItem + waterBucket + bucket + disc + helmet + zombieHeadItem, creative, palette),
     )
     private val session: Session by lazy {
         // The only player, so the only one to see what they change.
@@ -926,6 +929,20 @@ class SessionTest {
         // Stone below plays the bass drum.
         assertTrue(packets.any { it.contentEquals(LevelSoundEvent("note", Vec3(1.5f, -62.5f, 0.5f), 1 shl 8 or 1).encode()) })
         assertTrue(packets.any { it.contentEquals(BlockEvent(at, 1, 1).encode()) })
+    }
+
+    @Test
+    fun `a head used on top of a note block goes on it, without sneaking, rather than tuning it`() {
+        spawn()
+        val at = BlockPos(1, -63, 0)
+        world[at] = noteBlock
+        session.give(ItemStack(zombieHeadItem, block = zombieHead))
+        sent.clear()
+
+        clientSends(placeBlock(against = at, face = 1, slot = 0, held = ZOMBIE_HEAD_ITEM))
+
+        assertEquals("minecraft:zombie_head", world.stateAt(at.side(Face.UP))?.name)
+        assertNull(world.blockEntityAt(at)?.getByte("note")?.takeIf { it > 0 }, "not tuned")
     }
 
     @Test

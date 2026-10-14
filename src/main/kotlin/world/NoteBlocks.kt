@@ -30,12 +30,31 @@ private const val DIDGERIDOO = 12
 private const val BIT = 13
 private const val BANJO = 14
 private const val PLING = 15
+private const val TRUMPET = 16
+private const val TRUMPET_EXPOSED = 17
+private const val TRUMPET_WEATHERED = 18
+private const val TRUMPET_OXIDIZED = 19
+
+/** The instruments of mob heads on top of a note block, which sound like the mob, whatever note it's tuned to, by the head. */
+private val HEAD_INSTRUMENTS = mapOf(
+    "minecraft:zombie_head" to 20, "minecraft:skeleton_skull" to 21, "minecraft:creeper_head" to 22, "minecraft:dragon_head" to 23,
+    "minecraft:wither_skeleton_skull" to 24, "minecraft:piglin_head" to 25,
+)
+
+/** The note a mob head's sound plays at, whatever the note block's tuned to: the middle of its two octaves, the mob's own pitch. */
+private const val UNTUNED = 12
 
 /** The game's name for a note block's note, with the instrument and note as its data. */
 internal const val NOTE_SOUND = "note"
 
-/** A note block at [pos] playing [note] on [instrument]: what players hear, and the note they see rise out of it. */
-data class NotePlayed(val pos: BlockPos, val instrument: Int, val note: Int)
+/**
+ * A note block at [pos] playing [note] on [instrument]: what players hear,
+ * and the note they see rise out of it, but for a mob head's sound.
+ */
+data class NotePlayed(val pos: BlockPos, val instrument: Int, val note: Int) {
+    /** Whether it plays a note at all, rather than a mob's sound, which shows none. */
+    val tuned get() = instrument !in HEAD_INSTRUMENTS.values
+}
 
 val BlockState.isNoteBlock get() = name == NOTE_BLOCK
 
@@ -47,11 +66,15 @@ private fun FlatWorld.noteData(pos: BlockPos): NbtMap = blockEntityAt(pos) ?: no
 
 /**
  * Plays the note block at [pos], if the space above it is clear, on the
- * instrument the block below it makes it. Null if it's no note block, or
- * something's on it.
+ * instrument the block below it makes it, or with a mob's head on top,
+ * the mob's sound, at its own pitch, however it's tuned. Null if it's no
+ * note block, or anything else is on it, a player's head included.
  */
 internal fun FlatWorld.playNote(pos: BlockPos): NotePlayed? {
-    if (stateAt(pos)?.isNoteBlock != true || stateAt(pos.side(Face.UP))?.name != AIR) return null
+    if (stateAt(pos)?.isNoteBlock != true) return null
+    val above = stateAt(pos.side(Face.UP))?.name
+    HEAD_INSTRUMENTS[above]?.let { return NotePlayed(pos, it, UNTUNED) }
+    if (above != AIR) return null
     return NotePlayed(pos, instrumentOn(stateAt(pos.side(Face.DOWN))), noteData(pos).getByte(NOTE).toInt())
 }
 
@@ -117,15 +140,32 @@ private val OWN_INSTRUMENTS = mapOf(
     "suspicious_gravel" to SNARE, "sand" to SNARE, "red_sand" to SNARE, "suspicious_sand" to SNARE,
 )
 
+/** Copper that plays the trumpet, by its name less any wax and weathering: whole, cut and chiseled, and cut copper's slabs and stairs. */
+private val TRUMPETS = setOf("cut_copper", "chiseled_copper", "cut_copper_slab", "double_cut_copper_slab", "cut_copper_stairs")
+
+/** The trumpet copper plays, the more weathered the more worn, by how its name starts, unwaxed. */
+private val TRUMPET_STAGES = listOf("exposed_" to TRUMPET_EXPOSED, "weathered_" to TRUMPET_WEATHERED, "oxidized_" to TRUMPET_OXIDIZED)
+
+/** The trumpet a note block on the block called [name] plays, by how weathered its copper is, or null if it isn't copper that plays one. */
+private fun trumpetOn(name: String): Int? {
+    val unwaxed = name.removePrefix("waxed_")
+    val (stage, trumpet) = TRUMPET_STAGES.firstOrNull { unwaxed.startsWith(it.first) } ?: ("" to TRUMPET)
+    val kind = unwaxed.removePrefix(stage)
+    // Whole copper is a copper block, until it's waxed or weathers, when it's just copper.
+    val whole = kind == if (stage.isEmpty() && name == unwaxed) "copper_block" else "copper"
+    return trumpet.takeIf { whole || kind in TRUMPETS }
+}
+
 /**
  * The instrument a note block on [below] plays, as the game picks it:
  * wood plays the bass, stone and the like the bass drum, sand and gravel
- * the snare, glass the hat, wool the guitar, and so on, and anything else
- * the harp.
+ * the snare, glass the hat, wool the guitar, copper the trumpet, worn as
+ * it weathers, and so on, and anything else the harp.
  */
 internal fun instrumentOn(below: BlockState?): Int {
     val name = below?.name?.removePrefix("minecraft:") ?: return HARP
     OWN_INSTRUMENTS[name]?.let { return it }
+    trumpetOn(name)?.let { return it }
     val bare = name.removePrefix("stripped_")
     return when {
         name.endsWith("concrete_powder") -> SNARE

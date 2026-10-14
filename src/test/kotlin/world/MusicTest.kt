@@ -53,6 +53,39 @@ class MusicTest {
     }
 
     @Test
+    fun `a note block on copper plays the trumpet, the more worn the more the copper's weathered, waxed or not`() {
+        val trumpets = mapOf(
+            "minecraft:copper_block" to 16, "minecraft:waxed_copper" to 16, "minecraft:cut_copper" to 16, "minecraft:chiseled_copper" to 16,
+            "minecraft:cut_copper_slab" to 16, "minecraft:waxed_cut_copper_stairs" to 16, "minecraft:double_cut_copper_slab" to 16,
+            "minecraft:exposed_copper" to 17, "minecraft:waxed_exposed_chiseled_copper" to 17, "minecraft:weathered_cut_copper_slab" to 18,
+            "minecraft:waxed_weathered_copper" to 18, "minecraft:oxidized_copper" to 19, "minecraft:waxed_oxidized_double_cut_copper_slab" to 19,
+            // Not all copper plays the trumpet.
+            "minecraft:raw_copper_block" to 1, "minecraft:copper_ore" to 1, "minecraft:copper_grate" to 0, "minecraft:exposed_copper_bulb" to 0,
+        )
+        for ((below, instrument) in trumpets) assertEquals(instrument, instrumentOn(block(below)), below)
+    }
+
+    @Test
+    fun `a mob's head on top of a note block plays the mob's sound, whatever it's on, showing no note, and a player's head keeps it quiet`() {
+        world[ground] = block("minecraft:gold_block")
+        place("minecraft:noteblock")
+        val heads = mapOf(
+            "minecraft:zombie_head" to 20, "minecraft:skeleton_skull" to 21, "minecraft:creeper_head" to 22, "minecraft:dragon_head" to 23,
+            "minecraft:wither_skeleton_skull" to 24, "minecraft:piglin_head" to 25,
+        )
+        world.tuneNote(above) // Tuned a note up, the mob's sound plays at its own pitch all the same, the middle note.
+        for ((head, instrument) in heads) {
+            world[above.side(Face.UP)] = block(head)
+            assertEquals(NotePlayed(above, instrument, 12), world.playNote(above), head)
+            assertFalse(world.playNote(above)!!.tuned)
+        }
+        world[above.side(Face.UP)] = block("minecraft:player_head")
+        assertNull(world.playNote(above))
+        world[above.side(Face.UP)] = block(AIR)
+        assertTrue(world.playNote(above)!!.tuned)
+    }
+
+    @Test
     fun `a click tunes a note block a note up, round after two octaves, and it plays only with air above it`() {
         world[ground] = block("minecraft:gold_block")
         place("minecraft:noteblock")

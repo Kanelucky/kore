@@ -1764,6 +1764,14 @@ class Session(
      * to the server, though, and finds they do nothing: a hoe tilling, or
      * an axe stripping a log. Kore does those, when the player clicks.
      */
+    /** Whether [use] puts a mob or player head on top of [clicked], a note block, which places the head rather than tuning the note block. */
+    private fun headOnNoteBlock(use: ItemUse, clicked: BlockState?): Boolean {
+        if (clicked?.isNoteBlock != true || Face.of(use.face) != Face.UP) return false
+        if (use.hotbarSlot !in 0 until HOTBAR_SIZE) return false
+        val held = inventory.items[use.hotbarSlot]?.stack?.item?.takeIf { it.runtimeId == use.heldItem } ?: return false
+        return held.name.endsWith("_head") || held.name.endsWith("_skull")
+    }
+
     private fun onClick(use: ItemUse) {
         val clicked = world.stateAt(use.position)
         // With something in hand, sneaking passes over what a block does when it's clicked, but not what the item does to it.
@@ -1783,7 +1791,8 @@ class Session(
                 openMachine(use.position)
             blockFirst && clicked?.isSign == true -> useSign(use, clicked)
             clicked != null && useItemOn(use, clicked, blockFirst) -> {}
-            blockFirst && clicked?.opensOnClick == true -> log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
+            blockFirst && clicked?.opensOnClick == true && !headOnNoteBlock(use, clicked) ->
+                log.debug("{} clicked {} at {}, which Kore can't open yet", player?.displayName, clicked.name, use.position)
             else -> onPlace(use)
         }
     }
@@ -1808,7 +1817,7 @@ class Session(
         val held = inventory.items[heldSlot]?.stack?.takeIf { use.hotbarSlot == heldSlot && it.item.runtimeId == use.heldItem }
         if ((use.heldItem != 0 && held == null) || !canBuild() || !inReach(use.position)) return false
         val pos = use.position
-        val headOnTop = face == Face.UP && held?.item?.name?.let { it.endsWith("_head") || it.endsWith("_skull") } == true
+        val headOnTop = headOnNoteBlock(use, clicked)
         val boneMeal = held?.item?.name == BONE_MEAL
         val used = when {
             // Bone meal on a bush with room to grow grows it, rather than picking what's on it.
@@ -3255,9 +3264,10 @@ private fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPa
     } + changes.reshaped.flatMap(::withData) + changes.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) } +
         changes.events.map { it.pos to LevelEvent(it.event, if (it.centred) it.pos.centre else it.pos.corner, it.data) } +
         changes.data.mapNotNull { pos -> blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) } } +
-        changes.notes.flatMap { (pos, instrument, note) ->
-            // The note sounds, and rises out of the block in its colour.
-            listOf(pos to LevelSoundEvent(NOTE_SOUND, pos.centre, instrument shl 8 or note), pos to BlockEvent(pos, instrument, note))
+        changes.notes.flatMap { played ->
+            val (pos, instrument, note) = played
+            // The note sounds, and rises out of the block in its colour, but a mob's sound shows no note.
+            listOfNotNull(pos to LevelSoundEvent(NOTE_SOUND, pos.centre, instrument shl 8 or note), (pos to BlockEvent(pos, instrument, note)).takeIf { played.tuned })
         } +
         changes.songs.flatMap(::songPackets)
 
