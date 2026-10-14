@@ -181,13 +181,7 @@ class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: Bl
         if (dropsNothing(state.name)) return emptyList()
         val (name, count) = DROPS_INSTEAD[state.name]?.let { it to 1 } ?: singleSlabOf(state.name)?.let { it to 2 } ?: ((itemPlacing(state.name) ?: state.name) to 1)
         // Beds and banners keep their colour in their block entity, as their items do in their aux value.
-        val colour = when {
-            blockEntity == null -> null
-            blockEntity.containsKey("color") -> blockEntity.getByte("color").toInt()
-            blockEntity.containsKey("Base") -> blockEntity.getInt("Base")
-            else -> null
-        }
-        val stack = stacks.of(name, count, aux = colour ?: 0) ?: return emptyList()
+        val stack = stacks.of(name, count, aux = keptColour(blockEntity) ?: 0) ?: return emptyList()
         val held = contents.withIndex().mapNotNull { (slot, item) -> item?.let { slot to it } }
         if (state.storage == Storage.SHULKER_BOX && held.isNotEmpty()) return listOf(stack.copy(nbt = ItemStacks.holding(held)))
         return listOf(stack)
@@ -285,11 +279,19 @@ class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: Bl
 
     private fun dropsNothing(name: String) = name in DROPS_NOTHING || name.endsWith("_leaves") ||
         ((name.endsWith("glass") || name.endsWith("glass_pane")) && name != "minecraft:tinted_glass")
+}
 
-    /** The slab two of make a double slab called [name], or null if it isn't one. */
-    private fun singleSlabOf(name: String): String? = when {
-        name.endsWith("double_cut_copper_slab") -> name.replace("double_cut_copper_slab", "cut_copper_slab")
-        name.endsWith("_double_slab") -> name.removeSuffix("_double_slab") + "_slab"
-        else -> null
-    }
+/** The slab two of make a double slab called [name], or null if it isn't one. */
+internal fun singleSlabOf(name: String): String? = when {
+    name.endsWith("double_cut_copper_slab") -> name.replace("double_cut_copper_slab", "cut_copper_slab")
+    name.endsWith("_double_slab") -> name.removeSuffix("_double_slab") + "_slab"
+    else -> null
+}
+
+/** The colour a bed or banner kept in its block entity, [blockEntity], as its item keeps it in its aux value, or null for any other. */
+internal fun keptColour(blockEntity: NbtMap?): Int? = when {
+    blockEntity == null -> null
+    blockEntity.containsKey("color") -> blockEntity.getByte("color").toInt()
+    blockEntity.containsKey("Base") -> blockEntity.getInt("Base")
+    else -> null
 }

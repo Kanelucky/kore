@@ -44,6 +44,7 @@ import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.BlockAction
 import org.koremc.protocol.BlockActorData
 import org.koremc.protocol.BlockEvent
+import org.koremc.protocol.BlockPick
 import org.koremc.protocol.BookAction
 import org.koremc.protocol.BookEdit
 import org.koremc.protocol.ByteItem
@@ -269,11 +270,13 @@ import org.koremc.world.number
 import org.koremc.world.opensOnClick
 import org.koremc.world.otherHalf
 import org.koremc.world.pick
+import org.koremc.world.pickedItem
 import org.koremc.world.pistonMotions
 import org.koremc.world.place
 import org.koremc.world.playNote
 import org.koremc.world.pressPlates
 import org.koremc.world.putOnLectern
+import org.koremc.world.restoreBlockData
 import org.koremc.world.setBeaconPowers
 import org.koremc.world.settle
 import org.koremc.world.showing
@@ -304,6 +307,7 @@ import org.koremc.world.usePot
 import org.koremc.world.useToolOn
 import org.koremc.world.wearFromBreaking
 import org.koremc.world.wholeExperience
+import org.koremc.world.withBlockData
 import org.koremc.world.writeSign
 import org.slf4j.LoggerFactory
 import java.security.interfaces.ECPublicKey
@@ -878,6 +882,7 @@ class Session(
                 is ToggleCrafterSlot -> onToggleCrafterSlot(packet)
                 is MapInfoRequest -> onMapInfoRequest(packet)
                 is MapCreateLockedCopy -> onLockedCopy(packet)
+                is BlockPick -> onBlockPick(packet)
                 is Text -> onChat(packet)
                 is CommandRequest -> onCommand(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
@@ -1511,6 +1516,55 @@ class Session(
     }
 
     /**
+     * The player picking the block they look at, with a middle click, as
+     * the game has it: the hotbar slot holding its item, if one does, or
+     * else its item moved into their hotbar from the rest of their items,
+     * into the first empty slot, or the one they hold if none is, swapping
+     * places with what was there. In creative, a block they
+     * have none of goes into their hand that way, what was there moving
+     * among their other items, and with control held, it carries what the
+     * block keeps, like a chest's items. They're shown the slots that
+     * changed, and hold the one with the block's item.
+     */
+    private fun onBlockPick(packet: BlockPick) {
+        val pos = packet.position
+        if (gameMode == GameMode.SPECTATOR || !inReach(pos)) return
+        if (packet.hotbarSlot in 0 until HOTBAR_SIZE) heldSlot = packet.hotbarSlot
+        val state = world.stateAt(pos) ?: return
+        var picked = pickedItem(state, world.blockEntityAt(pos), game.items) ?: return
+        if (packet.withData && creative) picked = world.withBlockData(picked, pos) ?: picked
+        val items = inventory.items
+        val found = (0 until items.size).firstOrNull { slot ->
+            items[slot]?.stack?.let { it.item == picked.item && it.aux == picked.aux && it.nbt == picked.nbt } == true
+        }
+        val changed = mutableListOf<Int>()
+        when {
+            found != null && found < HOTBAR_SIZE -> heldSlot = found
+            found != null -> {
+                heldSlot = hotbarSlotForPick()
+                items[heldSlot] = items[found].also { items[found] = items[heldSlot] }
+                changed += listOf(heldSlot, found)
+            }
+            !creative -> return
+            else -> {
+                heldSlot = hotbarSlotForPick()
+                val free = (0 until items.size).firstOrNull { items[it] == null }
+                if (items[heldSlot] != null && free != null) {
+                    items[free] = items[heldSlot]
+                    changed += free
+                }
+                items[heldSlot] = SlotStack(picked, inventory.newStackId())
+                changed += heldSlot
+            }
+        }
+        send(*changed.map(::slotOf).toTypedArray(), ShowEquipment(entityId, items[heldSlot]?.stack, heldSlot))
+        log.debug("{} picked {} at {}, into slot {}", player?.displayName, picked.item.name, pos, heldSlot)
+    }
+
+    /** The hotbar slot a picked item goes in: the first empty one, from the left, or else the one held. */
+    private fun hotbarSlotForPick(): Int = (0 until HOTBAR_SIZE).firstOrNull { inventory.items[it] == null } ?: heldSlot
+
+    /**
      * A transaction from before item stack requests, which the client still
      * sends for a few things, or the item use riding in the player's input
      * at the client's [tick]. When a use changes what the player holds in a
@@ -2009,11 +2063,13 @@ class Session(
         } else {
             val first = placed.first()
             val sound = first to LevelSoundEvent(LevelSoundEvent.PLACE, first.centre, world.blockAt(first))
+            // A block picked with its data puts it back: a chest its items, a sign its writing.
+            val restored = world.restoreBlockData(first, stack!!, game.items)
             val changes = world.settle(placed)
             showAround(placed.flatMap(world::withData) + sound + world.packetsFor(changes))
-            if (world.stateAt(first)?.storage == Storage.SHULKER_BOX) fillShulkerBox(first, stack!!)
-            // A sign just put up opens to write on, on its front, which faces the player.
-            if (world.stateAt(first)?.isSign == true) send(OpenSign(first, front = true))
+            if (world.stateAt(first)?.storage == Storage.SHULKER_BOX) fillShulkerBox(first, stack)
+            // A sign just put up opens to write on, on its front, which faces the player, unless it came written.
+            if (world.stateAt(first)?.isSign == true && !restored) send(OpenSign(first, front = true))
             if (!creative) inventory.remove(heldSlot)
             log.debug("{} placed {} at {}", player?.displayName, world.stateAt(first)?.let { it.name + it.properties }, first)
         }

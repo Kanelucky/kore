@@ -21,6 +21,7 @@ private const val RESOURCE_PACKS_INFO = 6
 private const val RESOURCE_PACK_STACK = 7
 private const val RESOURCE_PACK_CLIENT_RESPONSE = 8
 private const val PACKET_VIOLATION_WARNING = 156
+private const val BLOCK_PICK_REQUEST = 34
 private const val INTERACT = 33
 private const val CONTAINER_OPEN = 46
 private const val CONTAINER_CLOSE = 47
@@ -169,6 +170,13 @@ data class ContainerClose(val windowId: Int, val containerType: Int, val serverI
  * [context]. It disconnects over the worst of them.
  */
 data class PacketViolation(val type: Int, val severity: Int, val packetId: Int, val context: String) : ClientPacket
+
+/**
+ * The player picking the block at [position], with a middle click, for its
+ * item in their hand, and [withData], with control held, for the item to
+ * carry what the block keeps too. They held [hotbarSlot] as they picked it.
+ */
+data class BlockPick(val position: BlockPos, val withData: Boolean, val hotbarSlot: Int) : ClientPacket
 
 /** A packet Kore doesn't decode yet. */
 class UnhandledPacket(val id: Int, val payload: ByteArray) : ClientPacket {
@@ -481,6 +489,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             MAP_CREATE_LOCKED_COPY -> decodeMapCreateLockedCopy(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
             PACKET_VIOLATION_WARNING -> PacketViolation(buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(), buffer.readString())
+            BLOCK_PICK_REQUEST -> BlockPick(buffer.readBlockPos(), buffer.readBoolean(), buffer.readUnsignedByte().toInt())
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
         }
     } catch (e: IndexOutOfBoundsException) {

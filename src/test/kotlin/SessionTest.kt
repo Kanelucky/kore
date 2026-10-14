@@ -13,6 +13,7 @@ import org.koremc.auth.MultiplayerTokenVerifier
 import org.koremc.auth.TestAuthority
 import org.koremc.auth.XUID
 import org.koremc.auth.ecKeyPair
+import org.koremc.inventory.HOTBAR_SIZE
 import org.koremc.protocol.Animate
 import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.ARMOUR_WINDOW
@@ -41,6 +42,7 @@ import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.SetActorData
+import org.koremc.protocol.ShowEquipment
 import org.koremc.protocol.Text
 import org.koremc.protocol.flagsItem
 import org.koremc.protocol.ItemRegistry
@@ -1058,6 +1060,69 @@ class SessionTest {
         assertEquals(AIR_NETWORK_ID, world.blockAt(ground))
     }
 
+    /** A middle click on the block at [at], with control held for [withData], holding hotbar [slot]. */
+    private fun blockPick(at: BlockPos, withData: Boolean = false, slot: Int = 0) = ByteBufUtil.getBytes(
+        Unpooled.buffer().writeVarUInt(34).writeVarInt(at.x).writeVarInt(at.y).writeVarInt(at.z).writeBoolean(withData).writeByte(slot),
+    )
+
+    @Test
+    fun `in creative, picking a block puts its item in the first empty hotbar slot and holds it, and picking it again holds that slot`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        session.give(ItemStack(hoe)) // In slot 0, which they hold
+        val at = BlockPos(1, -63, 0)
+        world[at] = planks
+        val planksStack = ItemStack(creative.items[0].stack.item, block = planks)
+        sent.clear()
+
+        clientSends(blockPick(at, slot = 4)) // Into the first empty slot, not the held one
+        val packets = receivedPackets()
+        assertEquals(1, packets.count { it[0].toInt() == 50 }) // One slot filled
+        assertTrue(packets.any { it.contentEquals(ShowEquipment(7, planksStack, 1).encode()) })
+
+        clientSends(blockPick(at, slot = 1))
+        assertEquals(listOf(ShowEquipment(7, planksStack, 1).encode().toList()), receivedPackets().map { it.toList() })
+    }
+
+    @Test
+    fun `in survival, picking a block with the hotbar full swaps its item from the rest of the inventory with the held one, and picks nothing they don't have`() {
+        spawn()
+        session.give(ItemStack(hoe, count = 64 * HOTBAR_SIZE)) // A full hotbar
+        val planksStack = ItemStack(creative.items[0].stack.item, block = planks)
+        session.give(planksStack) // In slot 9
+        val at = BlockPos(1, -63, 0)
+        world[at] = planks
+        sent.clear()
+
+        clientSends(blockPick(at, slot = 5))
+        val packets = receivedPackets()
+        assertTrue(packets.any { it.contentEquals(InventorySlot(5, planksStack, stackId = 10).encode()) })
+        assertTrue(packets.any { it.contentEquals(InventorySlot(9, ItemStack(hoe, count = 64), stackId = 6).encode()) })
+        assertTrue(packets.any { it.contentEquals(ShowEquipment(7, planksStack, 5).encode()) })
+
+        world[at] = torch
+        clientSends(blockPick(at))
+        assertTrue(receivedPackets().isEmpty())
+    }
+
+    @Test
+    fun `picking a block moves its item from the rest of the inventory into the first empty hotbar slot, even left of the held one`() {
+        spawn()
+        session.give(ItemStack(hoe, count = 64 * HOTBAR_SIZE))
+        val planksStack = ItemStack(creative.items[0].stack.item, block = planks)
+        session.give(planksStack) // In slot 9
+        clientSends(dropFromSlot(slot = 2, had = 64, dropping = 64, item = HOE_ITEM)) // Slot 2 emptied
+        val at = BlockPos(1, -63, 0)
+        world[at] = planks
+        sent.clear()
+
+        clientSends(blockPick(at, slot = 5))
+        val packets = receivedPackets()
+        assertTrue(packets.any { it.contentEquals(InventorySlot(2, planksStack, stackId = 10).encode()) })
+        assertTrue(packets.any { it.contentEquals(InventorySlot(9, stack = null, stackId = 0).encode()) })
+        assertTrue(packets.any { it.contentEquals(ShowEquipment(7, planksStack, 2).encode()) })
+    }
+
     @Test
     fun `with the doTileDrops rule off, a survival break drops nothing`() {
         spawn()
@@ -1503,16 +1568,16 @@ class SessionTest {
     )
 
     /**
-     * An inventory transaction dropping [dropping] of the [had] oak planks
-     * in hotbar [slot], as pressing Q does: they leave the slot and go into
-     * the world.
+     * An inventory transaction dropping [dropping] of the [had] of [item],
+     * oak planks unless said, in hotbar [slot], as pressing Q does: they
+     * leave the slot and go into the world.
      */
-    private fun dropFromSlot(slot: Int, had: Int, dropping: Int) = ByteBufUtil.getBytes(
+    private fun dropFromSlot(slot: Int, had: Int, dropping: Int, item: Int = PLANKS_ITEM) = ByteBufUtil.getBytes(
         Unpooled.buffer().writeVarUInt(30).writeVarInt(0).writeBoolean(false).writeVarUInt(0).writeVarUInt(2)
             .writeVarUInt(2).writeBoolean(false).writeBoolean(true).writeVarUInt(0).writeVarUInt(0) // Into the world, dropped
-            .heldItem(0).heldItem(PLANKS_ITEM, dropping)
+            .heldItem(0).heldItem(item, dropping)
             .writeVarUInt(0).writeBoolean(true).writeByte(0).writeBoolean(false).writeVarUInt(slot) // Out of the inventory
-            .heldItem(PLANKS_ITEM, had).heldItem(if (had > dropping) PLANKS_ITEM else 0, had - dropping),
+            .heldItem(item, had).heldItem(if (had > dropping) item else 0, had - dropping),
     )
 
     /** A stack of [count] of the item [id], as the client describes what it holds. */

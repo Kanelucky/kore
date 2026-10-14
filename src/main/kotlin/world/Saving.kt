@@ -63,7 +63,8 @@ internal fun FlatWorld.savedBlockEntities(): Map<ChunkPos, List<NbtMap>> {
     return positions.mapNotNull(::savedBlockEntity).groupBy { BlockPos(it.getInt("x"), it.getInt("y"), it.getInt("z")).chunk }
 }
 
-private fun FlatWorld.savedBlockEntity(pos: BlockPos): NbtMap? {
+/** The block entity at [pos] as the game saves it, with all a container or machine keeps, or null for a block that keeps nothing. */
+internal fun FlatWorld.savedBlockEntity(pos: BlockPos): NbtMap? {
     val state = stateAt(pos) ?: return null
     val data = blockEntityAt(pos)?.toBuilder() ?: NbtMap.builder().putString("id", savedId(state) ?: return null)
     data.putInt("x", pos.x).putInt("y", pos.y).putInt("z", pos.z)
