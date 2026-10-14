@@ -50,6 +50,8 @@ internal const val TWISTING_VINES = "minecraft:twisting_vines"
 internal const val WEEPING_VINES = "minecraft:weeping_vines"
 internal const val MANGROVE_PROPAGULE = "minecraft:mangrove_propagule"
 private const val ICE = "minecraft:ice"
+internal const val WATERLILY = "minecraft:waterlily"
+internal const val FROG_SPAWN = "minecraft:frog_spawn"
 private const val FROSTED_ICE = "minecraft:frosted_ice"
 private const val BUDDING_AMETHYST = "minecraft:budding_amethyst"
 private const val DRIPSTONE_BLOCK = "minecraft:dripstone_block"
@@ -754,9 +756,12 @@ private fun FlatWorld.growStalagmite(tip: BlockPos, state: BlockState, growing: 
  * crops and stems on farmland, sugar cane on sand or the like, or more
  * cane, cactus on sand or more cactus, nether wart on soul sand, and
  * berries and saplings on dirt of some kind, and a planted mangrove
- * propagule on clay too. Null for a plant that stands on anything.
+ * propagule on clay too. Lily pads and frogspawn float on still water,
+ * and lily pads sit on ice too. Null for a plant that stands on anything.
  */
 internal fun standsOn(block: BlockState, ground: BlockState): Boolean? = when {
+    block.floatsOnWater -> (ground.liquid == Liquid.WATER && ground.liquidDepth == 0) ||
+        (block.name == WATERLILY && (ground.name == ICE || ground.name == FROSTED_ICE))
     block.isSapling -> ground.name in DIRTS
     block.name == MANGROVE_PROPAGULE && block.properties[HANGING] == 0.toByte() -> ground.name in DIRTS || ground.name == CLAY
     block.name in CROPS || block.name in STEM_FRUIT || block.name == TORCHFLOWER_CROP -> ground.name == FARMLAND

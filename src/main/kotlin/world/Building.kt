@@ -144,6 +144,9 @@ private val TORCH_SUPPORTS = listOf(Face.SOUTH, Face.WEST, Face.NORTH, Face.EAST
 /** Whether a placed block takes this one's place, rather than going beside it. Snow does only while it's one layer deep. */
 val BlockState.replaceable get() = name in REPLACEABLE && !(name == SNOW_LAYER && properties["height"] != 0)
 
+/** Whether this floats on water: a lily pad or frogspawn, which a player places on top of the water they use it on. */
+internal val BlockState.floatsOnWater get() = name == WATERLILY || name == FROG_SPAWN
+
 /**
  * Places [block] as [placer] does, against [face] of the block at
  * [clicked], having clicked [clickY] up that face, from [item], if it
@@ -190,7 +193,9 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
     }
     blocks.piledOnto(clickedState, block)?.let { set(clicked, it); return listOf(clicked) }
 
-    val replacing = clickedState.replaceable && !(clickedState.name == block.name && block.name == SNOW_LAYER)
+    // A lily pad or frogspawn used on water goes on top of it, rather than in its place.
+    val replacing = clickedState.replaceable && !(clickedState.name == block.name && block.name == SNOW_LAYER) &&
+        !(block.floatsOnWater && clickedState.liquid != null)
     val target = if (replacing) clicked else clicked.side(face)
     if (target.y !in MIN_Y..MAX_Y) return emptyList()
     val targetState = stateAt(target) ?: return emptyList()

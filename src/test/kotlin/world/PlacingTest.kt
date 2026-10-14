@@ -423,6 +423,20 @@ class PlacingTest {
     /** A block of stone on the ground, to place against, a few blocks north. */
     private fun pillar(): BlockPos = BlockPos(0, ground.y + 1, -3).also { world[it] = blocks.defaultOf("minecraft:stone")!! }
 
+    @Test
+    fun `a lily pad used on water floats on top of it, not in its place, and breaks once the water goes`() {
+        world[above] = world.liquidState(Liquid.WATER, 0)
+        assertEquals(listOf(above.side(Face.UP)), place("minecraft:waterlily", above, Face.UP))
+        assertEquals("minecraft:waterlily", world.stateAt(above.side(Face.UP))?.name)
+        assertEquals(Liquid.WATER, world.stateAt(above)?.liquid)
+
+        world[above] = blocks.stateOf(AIR)
+        world.settle(listOf(above))
+        assertEquals("minecraft:waterlily", world.tickBlocks().broken[above.side(Face.UP)]?.state?.name)
+        // On stone, there's nothing for it to float on.
+        assertEquals(emptyList(), place("minecraft:waterlily", ground, Face.UP))
+    }
+
     private fun place(name: String, against: BlockPos, face: Face, placer: Placer = Placer(Face.NORTH)) = placeSaying(name, against, face, placer)
 
     private fun placeSaying(name: String, against: BlockPos, face: Face, placer: Placer = Placer(Face.NORTH)): List<BlockPos> {

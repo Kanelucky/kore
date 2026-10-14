@@ -158,7 +158,7 @@ private val ON_FLOOR = setOf(
     "azalea", "flowering_azalea", "nether_sprouts", "crimson_roots", "warped_roots", "nether_wart", "wheat", "carrots",
     "potatoes", "beetroot", "sweet_berry_bush", "sea_pickle", "turtle_egg", "snow_layer", "redstone_wire", "cake",
     "standing_sign", "leaf_litter", "wildflowers", "brown_mushroom", "red_mushroom", "flower_pot", "kelp", "melon_stem",
-    "pumpkin_stem",
+    "pumpkin_stem", "waterlily", "frog_spawn",
 ).mapTo(HashSet()) { "minecraft:$it" }
 
 /** Blocks that hang from the block above, and break without it. */
