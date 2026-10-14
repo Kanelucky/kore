@@ -31,6 +31,9 @@ import org.koremc.protocol.LevelEvent
 import org.koremc.protocol.InventorySlot
 import org.koremc.protocol.LevelSoundEvent
 import org.koremc.protocol.OpenSign
+import org.koremc.world.strike
+import org.koremc.protocol.SetTime
+import org.koremc.protocol.AddLightning
 import org.koremc.protocol.UpdateSoundData
 import org.koremc.protocol.RecordStarted
 import org.koremc.protocol.PlaySound
@@ -344,8 +347,9 @@ class SessionTest {
         clientSends(setLocalPlayerAsInitialised(runtimeId = 7))
         assertTrue(session.isInGame)
 
-        // Then the client learns about its own player: its actor data, attributes and abilities, and the commands it may run.
-        assertEquals(listOf(0x27, 0x1D, 0xBB, 0x4C), batches.decode(sent.last()).map { it[0].toInt() and 0xFF })
+        // Then the client learns about its own player: its actor data, attributes and abilities, and the commands it may run; then the
+        // time, and the weather, rain and thunder each stopped.
+        assertEquals(listOf(0x27, 0x1D, 0xBB, 0x4C, 0x0A, 0x19, 0x19), batches.decode(sent.last()).map { it[0].toInt() and 0xFF })
     }
 
     @Test
@@ -858,6 +862,23 @@ class SessionTest {
             ),
         )
         assertEquals(0, receivedPacket()[3].toInt()) // The response's result: accepted
+    }
+
+    @Test
+    fun `players see lightning strike in their chunks, with its thunder, until it's gone, and hear the time once a second`() {
+        spawn()
+        val bolt = world.strike(BlockPos(3, -63, 3), mutableListOf(), mutableListOf())
+        sent.clear()
+
+        listOf(session).tickSky(game)
+        val packets = receivedPackets()
+        assertTrue(packets.any { it.contentEquals(AddLightning(bolt.id, Vec3(3.5f, -63f, 3.5f)).encode()) })
+        assertTrue(packets.any { it.contentEquals(LevelSoundEvent("thunder", Vec3(3.5f, -63f, 3.5f), -1, entityType = "minecraft:lightning_bolt").encode()) })
+
+        repeat(19) { listOf(session).tickSky(game) }
+        val later = receivedPackets()
+        assertTrue(later.any { it.contentEquals(RemoveActor(bolt.id).encode()) })
+        assertTrue(later.any { it.contentEquals(SetTime(world.time).encode()) })
     }
 
     @Test

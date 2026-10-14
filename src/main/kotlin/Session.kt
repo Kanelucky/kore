@@ -36,6 +36,7 @@ import org.koremc.protocol.ActorFlag
 import org.koremc.protocol.AddExperienceOrb
 import org.koremc.protocol.AddFallingBlock
 import org.koremc.protocol.AddItemActor
+import org.koremc.protocol.AddLightning
 import org.koremc.protocol.AddPlayer
 import org.koremc.protocol.Animate
 import org.koremc.protocol.Attribute
@@ -63,6 +64,7 @@ import org.koremc.protocol.EditedBlockData
 import org.koremc.protocol.EnchantOption
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
+import org.koremc.protocol.GameRulesChanged
 import org.koremc.protocol.InputFlag
 import org.koremc.protocol.Interact
 import org.koremc.protocol.InventoryAction
@@ -75,6 +77,7 @@ import org.koremc.protocol.ItemStackResponse
 import org.koremc.protocol.ItemUse
 import org.koremc.protocol.ItemUseAction
 import org.koremc.protocol.JigsawStructureData
+import org.koremc.protocol.LIGHTNING_BOLT
 import org.koremc.protocol.LecternUpdate
 import org.koremc.protocol.LevelChunk
 import org.koremc.protocol.LevelEvent
@@ -96,6 +99,7 @@ import org.koremc.protocol.OFFHAND_WINDOW
 import org.koremc.protocol.OfferedEnchantment
 import org.koremc.protocol.OpenSign
 import org.koremc.protocol.PacketException
+import org.koremc.protocol.PacketViolation
 import org.koremc.protocol.PermissionLevel
 import org.koremc.protocol.PlaySound
 import org.koremc.protocol.PlayStatus
@@ -116,6 +120,7 @@ import org.koremc.protocol.SetActorData
 import org.koremc.protocol.SetActorMotion
 import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.SetPlayerGameType
+import org.koremc.protocol.SetTime
 import org.koremc.protocol.ShortItem
 import org.koremc.protocol.ShowEquipment
 import org.koremc.protocol.Skin
@@ -273,6 +278,7 @@ import org.koremc.world.takeFromFrame
 import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
 import org.koremc.world.tickOrbs
+import org.koremc.world.tickSky
 import org.koremc.world.toggleCrafterSlot
 import org.koremc.world.tuneNote
 import org.koremc.world.turnPage
@@ -340,6 +346,19 @@ private const val NOW_PLAYING = "record.nowPlaying"
 
 /** How loud a jukebox's song plays: four times as far as a sound at full volume carries. */
 private const val JUKEBOX_VOLUME = 4f
+
+/** Where the weather happens, which is everywhere: the client takes no notice of the point. */
+private val ORIGIN = Vec3(0f, 0f, 0f)
+
+/** How hard rain and thunder come down, of 65535. */
+private const val FULL_WEATHER = 65535
+
+// The sounds of lightning striking: its thunder, by the bolt, and its blast.
+private const val THUNDER = "thunder"
+private const val EXPLODE = "explode"
+
+/** How often players hear what the time is, in ticks, to keep their clocks in step. */
+private const val TIME_SYNC_TICKS = 20
 
 /** How the names of armour end, by the armour slot each piece goes in, from the head down. */
 private val ARMOUR_PIECES = listOf("_helmet", "_chestplate", "_leggings", "_boots")
@@ -797,6 +816,8 @@ class Session(
     }
 
     private fun handle(packet: ClientPacket) {
+        // Whatever the client is doing, a packet it found wrong is worth knowing of.
+        if (packet is PacketViolation) return log.warn("Network {} found packet {} from Kore wrong: {}", networkId, packet.packetId, packet.context)
         when (state) {
             State.AWAITING_NETWORK_SETTINGS_REQUEST -> if (packet is RequestNetworkSettings) onRequestNetworkSettings(packet) else unexpected(packet)
             State.AWAITING_LOGIN -> if (packet is Login) onLogin(packet) else unexpected(packet)
@@ -939,6 +960,10 @@ class Session(
                 serverVersion = config.version,
                 baseGameVersion = config.version,
                 blockDefinitions = game.blockDefinitions,
+                time = world.gameTime,
+                rainLevel = if (world.weather.raining) 1f else 0f,
+                lightningLevel = if (world.weather.thundering) 1f else 0f,
+                gameRules = world.rules.all,
             ),
             *game.definitions.toTypedArray(),
         )
@@ -2193,6 +2218,52 @@ class Session(
         send(*gone.map(::RemoveActor).toTypedArray())
     }
 
+    /** The lightning bolts the client has been shown, by their entity IDs. */
+    private val shownBolts = HashSet<Long>()
+
+    /** What the client hears of the weather as it is: rain and thunder starting, at full strength, or stopping. */
+    private fun weatherNow(): Array<ServerPacket> {
+        val weather = world.weather
+        val rain = if (weather.raining) LevelEvent(LevelEvent.START_RAIN, ORIGIN, FULL_WEATHER) else LevelEvent(LevelEvent.STOP_RAIN, ORIGIN, 0)
+        val thunder = if (weather.thundering) LevelEvent(LevelEvent.START_THUNDER, ORIGIN, FULL_WEATHER) else LevelEvent(LevelEvent.STOP_THUNDER, ORIGIN, 0)
+        return arrayOf(rain, thunder)
+    }
+
+    /** Shows the client the weather as it is now, once it's changed. */
+    fun showWeather() {
+        if (state == State.IN_GAME) send(*weatherNow())
+    }
+
+    /** Tells the client the time, which it keeps up itself in between, while the daylight cycle's on. */
+    fun showTime() {
+        if (state == State.IN_GAME) send(SetTime(world.time))
+    }
+
+    /** Tells the client of the game rules that changed, [rules]. */
+    fun showRules(rules: Map<String, Any>) {
+        if (state == State.IN_GAME) send(GameRulesChanged(rules))
+    }
+
+    /**
+     * Shows the client the lightning that's struck in its chunks since, with
+     * its thunder, and takes away the bolts that are gone. Run once a tick.
+     */
+    fun showLightning() {
+        if (state != State.IN_GAME) return
+        val packets = mutableListOf<ServerPacket>()
+        val inView = world.lightning.filter { it.position.toBlockPos().chunk in sentChunks }
+        for (bolt in inView) {
+            if (!shownBolts.add(bolt.id)) continue
+            packets += AddLightning(bolt.id, bolt.position)
+            packets += LevelSoundEvent(THUNDER, bolt.position, -1, entityType = LIGHTNING_BOLT)
+            packets += LevelSoundEvent(EXPLODE, bolt.position, -1)
+        }
+        val gone = shownBolts - inView.mapTo(HashSet()) { it.id }
+        shownBolts -= gone
+        packets += gone.map(::RemoveActor)
+        if (packets.isNotEmpty()) send(*packets.toTypedArray())
+    }
+
     /** The player's experience level, which anvils and enchanting cost. */
     val experienceLevel get() = experience.level
 
@@ -2527,7 +2598,7 @@ class Session(
             return
         }
         state = State.IN_GAME
-        send(*playerState(), commands.map.availableTo(permission))
+        send(*playerState(), commands.map.availableTo(permission), SetTime(world.time), *weatherNow())
         showSavedItems()
         log.info("{} spawned", player?.displayName)
         announceJoin()
@@ -2966,6 +3037,23 @@ private fun FlatWorld.mapData(map: MapData, patch: MapPatch?) = ClientboundMapIt
 )
 
 /**
+ * Ticks the sky over [game]'s world, around these players, for them to see
+ * what it does: the weather changing, lightning striking, with what it did
+ * to the blocks it struck, cauldrons filling with rain, and daylight
+ * detectors changing. They hear the time once a second. Run once a tick,
+ * before redstone, which answers what the sky powered.
+ */
+internal fun Collection<Session>.tickSky(game: GameData) {
+    val world = game.world
+    val sky = world.tickSky(filter { it.isInGame }.map { it.feet.toBlockPos().chunk })
+    if (sky.weatherChanged) forEach { it.showWeather() }
+    val changes = Changes(emptyMap(), sky.changed.distinct(), events = sky.events)
+    if (!changes.isEmpty) showAround(world.packetsFor(changes))
+    forEach { it.showLightning() }
+    if (world.gameTime % TIME_SYNC_TICKS == 0L) forEach { it.showTime() }
+}
+
+/**
  * Brings what redstone powers in [game]'s world in line with what changed
  * since it last looked, for these players to see if they have the chunks:
  * doors, trapdoors and fence gates swinging, with their sounds, and the
@@ -3088,6 +3176,7 @@ class Sessions(
         sessions.values.tickBlocks(game, dropItems = config.gameMode != GameMode.CREATIVE)
         game.world.tickItems()
         sessions.values.tickMachines(game)
+        sessions.values.tickSky(game)
         sessions.values.tickPower(game)
         sessions.values.forEach { it.tickEffects() }
         sessions.values.tickBeacons(game)

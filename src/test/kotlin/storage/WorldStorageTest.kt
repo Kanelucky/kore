@@ -41,6 +41,7 @@ import kotlin.io.path.readText
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -114,6 +115,28 @@ class WorldStorageTest {
             forced.save()
         }
         WorldStorage.open(directory, "Test", layers, blocks, items, settings).use { assertEquals(GameMode.CREATIVE, it.settings.gameMode, "as it was forced to last time") }
+    }
+
+    @Test
+    fun `the time, the weather and the game rules save, and open again as they were`() {
+        session {
+            world.time = 30_000
+            world.gameTime = 45_000
+            world.weather.raining = true
+            world.weather.rainTime = 1234
+            world.rules.set("doDaylightCycle", false)
+            world.rules.set("randomTickSpeed", 3)
+        }
+        session {
+            assertEquals(30_000, world.time)
+            assertEquals(45_000, world.gameTime)
+            assertTrue(world.weather.raining)
+            assertFalse(world.weather.thundering)
+            assertEquals(1234, world.weather.rainTime)
+            assertFalse(world.rules.doDaylightCycle)
+            assertEquals(3, world.rules["randomtickspeed"])
+            assertEquals(true, world.rules["showTags"]) // Untouched, as it was
+        }
     }
 
     @Test

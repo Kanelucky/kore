@@ -82,6 +82,21 @@ private fun copperOf(name: String): Copper? {
  */
 internal fun copperKind(name: String): String? = copperOf(name)?.let { Copper(it.base, 0, waxed = false).name }
 
+/** Whether [state] is copper that weathers: not waxed, of a kind the game has weathered blocks of. */
+internal fun FlatWorld.weathers(state: BlockState): Boolean {
+    val copper = copperOf(state.name)?.takeUnless { it.waxed } ?: return false
+    return blocks.defaultOf(copper.copy(stage = 1).name) != null
+}
+
+/**
+ * [state], copper, a stage less weathered, or as new, if [whole], or null
+ * for a block that isn't copper that weathers, or is as new already.
+ */
+internal fun FlatWorld.lessWeathered(state: BlockState, whole: Boolean = false): BlockState? {
+    val copper = copperOf(state.name)?.takeIf { !it.waxed && it.stage > 0 } ?: return null
+    return blocks.find(copper.copy(stage = if (whole) 0 else copper.stage - 1).name, state.properties)
+}
+
 /**
  * Uses the tool, or honeycomb, [held] on [face] of the block at [pos], as
  * a player facing [facing] does, the game's way, if it does anything to

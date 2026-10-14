@@ -24,7 +24,10 @@ import org.koremc.protocol.GameMode
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
 import org.koremc.world.BlockPos
+import org.koremc.world.GAME_RULE_DEFAULTS
+import org.koremc.world.GameRules
 import org.koremc.world.PLAINS_BIOME_ID
+import org.koremc.world.Weather
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -99,8 +102,38 @@ class LevelDat(val data: NbtMap) {
         return FlatLayers(states, json["biome_id"]?.jsonPrimitive?.intOrNull ?: PLAINS_BIOME_ID)
     }
 
+    /** The time of day, in ticks since the world began, and how long the world has run, whatever the time of day. */
+    val time: Long get() = data.getLong("Time", 0)
+    val gameTime: Long get() = data.getLong("currentTick", 0)
+
+    /** The weather as the world was saved with it. */
+    fun weather() = Weather().apply {
+        raining = data.getFloat("rainLevel", 0f) > 0
+        rainTime = data.getInt("rainTime", 0)
+        thundering = data.getFloat("lightningLevel", 0f) > 0
+        thunderTime = data.getInt("lightningTime", 0)
+    }
+
+    /** The game rules as the world was saved with them, by the names the game keeps them under: on or off, kept as a byte, or a number. */
+    val gameRules: Map<String, Any>
+        get() = GAME_RULE_DEFAULTS.keys.map(String::lowercase).mapNotNull { rule ->
+            when (val value = data[rule]) {
+                is Byte -> rule to (value != 0.toByte())
+                is Int -> rule to value
+                else -> null
+            }
+        }.toMap()
+
     /** These settings with [changes] made. */
     fun with(changes: NbtMapBuilder.() -> Unit) = LevelDat(data.toBuilder().apply(changes).build())
+
+    /** These settings with the world's [time], [gameTime], [weather] and [rules] as they are now. */
+    fun keeping(time: Long, gameTime: Long, weather: Weather, rules: GameRules) = with {
+        putLong("Time", time).putLong("currentTick", gameTime)
+        putFloat("rainLevel", if (weather.raining) 1f else 0f).putInt("rainTime", weather.rainTime)
+        putFloat("lightningLevel", if (weather.thundering) 1f else 0f).putInt("lightningTime", weather.thunderTime)
+        putRules(rules.all)
+    }
 
     /** Writes the settings to [file], whole or not at all. */
     fun write(file: Path) {
@@ -208,20 +241,18 @@ private fun defaults(name: String, layers: FlatLayers, seed: Long, version: Stri
                 .putInt("permissionsLevel", 0).putInt("playerPermissionsLevel", 1)
                 .build(),
         )
-    // The game rules, at their defaults.
-    for ((rule, on) in GAME_RULES) data.putBoolean(rule, on)
-    data.putInt("functioncommandlimit", 10000).putInt("maxcommandchainlength", 65535).putInt("randomtickspeed", 1)
-        .putInt("spawnradius", 5).putInt("playerssleepingpercentage", 100)
+    // The game rules, at their defaults, and whether mobs spawn at all, which the game keeps beside them.
+    data.putRules(GameRules().all)
+    data.putBoolean("spawnMobs", true)
     return data
 }
 
-/** The game's rules that are on or off, as a new world has them. */
-private val GAME_RULES = mapOf(
-    "commandblockoutput" to true, "commandblocksenabled" to true, "dodaylightcycle" to true, "doentitydrops" to true,
-    "dofiretick" to true, "doimmediaterespawn" to false, "doinsomnia" to true, "domobloot" to true, "domobspawning" to true,
-    "dotiledrops" to true, "doweathercycle" to true, "drowningdamage" to true, "falldamage" to true, "firedamage" to true,
-    "freezedamage" to true, "keepinventory" to false, "mobgriefing" to true, "naturalregeneration" to true, "pvp" to true,
-    "respawnblocksexplode" to true, "sendcommandfeedback" to true, "showcoordinates" to false, "showdeathmessages" to true,
-    "showtags" to true, "spawnMobs" to true, "tntexplodes" to true, "recipesunlock" to true, "dolimitedcrafting" to false,
-    "tntexplosiondropdecay" to false, "projectilescanbreakblocks" to true, "showrecipemessages" to true, "showbordereffect" to true,
-)
+/** Puts [rules] in, by the names the game keeps them under: on or off as a byte, or a number. */
+private fun NbtMapBuilder.putRules(rules: Map<String, Any>) {
+    for ((rule, value) in rules) {
+        when (value) {
+            is Boolean -> putBoolean(rule, value)
+            is Int -> putInt(rule, value)
+        }
+    }
+}

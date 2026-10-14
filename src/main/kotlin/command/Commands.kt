@@ -14,11 +14,15 @@ import org.koremc.registry.Enchantment
 import org.koremc.registry.EnchantmentLevel
 import org.koremc.registry.enchantments
 import org.koremc.registry.withEnchantments
+import org.koremc.world.DAY_LENGTH
+import org.koremc.world.GAME_RULES_IN_USE
+import org.koremc.world.GAME_RULE_DEFAULTS
 import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
 import org.koremc.world.PLAYER_WIDTH
 import org.koremc.world.Vec3
 import org.koremc.world.isClear
+import org.koremc.world.setWeather
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -35,6 +39,16 @@ private const val HELP_PAGE_LINES = 7
 
 /** How far from the middle of the world anything can go, across. */
 private const val WORLD_EDGE = 30_000_000f
+
+/** The times of day `/time set` takes by name, in ticks into the day, which starts at sunrise. */
+private val TIMES_OF_DAY = mapOf("day" to 1000, "noon" to 6000, "sunset" to 12000, "night" to 13000, "midnight" to 18000, "sunrise" to 23000)
+
+/** The longest `/weather` sets the weather for, in ticks. */
+private const val MAX_WEATHER_TICKS = 1_000_000
+
+/** The game rule for day turning to night, and the time of day `/daylock` locks the day at: an hour before noon. */
+private const val DAYLIGHT_CYCLE = "dodaylightcycle"
+private const val LOCKED_TIME = 5000
 
 /**
  * Items the creative inventory leaves out that commands still hand out:
@@ -69,6 +83,20 @@ class Commands(
     private val gameModes = EnumType("GameMode", listOf("default", "creative", "spectator", "survival", "adventure", "d", "c", "s", "a"))
     private val booleans = EnumType("Boolean", listOf("true", "false"))
     private val facing = EnumType("TeleportFacing", listOf("facing"))
+    private val timeSet = EnumType("TimeSet", listOf("set"))
+    private val query = EnumType("Query", listOf("query"))
+    private val timesOfDay = EnumType("TimeSpec", TIMES_OF_DAY.keys.toList())
+    private val timeQueries = EnumType("TimeQuery", listOf("daytime", "gametime", "day"))
+    private val weathers = EnumType("WeatherType", listOf("clear", "rain", "thunder"))
+
+    /**
+     * The game rules `/gamerule` offers, those that do something in Kore,
+     * on or off apart from those that are numbers, as commands write them:
+     * in lower case, as the client takes no keyword in a command that isn't.
+     */
+    private val rulesInUse = GAME_RULE_DEFAULTS.filterKeys { it in GAME_RULES_IN_USE }
+    private val switchRules = EnumType("BoolGameRule", rulesInUse.filterValues { it is Boolean }.keys.map { it.lowercase() })
+    private val numberRules = EnumType("IntGameRule", rulesInUse.filterValues { it is Int }.keys.map { it.lowercase() })
 
     /** The enchantments, by the names the game's commands call them, which leave the curses' `_curse` off. */
     private val enchantmentNames = game.enchantments.all.associateBy { it.name.removeSuffix("_curse") }
@@ -94,7 +122,10 @@ class Commands(
     fun run(source: CommandSource, line: String) = map.run(source, line)
 
     private fun vanilla(): List<Command> {
-        val commands = listOf(list(), me(), tell(), say(), gameMode(), give(), clear(), teleport(), xp(), enchant(), kick(), op(), deop(), stop())
+        val commands = listOf(
+            list(), me(), tell(), say(), gameMode(), give(), clear(), teleport(), xp(), enchant(), time(), weather(), toggleDownfall(), dayLock(),
+            gameRule(), kick(), op(), deop(), stop(),
+        )
         return commands + help(commands.flatMap { listOf(it.name) + it.aliases } + listOf("help", "?"))
     }
 
@@ -376,6 +407,107 @@ class Commands(
             target.replaceHeld(held.withEnchantments(existing.filter { it.id != enchantment.id } + EnchantmentLevel(enchantment.id, level)))
             success("commands.enchant.success", target.name)
         }
+    }
+
+    /**
+     * Sets the time of day, to a number of ticks or a time by name, adds to
+     * it, or says what it is: the time of day, how long the world has run,
+     * or which day it is. Every player's clock follows.
+     */
+    private fun time() = command("time", GAME_DIRECTORS, cheat = true) {
+        overload(required("set", timeSet), required("amount", IntType)) { setTime(int("amount").toLong()) }
+        overload(required("set", timeSet), required("time", timesOfDay)) { setTime(TIMES_OF_DAY.getValue(string("time")).toLong()) }
+        overload(required("add", EnumType("TimeAdd", listOf("add"))), required("amount", IntType)) {
+            world.time += int("amount")
+            players.forEach { it.showTime() }
+            success("commands.time.added", int("amount"))
+        }
+        overload(required("query", query), required("time", timeQueries)) {
+            when (string("time")) {
+                "daytime" -> success("commands.time.query.daytime", world.time % DAY_LENGTH)
+                "gametime" -> success("commands.time.query.gametime", world.gameTime)
+                else -> success("commands.time.query.day", world.time / DAY_LENGTH)
+            }
+        }
+    }
+
+    private fun CommandCall.setTime(time: Long) {
+        world.time = time
+        players.forEach { it.showTime() }
+        success("commands.time.set", time)
+    }
+
+    /**
+     * Sets the weather, clear, rain, or thunder with its rain, for as many
+     * ticks as the command says, or for a while picked at random, and every
+     * player sees it change. Or says what it is.
+     */
+    private fun weather() = command("weather", GAME_DIRECTORS, cheat = true) {
+        overload(required("type", weathers), optional("duration", IntType)) {
+            val duration = intOr("duration", 0)
+            if (duration < 0) fail("commands.generic.num.tooSmall", duration, 0)
+            if (duration > MAX_WEATHER_TICKS) fail("commands.generic.num.tooBig", duration, MAX_WEATHER_TICKS)
+            val type = string("type")
+            world.setWeather(raining = type != "clear", thundering = type == "thunder", ticks = duration.takeIf { it > 0 })
+            players.forEach { it.showWeather() }
+            success("commands.weather.$type")
+        }
+        overload(required("query", query)) {
+            val now = when {
+                world.weather.thundering -> "thunder"
+                world.weather.raining -> "rain"
+                else -> "clear"
+            }
+            success("commands.weather.query", "%commands.weather.query.$now")
+        }
+    }
+
+    /** Starts rain, or stops whatever's falling. */
+    private fun toggleDownfall() = command("toggledownfall", GAME_DIRECTORS, cheat = true) {
+        overload {
+            world.setWeather(raining = !world.weather.raining, thundering = false)
+            players.forEach { it.showWeather() }
+            success("commands.downfall.success")
+        }
+    }
+
+    /**
+     * Locks the day, as the Always Day option does: day turns to night no
+     * more, and it's the middle of the morning; or unlocks it again.
+     */
+    private fun dayLock() = command("daylock", GAME_DIRECTORS, cheat = true, aliases = listOf("alwaysday")) {
+        overload(optional("lock", booleans)) {
+            val lock = stringOrNull("lock") != "false"
+            world.rules.set(DAYLIGHT_CYCLE, !lock)
+            if (lock) world.time = world.time - world.time % DAY_LENGTH + LOCKED_TIME
+            players.forEach { it.showRules(mapOf(DAYLIGHT_CYCLE to !lock)); it.showTime() }
+            success(if (lock) "commands.always.day.locked" else "commands.always.day.unlocked")
+        }
+    }
+
+    /**
+     * Sets a game rule, on or off, or to a number, which every player's
+     * client hears of. Or says what one is, or with none named, lists them
+     * all, as `rule = value`. Only the rules that do something in Kore.
+     */
+    private fun gameRule() = command("gamerule", GAME_DIRECTORS, cheat = true) {
+        overload {
+            success(rulesInUse.keys.joinToString(", ") { "$it = ${world.rules[it]}" })
+        }
+        overload(required("rule", switchRules), optional("value", booleans)) { setRule(stringOrNull("value")?.toBooleanStrict()) }
+        // Until a rule that's a number does something, there's none to offer.
+        if (numberRules.values.isNotEmpty()) {
+            overload(required("rule", numberRules), optional("value", IntType)) { setRule(if (has("value")) int("value") else null) }
+        }
+    }
+
+    /** Sets the rule the command names to [value], or says what it is, for none. */
+    private fun CommandCall.setRule(value: Any?) {
+        val rule = string("rule")
+        if (value == null) return success("$rule = ${world.rules[rule]}")
+        world.rules.set(rule, value)
+        players.forEach { it.showRules(mapOf(rule to value)) }
+        success("commands.gamerule.success", rule, value)
     }
 
     private fun kick() = command("kick", GAME_DIRECTORS, cheat = false) {

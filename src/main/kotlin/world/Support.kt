@@ -90,6 +90,9 @@ enum class BlockUpdate {
 
     /** A jukebox's song ending, which stops the power it gives. */
     SONG,
+
+    /** A struck lightning rod stopping giving power. */
+    ROD,
 }
 
 /**
@@ -115,6 +118,7 @@ internal val BlockState.dueFor: List<BlockUpdate>
             name == BIG_DRIPLEAF -> BlockUpdate.TILT
             name.endsWith("button") -> BlockUpdate.BUTTON
             name == COMPOSTER -> BlockUpdate.COMPOST
+            rodPowered -> BlockUpdate.ROD
             fallsFreely -> BlockUpdate.FALL
             liquid != null -> BlockUpdate.FLOW
             else -> null
@@ -365,6 +369,7 @@ fun FlatWorld.tickBlocks(): Changes {
             }
             BlockUpdate.COMPOST -> if (readyCompost(at, state, sounds)) reshaped += at
             BlockUpdate.SONG -> endSong(at)
+            BlockUpdate.ROD -> if (endRodPower(at, state)) reshaped += at
         }
     }
     changed += fillFromAbove(since, events)

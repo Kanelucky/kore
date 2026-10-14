@@ -107,6 +107,30 @@ data class AddFallingBlock(val entityId: Long, val block: Int, val position: Vec
     }
 }
 
+/** A lightning bolt striking, as the entity [entityId], which the client draws and flashes from [position] up. */
+data class AddLightning(val entityId: Long, val position: Vec3) : ServerPacket {
+    override val id get() = ADD_ACTOR
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarLong(entityId)
+        out.writeVarULong(entityId)
+        out.writeString(LIGHTNING_BOLT)
+        out.writeVec3(position)
+        out.writeVec3(Vec3(0f, 0f, 0f))
+        out.writeFloatLE(0f).writeFloatLE(0f) // Pitch and yaw
+        out.writeFloatLE(0f) // Head yaw
+        out.writeFloatLE(0f) // Body yaw
+        out.writeVarUInt(0) // Attributes
+        out.writeActorData(listOf(flagsItem(emptySet())))
+        out.writeVarUInt(0) // Int properties
+        out.writeVarUInt(0) // Float properties
+        out.writeVarUInt(0) // Entities it rides or is ridden by
+    }
+}
+
+/** The game's name for lightning bolts, which the sound of their thunder names too. */
+const val LIGHTNING_BOLT = "minecraft:lightning_bolt"
+
 /** An entity gone from the client's world, by its unique ID. */
 data class RemoveActor(val entityId: Long) : ServerPacket {
     override val id get() = REMOVE_ACTOR

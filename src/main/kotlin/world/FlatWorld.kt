@@ -218,6 +218,7 @@ class FlatWorld(
         if (state.name == HOPPER) machines.getOrPut(pos) { Hopper() }
         if (state.isComparator) comparators += pos else comparators -= pos
         if (state.name == BEACON) beacons.putIfAbsent(pos, 0)
+        if (state.isDaylightDetector) daylightDetectors += pos else daylightDetectors -= pos
         powerChanges += pos
         blockChanges += pos
     }
@@ -250,6 +251,27 @@ class FlatWorld(
     /** Every beacon, by where it is, with how many layers of pyramid its beam last shone on, or 0 if it didn't. */
     internal val beacons = HashMap<BlockPos, Int>()
 
+    /** How long the world has run, in ticks, as the game counts it, whatever the time of day. */
+    var gameTime = 0L
+
+    /** The time of day, in ticks since the world began, a day being [DAY_LENGTH]; it stands still while the daylight cycle's off. */
+    var time = 0L
+
+    /** The world's game rules. */
+    var rules = GameRules()
+
+    /** The weather. */
+    var weather = Weather()
+
+    /** The lightning bolts striking, by their entity IDs. */
+    internal val bolts = LinkedHashMap<Long, LightningBolt>()
+
+    /** The lightning bolts striking, oldest first. */
+    val lightning: Collection<LightningBolt> get() = bolts.values
+
+    /** Every daylight detector, which the sky powers. */
+    internal val daylightDetectors = HashSet<BlockPos>()
+
     /** The jukeboxes playing a song, by where they are, with when each song ends and the handle clients know it by. */
     internal val playing = HashMap<BlockPos, PlayingSong>()
 
@@ -269,14 +291,15 @@ class FlatWorld(
 
     /**
      * What kind of block [state] is, which a furnace, redstone torch or
-     * redstone lamp is whether lit or not, and a repeater or comparator
-     * whether powered or not.
+     * redstone lamp is whether lit or not, a repeater or comparator
+     * whether powered or not, and a daylight detector whichever it senses.
      */
     private fun kindOf(state: BlockState) = state.furnaceKind?.block ?: copperKind(state.name) ?: when (state.name) {
         UNLIT_REDSTONE_TORCH -> REDSTONE_TORCH
         LIT_REDSTONE_LAMP -> REDSTONE_LAMP
         POWERED_REPEATER -> UNPOWERED_REPEATER
         POWERED_COMPARATOR -> UNPOWERED_COMPARATOR
+        INVERTED_DAYLIGHT_DETECTOR -> DAYLIGHT_DETECTOR
         else -> state.name
     }
 

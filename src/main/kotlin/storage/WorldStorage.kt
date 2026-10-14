@@ -18,6 +18,7 @@ import org.koremc.world.Chunk
 import org.koremc.world.ChunkLoader
 import org.koremc.world.ChunkPos
 import org.koremc.world.FlatWorld
+import org.koremc.world.GameRules
 import org.koremc.world.LoadedChunk
 import org.koremc.world.MAP_SIZE
 import org.koremc.world.MIN_Y
@@ -197,6 +198,7 @@ class WorldStorage private constructor(
         }
         world.unsaved.clear()
         levelDat = levelDat.updated(world.spawn, settings.gameMode, settings.difficulty, settings.cheats, settings.version, settings.protocol)
+            .keeping(world.time, world.gameTime, world.weather, world.rules)
         levelDat.write(directory.resolve("level.dat"))
         directory.resolve("levelname.txt").writeText(levelDat.name)
     }
@@ -341,7 +343,12 @@ class WorldStorage private constructor(
             val storage = WorldStorage(directory, WorldDatabase.open(directory.resolve("db")), levelDat, blocks, items, kept)
             storage.biome = layers.biome
             val spawn = levelDat.spawn ?: levelDat.groundSpawn.let { (x, z) -> BlockPos(x, MIN_Y + layers.layers.size, z) }
-            storage.world = FlatWorld(blocks, layers.layers, layers.biome, loader = storage, spawn = spawn, traits = traits)
+            storage.world = FlatWorld(blocks, layers.layers, layers.biome, loader = storage, spawn = spawn, traits = traits).apply {
+                time = levelDat.time
+                gameTime = levelDat.gameTime
+                rules = GameRules(levelDat.gameRules)
+                weather = levelDat.weather()
+            }
             for ((_, value) in storage.db.startingWith(MAP_PREFIX)) {
                 runCatching { mapFrom(readAll(value).first()) }.getOrNull()?.let(storage.world.maps::add)
             }

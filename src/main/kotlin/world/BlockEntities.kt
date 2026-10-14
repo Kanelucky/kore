@@ -10,9 +10,10 @@ import org.koremc.registry.ItemStack
  * [item], for blocks whose looks don't all fit in their state: a head's
  * turn on the floor, a bed's colour, a banner's colour and patterns, and
  * a piston's arm, and for blocks things are put in or written on: signs,
- * item frames, flower pots, jukeboxes and cauldrons, and note blocks,
- * which keep their note. The client makes a plain one for any other
- * block that needs one. Null for a block that keeps nothing of its own.
+ * item frames, flower pots, jukeboxes and cauldrons, note blocks, which
+ * keep their note, and daylight detectors, which the world finds again by
+ * theirs. The client makes a plain one for any other block that needs
+ * one. Null for a block that keeps nothing of its own.
  */
 internal fun blockEntityFor(state: BlockState, pos: BlockPos, placer: Placer, item: ItemStack?): NbtMap? {
     val name = state.name
@@ -36,6 +37,7 @@ internal fun blockEntityFor(state: BlockState, pos: BlockPos, placer: Placer, it
         state.isNoteBlock -> noteBlockData()
         state.isJukebox -> jukeboxData()
         state.isCauldron -> cauldronData()
+        state.isDaylightDetector -> NbtMap.builder().putString("id", "DaylightDetector").build()
         else -> null
     }
 }

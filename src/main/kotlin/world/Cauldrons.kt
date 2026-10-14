@@ -280,6 +280,20 @@ internal fun FlatWorld.fillFromAbove(changed: Collection<BlockPos>, events: Muta
 }
 
 /**
+ * Adds a level of rain to the cauldron at [pos], [state], if it's empty or
+ * of water, not full: dyed water stays its colour. Returns whether it did.
+ */
+internal fun FlatWorld.rainFills(pos: BlockPos, state: BlockState): Boolean {
+    val level = state.properties[LEVEL] as? Int ?: 0
+    val data = blockEntityAt(pos)
+    val potion = data?.getShort(POTION_ID, NONE.toShort())?.let { it >= 0 } == true
+    if (state.properties[CONTENTS] != OF_WATER || level >= FULL || potion) return false
+    val colour = data?.takeIf { it.containsKey(CUSTOM_COLOUR) }?.getInt(CUSTOM_COLOUR)
+    fillCauldron(pos, OF_WATER, level + 1, colour = colour)
+    return true
+}
+
+/**
  * The network ID of the cauldron at [pos] a level off, for the client to
  * see before the cauldron as it is: the client draws a cauldron's water,
  * and its colour, afresh only as its block changes, so a change to the

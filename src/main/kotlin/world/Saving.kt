@@ -96,7 +96,8 @@ private fun NbtMapBuilder.putItems(container: Container): NbtMapBuilder =
  * Puts back what the block entity [data] keeps, as the game saved it,
  * once the chunk it's in is in the world, making its items with [items]:
  * a container's items and a machine's progress, kept apart from the rest
- * of its data, a comparator's power, a lectern's book and a piston's arm.
+ * of its data, a comparator's power, a lectern's book, a piston's arm, and
+ * that a daylight detector is there, for the sky to power it.
  * A block a piston was moving lands where it was going.
  */
 internal fun FlatWorld.restoreBlockEntity(data: NbtMap, items: ItemStacks) {
@@ -118,6 +119,7 @@ internal fun FlatWorld.restoreBlockEntity(data: NbtMap, items: ItemStacks) {
             return
         }
         "Beacon" -> beacons[pos] = 0
+        "DaylightDetector" -> daylightDetectors += pos
         "Lectern" -> data.getCompound("book", null)?.let(items::fromNbt)?.let { (_, book) -> lecternAt(pos)[0] = SlotStack(book, newStackId()) }
     }
     val machine = furnaceAt(pos) ?: brewingStandAt(pos) ?: hopperAt(pos) ?: dispenserAt(pos) ?: crafterAt(pos)

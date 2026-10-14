@@ -20,6 +20,7 @@ private const val DISCONNECT = 5
 private const val RESOURCE_PACKS_INFO = 6
 private const val RESOURCE_PACK_STACK = 7
 private const val RESOURCE_PACK_CLIENT_RESPONSE = 8
+private const val PACKET_VIOLATION_WARNING = 156
 private const val INTERACT = 33
 private const val CONTAINER_OPEN = 46
 private const val CONTAINER_CLOSE = 47
@@ -161,6 +162,13 @@ data class ContainerClose(val windowId: Int, val containerType: Int, val serverI
         out.writeBoolean(serverInitiated)
     }
 }
+
+/**
+ * The client saying a packet it got from Kore was wrong, by the packet's
+ * ID, with what it made of it: how wrong, [severity], and in what way,
+ * [context]. It disconnects over the worst of them.
+ */
+data class PacketViolation(val type: Int, val severity: Int, val packetId: Int, val context: String) : ClientPacket
 
 /** A packet Kore doesn't decode yet. */
 class UnhandledPacket(val id: Int, val payload: ByteArray) : ClientPacket {
@@ -472,6 +480,7 @@ fun decodeClientPacket(packet: ByteArray): ClientPacket {
             MAP_INFO_REQUEST -> decodeMapInfoRequest(buffer)
             MAP_CREATE_LOCKED_COPY -> decodeMapCreateLockedCopy(buffer)
             RESOURCE_PACK_CLIENT_RESPONSE -> decodeResourcePackClientResponse(buffer)
+            PACKET_VIOLATION_WARNING -> PacketViolation(buffer.readVarInt(), buffer.readVarInt(), buffer.readVarInt(), buffer.readString())
             else -> UnhandledPacket(id, ByteBufUtil.getBytes(buffer))
         }
     } catch (e: IndexOutOfBoundsException) {

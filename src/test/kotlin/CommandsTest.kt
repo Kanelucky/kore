@@ -16,7 +16,10 @@ import org.koremc.protocol.BlockDefinitions
 import org.koremc.protocol.CommandMessage
 import org.koremc.protocol.Disconnect
 import org.koremc.protocol.GameMode
+import org.koremc.protocol.GameRulesChanged
+import org.koremc.protocol.LevelEvent
 import org.koremc.protocol.MovePlayer
+import org.koremc.protocol.SetTime
 import org.koremc.protocol.SetPlayerGameType
 import org.koremc.protocol.Text
 import org.koremc.protocol.UpdatePlayerGameType
@@ -303,6 +306,80 @@ class CommandsTest {
     }
 
     @Test
+    fun `time sets, adds to and tells the time, and everyone's clock follows`() {
+        val (steve, alex) = steveAndAlex()
+        alex.received()
+
+        steve.runs("/time set noon")
+        assertEquals(listOf(CommandMessage("commands.time.set", true, listOf("6000"))), steve.output())
+        assertTrue(alex.received().any { it.contentEquals(SetTime(6000).encode()) })
+
+        world.time += 2 * 24000
+        steve.runs("/time add 500")
+        assertEquals(listOf(CommandMessage("commands.time.added", true, listOf("500"))), steve.output())
+        steve.runs("/time query daytime")
+        assertEquals(listOf(CommandMessage("commands.time.query.daytime", true, listOf("6500"))), steve.output())
+        steve.runs("/time query day")
+        assertEquals(listOf(CommandMessage("commands.time.query.day", true, listOf("2"))), steve.output())
+    }
+
+    @Test
+    fun `weather sets the weather for a while, thunder bringing rain, and says what it is`() {
+        val (steve, alex) = steveAndAlex()
+        alex.received()
+
+        steve.runs("/weather thunder 200")
+        assertEquals(listOf(CommandMessage("commands.weather.thunder", true)), steve.output())
+        assertTrue(world.weather.raining && world.weather.thundering)
+        assertEquals(200, world.weather.rainTime)
+        assertTrue(alex.received().any { it.contentEquals(LevelEvent(LevelEvent.START_THUNDER, Vec3(0f, 0f, 0f), 65535).encode()) })
+
+        steve.runs("/weather query")
+        assertEquals(listOf(CommandMessage("commands.weather.query", true, listOf("%commands.weather.query.thunder"))), steve.output())
+        steve.runs("/weather clear 2000000")
+        assertEquals(listOf(CommandMessage("commands.generic.num.tooBig", false, listOf("2000000", "1000000"))), steve.output())
+        steve.runs("/toggledownfall")
+        assertEquals(listOf(CommandMessage("commands.downfall.success", true)), steve.output())
+        assertFalse(world.weather.raining || world.weather.thundering)
+    }
+
+    @Test
+    fun `gamerule sets a rule, on or off or a number, which every client hears of, or says what it is`() {
+        val (steve, alex) = steveAndAlex()
+        alex.received()
+
+        steve.runs("/gamerule dodaylightcycle false")
+        assertEquals(listOf(CommandMessage("commands.gamerule.success", true, listOf("dodaylightcycle", "false"))), steve.output())
+        assertFalse(world.rules.doDaylightCycle)
+        assertTrue(alex.received().any { it.contentEquals(GameRulesChanged(mapOf("dodaylightcycle" to false)).encode()) })
+
+        steve.runs("/gamerule showCoordinates true")
+        assertEquals(listOf(CommandMessage("commands.gamerule.success", true, listOf("showcoordinates", "true"))), steve.output()) // As commands write it
+        steve.runs("/gamerule showcoordinates")
+        assertEquals(listOf(CommandMessage("showcoordinates = true", true)), steve.output())
+
+        // Rules that do nothing in Kore yet aren't offered, though the world keeps them.
+        steve.runs("/gamerule functioncommandlimit 5")
+        assertEquals("commands.generic.syntax", steve.output().single().message)
+        assertEquals(10000, world.rules["functionCommandLimit"])
+    }
+
+    @Test
+    fun `daylock stops the day at an hour before noon, and lets it go again`() {
+        val (steve, _) = steveAndAlex()
+        world.time = 24000 + 15000
+
+        steve.runs("/daylock")
+        assertEquals(listOf(CommandMessage("commands.always.day.locked", true)), steve.output())
+        assertEquals(24000L + 5000, world.time)
+        assertFalse(world.rules.doDaylightCycle)
+
+        steve.runs("/alwaysday false")
+        assertEquals(listOf(CommandMessage("commands.always.day.unlocked", true)), steve.output())
+        assertTrue(world.rules.doDaylightCycle)
+    }
+
+    @Test
     fun `players teleport to other players, and the ones a command names, relative to where it runs`() {
         val (steve, alex) = steveAndAlex()
         alex.moves(Vec3(20.5f, -63 + 1.62f, 3.5f))
@@ -429,6 +506,8 @@ class CommandsTest {
         assertTrue(available.commands.none { it.name == "help" })
         val teleport = available.commands.single { it.name == "teleport" }
         assertEquals(listOf("teleport", "tp"), available.enums[teleport.aliases].values.map { available.enumValues[it] })
+        // The client drops any keyword that isn't in lower case.
+        assertEquals(emptyList(), available.enumValues.filter { it != it.lowercase() })
     }
 
     @Test

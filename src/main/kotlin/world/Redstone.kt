@@ -112,17 +112,19 @@ fun FlatWorld.isPowered(pos: BlockPos): Boolean = Face.entries.any { signal(pos.
 /**
  * The power the block at [from] gives the block beside it on its
  * [towards] side, from 0 to 15. A source gives what it gives, a jukebox
- * full power while it plays a song, and a block power passes through gives
- * the strongest power going straight into it. Dust's power counts only
- * [withWire]: dust takes none from dust through a block, so a block that
- * only dust powers powers no other dust.
+ * full power while it plays a song, a daylight detector what the sky gives
+ * it, and a block power passes through gives the strongest power going
+ * straight into it. Dust's power counts only [withWire]: dust takes none
+ * from dust through a block, so a block that only dust powers powers no
+ * other dust.
  */
 internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean = true): Int {
     val state = stateAt(from) ?: return 0
     if (state.isJukebox && playingSong(from)) return MAX_POWER
     if (state.conductsPower) return strongestInto(from, withWire)
     return when {
-        state.givesPower || state.name == REDSTONE_BLOCK || state.lecternPowered -> MAX_POWER
+        state.givesPower || state.name == REDSTONE_BLOCK || state.lecternPowered || state.rodPowered -> MAX_POWER
+        state.isDaylightDetector -> state.properties[REDSTONE_SIGNAL] as? Int ?: 0
         state.isPressurePlate -> state.platePower
         state.name == REDSTONE_TORCH -> if (towards == state.torchHeldFrom) 0 else MAX_POWER
         state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
@@ -135,10 +137,10 @@ internal fun FlatWorld.signal(from: BlockPos, towards: Face, withWire: Boolean =
 /**
  * The strongest power going straight into the block at [pos], which it
  * passes on to what's beside it: from a lever or button fixed to it, a
- * pressure plate pressed on it, or a lectern on it a page just turned in,
- * a lit redstone torch under it, a powered repeater, a comparator or a
- * pulsing observer facing it, or, [withWire], dust on it or pointing into
- * it.
+ * pressure plate pressed on it, a lectern on it a page just turned in, or
+ * a lightning rod on it struck a moment ago, a lit redstone torch under
+ * it, a powered repeater, a comparator or a pulsing observer facing it,
+ * or, [withWire], dust on it or pointing into it.
  */
 private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Face.entries.maxOf { face ->
     val from = pos.side(face)
@@ -149,6 +151,8 @@ private fun FlatWorld.strongestInto(pos: BlockPos, withWire: Boolean): Int = Fac
         state.givesPower -> if (state.heldFrom == towards) MAX_POWER else 0
         state.isPressurePlate -> if (towards == Face.DOWN) state.platePower else 0
         state.lecternPowered -> if (towards == Face.DOWN) MAX_POWER else 0
+        // A struck lightning rod powers what it's on, out of which it points.
+        state.rodPowered -> if ((state.properties[FACING_DIRECTION] as? Int)?.let(Face::of)?.opposite == towards) MAX_POWER else 0
         state.name == REDSTONE_TORCH -> if (towards == Face.UP) MAX_POWER else 0
         state.isDiode && towards == state.diodeBack.opposite -> diodeGives(from, state)
         state.isObserver -> observerGives(state, towards)

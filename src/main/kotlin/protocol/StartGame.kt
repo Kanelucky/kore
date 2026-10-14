@@ -64,7 +64,13 @@ data class StartGame(
     val serverVersion: String,
     /** The game version whose vanilla content the client should load. See [ResourcePackStack.baseGameVersion]. */
     val baseGameVersion: String,
+    /** How long the world has run, in ticks, whatever the time of day. */
     val time: Long = 0,
+    /** Whether it's raining, from 0 to 1, and thundering. */
+    val rainLevel: Float = 0f,
+    val lightningLevel: Float = 0f,
+    /** The world's game rules, by the names the game keeps them under. */
+    val gameRules: Map<String, Any> = emptyMap(),
     /** Ties the session's telemetry together. Any unique string will do. */
     val multiplayerCorrelationId: String = UUID.randomUUID().toString(),
     /** The blocks defined in data, which the client can't show or use without their definitions. */
@@ -127,8 +133,8 @@ data class StartGame(
         out.writeVarUInt(0) // Education edition offer
         out.writeBoolean(false) // Education features
         out.writeString("") // Education product ID
-        out.writeFloatLE(0f) // Rain level
-        out.writeFloatLE(0f) // Lightning level
+        out.writeFloatLE(rainLevel)
+        out.writeFloatLE(lightningLevel)
         out.writeBoolean(false) // Confirmed platform locked content
         out.writeBoolean(true) // Multiplayer game
         out.writeBoolean(false) // LAN broadcast
@@ -138,7 +144,8 @@ data class StartGame(
         out.writeVarInt(PUBLIC) // Platform broadcast
         out.writeBoolean(true) // Commands enabled
         out.writeBoolean(false) // Texture packs required
-        out.writeVarUInt(0) // Game rules: none, so the client uses its defaults
+        out.writeVarUInt(gameRules.size)
+        for ((name, value) in gameRules) out.writeGameRule(name, value)
         out.writeIntLE(0) // Experiments, counted as a plain uint32
         out.writeBoolean(false) // Experiments ever toggled
         out.writeBoolean(false) // Bonus chest

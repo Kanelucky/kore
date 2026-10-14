@@ -182,6 +182,15 @@ data class LevelEvent(val event: Int, val position: Vec3, val data: Int) : Serve
         const val PARTICLES_DESTROY_BLOCK = 2001
 
         /**
+         * Rain or a thunderstorm starting, which the client fades in, or stopping.
+         * Starting, the data is how hard it comes down, of 65535.
+         */
+        const val START_RAIN = 3001
+        const val START_THUNDER = 3002
+        const val STOP_RAIN = 3003
+        const val STOP_THUNDER = 3004
+
+        /**
          * A dispenser's click as it fires, and the higher one with nothing to
          * fire. The data is the pitch, in thousandths.
          */

@@ -110,7 +110,7 @@ Players run commands from the chat, and the console runs them without the slash.
 op Steve
 ```
 
-Operators are kept in `permissions.json`, as the dedicated server does. Everyone may run `/list`, `/me` and `/tell`. Operators also get `/say`, `/kick`, `/op` and `/deop`, and with cheats on, `/gamemode`, `/give`, `/clear`, `/teleport`, `/xp` and `/enchant`. The console can also `/stop` the server. Target selectors like `@a[r=10]` and relative coordinates work as in the game.
+Operators are kept in `permissions.json`, as the dedicated server does. Everyone may run `/list`, `/me` and `/tell`. Operators also get `/say`, `/kick`, `/op` and `/deop`, and with cheats on, `/gamemode`, `/give`, `/clear`, `/teleport`, `/xp`, `/enchant`, `/time`, `/weather`, `/toggledownfall`, `/daylock` and `/gamerule`. The console can also `/stop` the server. Target selectors like `@a[r=10]` and relative coordinates work as in the game.
 
 ## ✨ What Works
 
@@ -123,6 +123,7 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 - **Maps:** drawn as players explore, locator maps, and zooming out, copying and locking them.
 - **Redstone:** levers, buttons, pressure plates, redstone blocks, torches, dust, repeaters, comparators and observers, powering doors, trapdoors, fence gates, lamps, note blocks, hoppers, dispensers and droppers.
 - **Water and lava:** flowing as in the game, buckets, water inside blocks like fences and stairs, lava and water making obsidian, cobblestone and stone, and concrete powder hardening.
+- **Time and weather:** day and night, rain and thunderstorms in their own time, lightning drawn to lightning rods, rain filling cauldrons, daylight detectors, and the game rules, saved with the world.
 - **Pistons:** pushing and pulling blocks, slime and honey, flying machines, chests and furnaces with their contents, and the players, items and orbs in the way or on top.
 - **Finding the server:** its name and players in the server list, and listed with LAN games on the local network.
 - **Players:** seeing each other, skins, chat, and joining and leaving messages in each player's language.
