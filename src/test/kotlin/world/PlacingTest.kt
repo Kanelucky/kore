@@ -446,6 +446,59 @@ class PlacingTest {
 
     private fun itemStack(name: String, aux: Int) = ItemStack(data.items.first { it.name == name }, aux = aux)
 
+    @Test
+    fun `kelp and seagrass go only into still or falling water, holding it still, and a sea pickle out of still water is dead`() {
+        world = FlatWorld(blocks, listOf(blocks.defaultOf("minecraft:stone")!!), traits = data.traits) // Which say what holds water
+        fun place(name: String, at: BlockPos) = world.place(blocks.defaultOf(name)!!, at.side(Face.DOWN), Face.UP, 1f, Placer(Face.NORTH))
+        fun waterAt(at: BlockPos) = world.liquidAt(at)?.takeIf { it.liquid == Liquid.WATER }?.liquidDepth
+
+        assertTrue(place(SEAGRASS, above).isEmpty(), "not in the open")
+        assertTrue(place(KELP, above).isEmpty())
+        world[above] = world.liquidState(Liquid.WATER, 3)
+        assertTrue(place(SEAGRASS, above).isEmpty(), "not in water flowing sideways")
+
+        world[above] = world.liquidState(Liquid.WATER, 8) // Falling
+        assertEquals(listOf(above), place(SEAGRASS, above))
+        assertEquals(0, waterAt(above), "held still")
+        val still = BlockPos(3, above.y, 0)
+        world[still] = world.liquidState(Liquid.WATER, 0)
+        assertEquals(listOf(still), place(KELP, still))
+        assertEquals(0, waterAt(still))
+
+        val dry = BlockPos(6, above.y, 0)
+        place(SEA_PICKLE, dry)
+        assertEquals(bit(true), world.stateAt(dry)?.properties?.get(PICKLE_DEAD))
+        val wet = BlockPos(9, above.y, 0)
+        world[wet] = world.liquidState(Liquid.WATER, 0)
+        place(SEA_PICKLE, wet)
+        assertEquals(bit(false), world.stateAt(wet)?.properties?.get(PICKLE_DEAD))
+        // Deeper in a pool filled from above, where the water falls, sea pickles and coral live too, holding it still.
+        val falling = BlockPos(12, above.y, 0)
+        world[falling] = world.liquidState(Liquid.WATER, 8)
+        place(SEA_PICKLE, falling)
+        assertEquals(bit(false), world.stateAt(falling)?.properties?.get(PICKLE_DEAD))
+        assertEquals(0, waterAt(falling))
+        val coral = BlockPos(15, above.y, 0)
+        world[coral] = world.liquidState(Liquid.WATER, 8)
+        place("minecraft:tube_coral_fan", coral)
+        assertEquals(0, waterAt(coral))
+
+        // Water flowing round them, from a source beside the seagrass, leaves them be.
+        world[above.side(Face.NORTH)] = world.liquidState(Liquid.WATER, 0)
+        repeat(40) { world.tickBlocks() }
+        assertEquals(SEAGRASS, world.stateAt(above)?.name)
+        assertEquals(KELP, world.stateAt(still)?.name)
+
+        // In a pit filled from a source above, the pickle at the bottom stays as the water flows down round it.
+        val pit = BlockPos(20, above.y, 0)
+        world[pit.side(Face.UP)] = world.liquidState(Liquid.WATER, 0)
+        repeat(20) { world.tickBlocks() }
+        assertEquals(8, world.stateAt(pit)?.liquidDepth, "falling water at the bottom")
+        place(SEA_PICKLE, pit)
+        repeat(40) { world.tickBlocks() }
+        assertEquals(SEA_PICKLE, world.stateAt(pit)?.name)
+    }
+
     private companion object {
         val data: VanillaData by lazy { VanillaData.load(gameData) }
     }

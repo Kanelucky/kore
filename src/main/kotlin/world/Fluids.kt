@@ -254,3 +254,6 @@ private fun FlatWorld.wayDown(pos: BlockPos, steps: Int, from: Face, liquid: Liq
     }
     return nearest
 }
+
+/** Whether there's still water at [pos], or water falling down, which kelp and seagrass can go into. */
+internal fun FlatWorld.isStillOrFallingWater(pos: BlockPos) = stateAt(pos)?.let { it.liquid == Liquid.WATER && (it.liquidDepth == 0 || it.liquidDepth >= FALLING) } == true

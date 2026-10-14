@@ -4,6 +4,7 @@ import org.koremc.registry.AIR
 import org.koremc.registry.BlockPalette
 import org.koremc.registry.BlockState
 import org.koremc.registry.ItemStack
+import org.koremc.registry.LiquidReaction
 import kotlin.math.abs
 import kotlin.math.floor
 
@@ -178,6 +179,9 @@ internal val BlockState.floatsOnWater get() = name == WATERLILY || name == FROG_
  * - Fences, panes, walls, fence gates and stairs take their shape from the
  *   blocks around them, as [joined] explains. The blocks around don't change
  *   here: [settle] brings them in line.
+ * - Kelp and seagrass go only into still water, or water falling down,
+ *   which they hold still, as do sea pickles and coral, and a sea pickle
+ *   out of the water is dead.
  */
 fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Float, placer: Placer, item: ItemStack? = null): List<BlockPos> {
     val clickedState = stateAt(clicked) ?: return emptyList()
@@ -205,9 +209,16 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
         blocks.spreadOver(targetState, face)?.let { set(target, it); return listOf(target) }
     }
     if (!targetState.replaceable) return emptyList()
+    // Kelp and seagrass go only into still water, or water falling down. They, and the rest of what flowing water washes
+    // away but water can be inside, like sea pickles and coral, hold either still.
+    val underwater = isStillOrFallingWater(target)
+    if ((block.name == KELP || block.name == SEAGRASS) && !underwater) return emptyList()
+    val holdsStill = underwater && holdsWater(block) && reactionTo(block) == LiquidReaction.POPPED
 
     val placedOn = if (replacing) Face.UP else face
     var state = block
+    // A sea pickle out of the water is dead, and doesn't glow.
+    if (state.name == SEA_PICKLE) state = blocks.find(state.name, state.properties + (PICKLE_DEAD to bit(!underwater))) ?: state
     if (placedOn.horizontal) state = blocks.wallVariantOf(block) ?: state
     if (state.name.endsWith("standing_sign") || state.name.endsWith("standing_banner")) {
         if (placedOn != Face.UP) return emptyList()
@@ -245,6 +256,7 @@ fun FlatWorld.place(block: BlockState, clicked: BlockPos, face: Face, clickY: Fl
         set(at, half)
     } else {
         set(target, state)
+        if (holdsStill) setLiquid(target, liquidState(Liquid.WATER, 0, inside = true))
     }
 
     val placed = listOfNotNull(target, second?.first)
