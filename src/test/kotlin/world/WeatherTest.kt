@@ -129,9 +129,11 @@ class WeatherTest {
         assertEquals(0, world.daylightPower(above, detector))
         assertEquals(11, world.daylightPower(above, inverted))
 
-        // Under a block, it's dark whatever the time.
+        // Under a block, the sky's light spreads in from beside it, a level less, and shut in, it's dark whatever the time.
         world.time = 6000
         world[above.side(Face.UP).side(Face.UP)] = block("minecraft:stone")
+        assertEquals(14, world.daylightPower(above, detector))
+        for (side in Face.entries.filter { it != Face.DOWN }) world[above.side(side)] = block("minecraft:stone")
         assertEquals(0, world.daylightPower(above, detector))
     }
 

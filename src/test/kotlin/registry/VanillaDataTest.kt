@@ -231,12 +231,13 @@ class VanillaDataTest {
         assertEquals(ToolKind.SHEARS, vanilla.mining["minecraft:white_wool_stairs"]?.tool)
         assertTrue(vanilla.mining.getValue("minecraft:bedrock").unbreakable)
 
-        // Every block state's map colour and the light it stops, by the same network IDs Kore hashes.
+        // Every block state's map colour and the light it stops and gives off, by the same network IDs Kore hashes.
         val missing = vanilla.blocks.states.filter { it.networkId !in vanilla.traits }
         assertEquals(emptyList(), missing.map { it.name }.distinct())
         assertEquals(BlockTrait(0xFF707070.toInt(), Tint.NONE, 15), vanilla.traits[blockStateHash("minecraft:stone", emptyMap())])
         assertEquals(Tint.GRASS, vanilla.traits[blockStateHash("minecraft:grass_block", emptyMap())].tint)
         assertEquals(0, vanilla.traits[blockStateHash("minecraft:glass", emptyMap())].mapColour)
+        assertEquals(15, vanilla.traits[blockStateHash("minecraft:glowstone", emptyMap())].lightEmission)
 
         // Recent additions, which a creative inventory from older data would be missing.
         val creative = vanilla.creative.items.map { it.stack.item.name }.toSet()

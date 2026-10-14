@@ -28,13 +28,16 @@ data class BlockTrait(
     val liquidReaction: LiquidReaction = LiquidReaction.BLOCKING,
     /** Whether water can be inside the block, as in a fence or stairs, which the game keeps in a second layer. */
     val holdsWater: Boolean = false,
+    /** How bright the light the block gives off is, from none to 15, as a torch's 14. */
+    val lightEmission: Int = 0,
 )
 
 /**
  * What the game says of every block state besides its name and
  * properties, by network ID: the colour it shows on maps, how much light
- * it stops, and what liquid does to it. A block state with nothing said
- * shows nothing on maps, stops no light, stops liquid and holds none.
+ * it stops and gives off, and what liquid does to it. A block state with
+ * nothing said shows nothing on maps, stops no light and gives off none,
+ * stops liquid and holds none.
  */
 class BlockTraits(private val byNetworkId: Map<Int, BlockTrait>) {
     operator fun get(networkId: Int): BlockTrait = byNetworkId[networkId] ?: NOTHING
@@ -59,6 +62,7 @@ private class StateEntry(
     val mapColor: String,
     val tintMethod: String,
     val lightDampening: Int,
+    val lightEmission: Int = 0,
     val liquidReactionOnTouch: String = "BLOCKING",
     val canContainLiquidSource: Boolean = false,
 )
@@ -87,7 +91,7 @@ internal fun readBlockTraits(text: String): BlockTraits {
             val argb = (rgba ushr 8) or (rgba shl 24)
             entry.blockStateHash.toInt() to BlockTrait(
                 argb, TINTS[entry.tintMethod] ?: Tint.NONE, entry.lightDampening,
-                LIQUID_REACTIONS[entry.liquidReactionOnTouch] ?: LiquidReaction.BLOCKING, entry.canContainLiquidSource,
+                LIQUID_REACTIONS[entry.liquidReactionOnTouch] ?: LiquidReaction.BLOCKING, entry.canContainLiquidSource, entry.lightEmission,
             )
         },
     )

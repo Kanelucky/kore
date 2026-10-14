@@ -15,8 +15,13 @@ data class BrokenBlock(val state: BlockState, val blockEntity: NbtMap? = null, v
 /** A sound a block makes as it changes, by the game's name for it, with its data: the network ID of the block making it, or -1. */
 data class BlockSound(val pos: BlockPos, val sound: String, val data: Int)
 
-/** Something happening at a block that the client shows, like an anvil clanging, by the game's number for it, with its data. */
-data class WorldEvent(val pos: BlockPos, val event: Int, val data: Int)
+/**
+ * Something happening at a block that the client shows, like an anvil
+ * clanging, by the game's number for it, with its data: at the block's
+ * middle, or its corner, if not [centred], as the game shows plants
+ * growing across their block from there.
+ */
+data class WorldEvent(val pos: BlockPos, val event: Int, val data: Int, val centred: Boolean = true)
 
 /**
  * What a change to the world did around it: the blocks that broke, where
@@ -104,7 +109,7 @@ enum class BlockUpdate {
  */
 internal val BlockState.dueFor: List<BlockUpdate>
     get() {
-        val held = heldFrom != null || name == "minecraft:cactus" || name == SCAFFOLDING || MULTI_FACE in properties || VINE_FACES in properties
+        val held = heldFrom != null || name == CACTUS || name == SCAFFOLDING || name == FARMLAND || MULTI_FACE in properties || VINE_FACES in properties
         val own = when {
             isRedstoneTorch -> BlockUpdate.TORCH
             isRepeater -> BlockUpdate.REPEATER
@@ -211,11 +216,14 @@ private val CORAL_SIDES = listOf(Face.WEST, Face.EAST, Face.NORTH, Face.SOUTH)
 /**
  * Whether [holder] holds up [block] on its [face]. Buttons, levers and
  * ladders need a whole face to be fixed to, as torches do, which stand on
- * any whole top, or a fence or wall. Anything else stands on, hangs from
- * or leans on any block a placed block wouldn't replace.
+ * any whole top, or a fence or wall. Crops, cane, cactus and the like
+ * stand only on their own ground, as [standsOn] has it. Anything else
+ * stands on, hangs from or leans on any block a placed block wouldn't
+ * replace.
  */
 internal fun FlatWorld.holdsUp(holderPos: BlockPos, face: Face, block: BlockState): Boolean {
     val holder = stateAt(holderPos) ?: return false
+    if (face == Face.UP) standsOn(block, holder)?.let { return it }
     return when {
         TORCH_FACING in block.properties -> if (face == Face.UP) holder.holdsTorchOnTop else holder.hasFullFace(face)
         block.name.endsWith("button") || block.name == "minecraft:lever" || block.name == "minecraft:ladder" || block.isWire ||
@@ -226,14 +234,18 @@ internal fun FlatWorld.holdsUp(holderPos: BlockPos, face: Face, block: BlockStat
 
 /**
  * Whether [state] can stay at [pos]: whatever holds it up is still there,
- * and a cactus has no block beside it. Scaffolding stays within reach of
- * what holds it, and vines and glow lichen keep at least one face.
+ * a cactus has no block beside it, and sugar cane has water by it.
+ * Scaffolding stays within reach of what holds it, and vines and glow
+ * lichen keep at least one face. Farmland can't stay farmland under a
+ * whole block.
  */
 internal fun FlatWorld.survives(pos: BlockPos, state: BlockState): Boolean {
     val holder = state.heldFrom
     if (holder != null && !holdsUp(pos.side(holder), holder.opposite, state)) return false
-    if (state.name == "minecraft:cactus" && AROUND.any { stateAt(pos.side(it))?.isFullCube == true }) return false
+    if (state.name == CACTUS && AROUND.any { stateAt(pos.side(it))?.isFullCube == true }) return false
+    if (state.name == REEDS && !caneWatered(pos)) return false
     if (state.name == SCAFFOLDING && scaffoldingDistance(pos) >= SCAFFOLDING_MAX_DISTANCE) return false
+    if (state.name == FARMLAND && farmlandCovered(pos)) return false
     return true
 }
 
@@ -260,8 +272,10 @@ internal fun FlatWorld.breakAt(pos: BlockPos, state: BlockState, broken: Mutable
  * behind them. Blocks that can no longer stay where they are, like a
  * flower whose ground went, break a tick later, when [tickBlocks] looks
  * at them again, as scaffolding works out its distance again then: so a
- * stack of them falls one block a tick, as in the game. Returns where
- * blocks changed shape. Nothing breaks here.
+ * stack of them falls one block a tick, as in the game. Farmland under a
+ * whole block goes back to dirt then too. Leaves of a tree beside what
+ * changed look again for their wood the next time a random tick lands
+ * on them. Returns where blocks changed shape. Nothing breaks here.
  */
 fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
     val reshaped = LinkedHashSet<BlockPos>()
@@ -290,6 +304,7 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
         reshaped += at
         around(at)
     }
+    reshaped += wakeLeaves(changed + reshaped)
     return Changes(emptyMap(), reshaped.toList())
 }
 
@@ -330,6 +345,11 @@ fun FlatWorld.tickBlocks(): Changes {
         val state = stateAt(at)?.takeIf { it.name != AIR } ?: continue
         when (update) {
             BlockUpdate.SUPPORT -> if (!survives(at, state) || remainingFaces(at, state)?.isEmpty() == true) {
+                if (state.name == FARMLAND) {
+                    set(at, blocks.defaultOf(DIRT) ?: continue)
+                    changed += at
+                    continue
+                }
                 if (state.fallsUnheld) {
                     changed += fallFrom(at, state)
                     continue

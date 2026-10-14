@@ -16,9 +16,6 @@ private val CLEAR_LASTS = 12000..180000
 private val THUNDER_LASTS = 3600..15600
 private val CALM_LASTS = 12000..180000
 
-/** How many chunks around each player the sky reaches: rain filling cauldrons, and lightning, as the world ticks them. */
-const val SKY_TICK_RANGE = 4
-
 /** The chance of lightning striking each chunk around a player each tick of a thunderstorm. */
 private const val LIGHTNING_CHANCE = 1.0 / 100_000
 
@@ -86,7 +83,7 @@ fun FlatWorld.tickSky(players: Collection<ChunkPos>, random: Random = Random.Def
     val changed = mutableListOf<BlockPos>()
     val events = mutableListOf<WorldEvent>()
     if (weather.raining) {
-        for (chunk in players.flatMap { chunksAround(it, SKY_TICK_RANGE) }.distinct()) {
+        for (chunk in players.flatMap { chunksAround(it, SIMULATION_DISTANCE) }.distinct()) {
             if (weather.thundering && random.nextDouble() < LIGHTNING_CHANCE) strikes += strike(randomTop(chunk, random), changed, events, random)
             if (random.nextDouble() < PRECIPITATION_CHANCE) rainOn(randomTop(chunk, random).side(Face.DOWN), random)?.let(changed::add)
         }
@@ -309,16 +306,6 @@ internal fun FlatWorld.daylightPower(pos: BlockPos, state: BlockState): Int {
     return power.coerceIn(0, MAX_POWER)
 }
 
-/** The sky's light at [pos]: all of it, under nothing but what lets light through, and none under anything else. */
-private fun FlatWorld.skyLightAt(pos: BlockPos): Int {
-    val top = MIN_Y + chunkAt(pos.chunk).subChunks.size * 16 - 1
-    for (y in pos.y + 1..top) {
-        val state = stateAt(BlockPos(pos.x, y, pos.z)) ?: continue
-        if (state.isFullCube && !state.letsLightThrough) return 0
-    }
-    return MAX_POWER
-}
-
 /** How far through the day it is, from 0 at noon round to 1, as the sun moves, slower at noon and midnight. */
 private fun FlatWorld.dayFraction(): Double {
     val fraction = (time % DAY_LENGTH) / DAY_LENGTH.toDouble() - 0.25
@@ -330,7 +317,7 @@ private fun FlatWorld.dayFraction(): Double {
 private fun FlatWorld.sunAngle() = dayFraction() * 2 * PI
 
 /** How much darker than full daylight the sky is, from 0 to 11: darker at night, and in rain and thunder. */
-private fun FlatWorld.skyDarkening(): Int {
+internal fun FlatWorld.skyDarkening(): Int {
     val rain = 1 - (if (weather.raining) 5.0 else 0.0) / 16
     val thunder = 1 - (if (weather.thundering) 5.0 else 0.0) / 16
     val light = 0.5 + 2 * cos(sunAngle()).coerceIn(-0.25, 0.25)

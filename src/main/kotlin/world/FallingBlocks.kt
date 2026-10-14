@@ -35,7 +35,7 @@ private const val ANVIL_WEAR_PER_BLOCK = 0.05f
 private const val LAND = "land"
 private const val BREAK = "break"
 
-private const val POINTED_DRIPSTONE = "minecraft:pointed_dripstone"
+internal const val POINTED_DRIPSTONE = "minecraft:pointed_dripstone"
 private const val SULFUR_SPIKE = "minecraft:sulfur_spike"
 
 /** Blocks that fall when there's nothing under them, besides concrete powder of every colour. */

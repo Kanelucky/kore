@@ -42,7 +42,8 @@ private val BlockState.gateFacing get() = Face.entries.find { it.id == propertie
  * strung to one another, with the tripwire between, are attached.
  * Pointed dripstone thickens from its tip back, a big dripleaf is a leaf
  * at the top of its plant and stem below, and scaffolding knows how far it
- * is from what holds it up. Any other block is as it is.
+ * is from what holds it up. A grown melon or pumpkin stem bends towards
+ * its fruit. Any other block is as it is.
  */
 fun FlatWorld.joined(pos: BlockPos, state: BlockState): BlockState {
     val changes = when {
@@ -52,6 +53,7 @@ fun FlatWorld.joined(pos: BlockPos, state: BlockState): BlockState {
             (ATTACHED to bit(tripwireStrung(pos)))
         state.name == TRIPWIRE_HOOK -> mapOf(ATTACHED to bit(hookStrung(pos, state)))
         THICKNESS in state.properties -> mapOf(THICKNESS to dripstoneThickness(pos, state))
+        state.name in STEM_FRUIT -> mapOf(FACING_DIRECTION to stemFacing(pos, state))
         state.isWall -> wallShape(pos, state)
         STAIRS_CORNER in state.properties -> mapOf(STAIRS_CORNER to stairsCorner(pos, state))
         state.isFence || state.isPane -> AROUND.associate { side -> connection(side) to bit(joins(state, side, stateAt(pos.side(side)))) }

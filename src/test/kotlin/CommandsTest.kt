@@ -358,6 +358,10 @@ class CommandsTest {
         steve.runs("/gamerule showcoordinates")
         assertEquals(listOf(CommandMessage("showcoordinates = true", true)), steve.output())
 
+        steve.runs("/gamerule randomtickspeed 3")
+        assertEquals(listOf(CommandMessage("commands.gamerule.success", true, listOf("randomtickspeed", "3"))), steve.output())
+        assertEquals(3, world.rules.randomTickSpeed)
+
         // Rules that do nothing in Kore yet aren't offered, though the world keeps them.
         steve.runs("/gamerule functioncommandlimit 5")
         assertEquals("commands.generic.syntax", steve.output().single().message)

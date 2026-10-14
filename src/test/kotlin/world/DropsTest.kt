@@ -102,6 +102,25 @@ class DropsTest {
     }
 
     @Test
+    fun `grown crops drop their harvest, and young ones their seed`() {
+        fun grown(name: String, vararg properties: Pair<String, Any>) = blocks.stateOf(name, block(name).properties + properties)
+        val wheat = (1..300).map { drops.of(grown("minecraft:wheat", GROWTH to MAX_CROP_GROWTH)) }
+        assertTrue(wheat.all { it.first().item.name == "minecraft:wheat" && it.first().count == 1 })
+        assertEquals((0..3).toSet(), wheat.map { stacks -> stacks.filter { it.item.name == "minecraft:wheat_seeds" }.sumOf { it.count } }.toSet())
+        assertEquals(listOf("minecraft:wheat_seeds"), drops.of(grown("minecraft:wheat", GROWTH to 4)).map { it.item.name })
+
+        val carrots = (1..300).map { drops.of(grown("minecraft:carrots", GROWTH to MAX_CROP_GROWTH)).single().count }
+        assertEquals((1..4).toSet(), carrots.toSet())
+        val potatoes = (1..1000).flatMap { drops.of(grown("minecraft:potatoes", GROWTH to MAX_CROP_GROWTH)) }.map { it.item.name }
+        assertTrue("minecraft:poisonous_potato" in potatoes)
+
+        assertEquals((2..4).toSet(), (1..300).map { drops.of(grown(NETHER_WART, AGE to MAX_WART_AGE)).single().count }.toSet())
+        assertEquals(emptyList(), drops.of(grown(SWEET_BERRY_BUSH, GROWTH to 1)))
+        assertEquals((2..3).toSet(), (1..100).map { drops.of(grown(SWEET_BERRY_BUSH, GROWTH to MAX_BERRY_GROWTH)).single().count }.toSet())
+        assertEquals(listOf("minecraft:pitcher_plant"), drops.of(grown(PITCHER_CROP, GROWTH to MAX_PITCHER_GROWTH)).map { it.item.name })
+    }
+
+    @Test
     fun `what a frame or flower pot holds drops with it`() {
         val diamond = ItemStack(data.items.first { it.name == "minecraft:diamond" })
         val frame = NbtMap.builder().putString("id", "ItemFrame").putCompound("Item", ItemStacks.nbtOf(diamond, 0)).build()

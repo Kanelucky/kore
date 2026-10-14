@@ -41,16 +41,16 @@ private const val USED_ON = "item.use.on"
 private val TILLED = setOf("minecraft:grass_block", "minecraft:dirt", "minecraft:grass_path")
 
 /** Blocks a hoe turns into plain dirt, coarse dirt with air above it, and rooted dirt, which gives up its roots, whatever's above. */
-private const val COARSE_DIRT = "minecraft:coarse_dirt"
-private const val ROOTED_DIRT = "minecraft:dirt_with_roots"
+internal const val COARSE_DIRT = "minecraft:coarse_dirt"
+internal const val ROOTED_DIRT = "minecraft:dirt_with_roots"
 
 /** Blocks a shovel flattens into a path, with air above them. */
 private val FLATTENED = setOf("minecraft:grass_block", "minecraft:dirt", COARSE_DIRT, "minecraft:mycelium", "minecraft:podzol", ROOTED_DIRT)
 
-private const val FARMLAND = "minecraft:farmland"
+internal const val FARMLAND = "minecraft:farmland"
 private const val PATH = "minecraft:grass_path"
-private const val DIRT = "minecraft:dirt"
-private const val PUMPKIN = "minecraft:pumpkin"
+internal const val DIRT = "minecraft:dirt"
+internal const val PUMPKIN = "minecraft:pumpkin"
 private const val CARVED_PUMPKIN = "minecraft:carved_pumpkin"
 
 /** How copper weathers, a stage at a time, by how its name starts. */
@@ -86,6 +86,15 @@ internal fun copperKind(name: String): String? = copperOf(name)?.let { Copper(it
 internal fun FlatWorld.weathers(state: BlockState): Boolean {
     val copper = copperOf(state.name)?.takeUnless { it.waxed } ?: return false
     return blocks.defaultOf(copper.copy(stage = 1).name) != null
+}
+
+/** How weathered [state], copper that weathers, is: from 0 for new to 3 for oxidized. Null for anything else. */
+internal fun FlatWorld.weathering(state: BlockState): Int? = copperOf(state.name)?.takeIf { weathers(state) }?.stage
+
+/** [state], copper, a stage more weathered, or null for a block that isn't copper that weathers, or is as weathered as it gets. */
+internal fun FlatWorld.moreWeathered(state: BlockState): BlockState? {
+    val copper = copperOf(state.name)?.takeIf { !it.waxed && it.stage < WEATHERING.lastIndex } ?: return null
+    return blocks.find(copper.copy(stage = copper.stage + 1).name, state.properties)
 }
 
 /**

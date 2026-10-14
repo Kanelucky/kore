@@ -102,6 +102,12 @@ private val FLINT_CHANCE = listOf(0.1, 1 / 7.0, 0.25, 1.0)
 /** The chance grass and ferns drop a wheat seed. */
 private const val SEED_CHANCE = 1 / 8.0
 
+/** The chance grown potatoes drop a poisonous one too, and the most nether wart drops, Fortune and all. */
+private const val POISONOUS_CHANCE = 0.02
+private const val MOST_WART = 7
+
+internal const val SWEET_BERRIES = "minecraft:sweet_berries"
+
 /**
  * Blocks that break into more of something else, by name: what, from the
  * fewest to the most, and the most Fortune can make it, if it adds one for
@@ -155,7 +161,7 @@ class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: Bl
         }
         val dropped = when {
             whole -> listOfNotNull(stacks.of(UNLIT_ORE[name] ?: itemPlacing(name) ?: name))
-            else -> byChance(name, fortune) ?: own(state, blockEntity, contents)
+            else -> grown(state, fortune) ?: byChance(name, fortune) ?: own(state, blockEntity, contents)
         }
         return dropped + held(state, blockEntity)
     }
@@ -214,6 +220,47 @@ class Drops(items: List<ItemDefinition>, creative: CreativeInventory, blocks: Bl
                 if (random.nextDouble() < SEED_CHANCE) listOfNotNull(stacks.of("minecraft:wheat_seeds", 1 + random.nextInt(fortune * 2 + 1))) else emptyList()
             else -> null
         }
+    }
+
+    /**
+     * What a plant that grows drops, broken with [fortune], by how grown it
+     * is, [state], or null for any other block. Grown wheat and beetroot
+     * drop their crop and up to three seeds, and grown carrots and potatoes
+     * one to four of themselves, potatoes now and then a poisonous one, all
+     * of them more with Fortune; younger, each drops just its seed. Grown
+     * nether wart drops two to four, and a grown cocoa pod two or three.
+     * Sweet berry bushes drop the berries on them, and a pitcher crop its pod,
+     * or the plant once grown.
+     */
+    private fun grown(state: BlockState, fortune: Int): List<ItemStack>? {
+        fun ripe(stage: String, most: Int) = (state.properties[stage] as? Int ?: 0) >= most
+        // Each of three, and one more for each level of Fortune, comes up four times in seven.
+        fun extra() = (0 until 3 + fortune).count { random.nextInt(7) < 4 }
+        return when (state.name) {
+            "minecraft:wheat", "minecraft:beetroot" -> {
+                val seeds = if (state.name == "minecraft:wheat") "minecraft:wheat_seeds" else "minecraft:beetroot_seeds"
+                if (!ripe(GROWTH, MAX_CROP_GROWTH)) return listOfNotNull(stacks.of(seeds))
+                listOfNotNull(stacks.of(state.name), extra().takeIf { it > 0 }?.let { stacks.of(seeds, it) })
+            }
+            "minecraft:carrots", "minecraft:potatoes" -> {
+                val crop = itemPlacing(state.name) ?: return null
+                if (!ripe(GROWTH, MAX_CROP_GROWTH)) return listOfNotNull(stacks.of(crop))
+                val poisoned = state.name == "minecraft:potatoes" && random.nextDouble() < POISONOUS_CHANCE
+                listOfNotNull(stacks.of(crop, 1 + random.nextInt(fortune + 1) + extra()), if (poisoned) stacks.of("minecraft:poisonous_potato") else null)
+            }
+            NETHER_WART -> listOfNotNull(stacks.of(NETHER_WART, if (ripe(AGE, MAX_WART_AGE)) minOf(MOST_WART, random.nextInt(2, 5) + random.nextInt(fortune + 1)) else 1))
+            COCOA -> listOfNotNull(stacks.of("minecraft:cocoa_beans", if (ripe(AGE, MAX_COCOA_AGE)) random.nextInt(2, 4) else 1))
+            SWEET_BERRY_BUSH -> berriesOn(state)?.let { count -> listOfNotNull(stacks.of(SWEET_BERRIES, count + random.nextInt(fortune + 1))) } ?: emptyList()
+            PITCHER_CROP -> listOfNotNull(stacks.of(if (ripe(GROWTH, MAX_PITCHER_GROWTH)) "minecraft:pitcher_plant" else "minecraft:pitcher_pod"))
+            else -> null
+        }
+    }
+
+    /** How many berries the sweet berry bush [state] has on it: two or three full, one or two with some, or null with none. */
+    private fun berriesOn(state: BlockState): Int? = when (state.properties[GROWTH] as? Int ?: 0) {
+        MAX_BERRY_GROWTH -> random.nextInt(2, 4)
+        MAX_BERRY_GROWTH - 1 -> random.nextInt(1, 3)
+        else -> null
     }
 
     /**

@@ -158,6 +158,7 @@ import org.koremc.registry.worn
 import org.koremc.world.BARREL
 import org.koremc.world.BARREL_OPEN
 import org.koremc.world.BEACON_INTERVAL
+import org.koremc.world.BONE_MEAL
 import org.koremc.world.BOOK_PUT
 import org.koremc.world.BREWING_BOTTLES
 import org.koremc.world.BREWING_FUEL
@@ -190,6 +191,7 @@ import org.koremc.world.Face
 import org.koremc.world.Fired
 import org.koremc.world.FlatWorld
 import org.koremc.world.Furnace
+import org.koremc.world.GROWTH
 import org.koremc.world.HOPPER
 import org.koremc.world.HOPPER_SLOTS
 import org.koremc.world.HeldAfter
@@ -198,6 +200,7 @@ import org.koremc.world.ItemEntity
 import org.koremc.world.ItemUsedOn
 import org.koremc.world.LOCATOR
 import org.koremc.world.Liquid
+import org.koremc.world.MAX_BERRY_GROWTH
 import org.koremc.world.Machine
 import org.koremc.world.MapData
 import org.koremc.world.NOTE_SOUND
@@ -212,6 +215,7 @@ import org.koremc.world.Placer
 import org.koremc.world.PlayerExperience
 import org.koremc.world.SNOW_LAYER
 import org.koremc.world.STORAGE_SLOTS
+import org.koremc.world.SWEET_BERRY_BUSH
 import org.koremc.world.SongChange
 import org.koremc.world.Storage
 import org.koremc.world.Vec3
@@ -234,11 +238,13 @@ import org.koremc.world.dropFromBlock
 import org.koremc.world.emptyBucket
 import org.koremc.world.facesFront
 import org.koremc.world.facing
+import org.koremc.world.fertilize
 import org.koremc.world.fillBucket
 import org.koremc.world.fillPortalFrame
 import org.koremc.world.furnaceKind
 import org.koremc.world.goesOnLectern
 import org.koremc.world.harvests
+import org.koremc.world.hasGlowBerries
 import org.koremc.world.isBlockedOpen
 import org.koremc.world.isCauldron
 import org.koremc.world.isComposter
@@ -257,8 +263,10 @@ import org.koremc.world.lookAtBeacons
 import org.koremc.world.mapId
 import org.koremc.world.markSign
 import org.koremc.world.movingFrom
+import org.koremc.world.number
 import org.koremc.world.opensOnClick
 import org.koremc.world.otherHalf
+import org.koremc.world.pick
 import org.koremc.world.pistonMotions
 import org.koremc.world.place
 import org.koremc.world.playNote
@@ -278,6 +286,7 @@ import org.koremc.world.takeFromFrame
 import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
 import org.koremc.world.tickOrbs
+import org.koremc.world.tickRandomly
 import org.koremc.world.tickSky
 import org.koremc.world.toggleCrafterSlot
 import org.koremc.world.tuneNote
@@ -1675,15 +1684,16 @@ class Session(
 
     /**
      * What the player holds, used on the block they clicked, [clicked], if
-     * [blockFirst]: into an item frame, flower pot, jukebox, composter or
-     * cauldron, or on a note block, which a click tunes, but for a head put
-     * on its top. Whether or not, an eye of ender goes into an end portal
-     * frame, and a tool or honeycomb works on the block, as [useToolOn] has
-     * it. Everyone with the chunk sees and hears it, and a disc going into a
-     * jukebox says what's playing. Outside creative, what's used up goes from
-     * the player's hand, or swaps for what's left of it, and a tool wears.
-     * Returns whether it did anything, if the player can build and reach the
-     * block.
+     * [blockFirst]: picking ripe berries, into an item frame, flower pot,
+     * jukebox, composter or cauldron, or on a note block, which a click
+     * tunes, but for a head put on its top. Whether or not, bone meal grows
+     * what it grows, as [fertilize] has it, an eye of ender goes into an end
+     * portal frame, and a tool or honeycomb works on the block, as
+     * [useToolOn] has it. Everyone with the chunk sees and hears it, and a
+     * disc going into a jukebox says what's playing. Outside creative, what's
+     * used up goes from the player's hand, or swaps for what's left of it,
+     * and a tool wears. Returns whether it did anything, if the player can
+     * build and reach the block.
      */
     private fun useItemOn(use: ItemUse, clicked: BlockState, blockFirst: Boolean): Boolean {
         val face = Face.of(use.face) ?: return false
@@ -1692,13 +1702,18 @@ class Session(
         if ((use.heldItem != 0 && held == null) || !canBuild() || !inReach(use.position)) return false
         val pos = use.position
         val headOnTop = face == Face.UP && held?.item?.name?.let { it.endsWith("_head") || it.endsWith("_skull") } == true
+        val boneMeal = held?.item?.name == BONE_MEAL
         val used = when {
+            // Bone meal on a bush with room to grow grows it, rather than picking what's on it.
+            blockFirst && clicked.name == SWEET_BERRY_BUSH && !(boneMeal && clicked.number(GROWTH) < MAX_BERRY_GROWTH) -> world.pick(pos, clicked, game.items)
+            blockFirst && clicked.hasGlowBerries -> world.pick(pos, clicked, game.items)
             blockFirst && clicked.isItemFrame -> world.useFrame(pos, clicked, held)
             blockFirst && clicked.isFlowerPot -> world.usePot(pos, clicked, held, held?.let { it.block ?: world.blocks.blockPlacedBy(it.item.name) }, game.items)
             blockFirst && clicked.isNoteBlock && !headOnTop -> ItemUsedOn(emptyList(), notes = listOfNotNull(world.tuneNote(pos)))
             blockFirst && clicked.isJukebox -> world.useJukebox(pos, held, game.items)
             blockFirst && clicked.isComposter -> world.useComposter(pos, clicked, held, game.items)
             blockFirst && clicked.isCauldron -> world.useCauldron(pos, clicked, held, game.items)
+            boneMeal -> world.fertilize(pos, clicked, game.items)
             held?.item?.name == ENDER_EYE -> world.fillPortalFrame(pos, clicked)
             held != null -> world.useToolOn(pos, face, held, facing(yaw), game.items)
             else -> null
@@ -3054,6 +3069,20 @@ internal fun Collection<Session>.tickSky(game: GameData) {
 }
 
 /**
+ * Gives random ticks to the blocks around these players in [game]'s world,
+ * for them to see what grows, spreads, dries, decays, melts or weathers.
+ * What breaks drops what it drops, if [dropItems], like leaves decaying.
+ * Run once a tick.
+ */
+internal fun Collection<Session>.tickGrowth(game: GameData, dropItems: Boolean) {
+    val world = game.world
+    val grown = world.tickRandomly(filter { it.isInGame }.map { it.feet.toBlockPos().chunk })
+    if (grown.isEmpty) return
+    showAround(world.packetsFor(grown))
+    grown.broken.forEach { (pos, broken) -> game.dropBroken(pos, broken, harvested = dropItems) }
+}
+
+/**
  * Brings what redstone powers in [game]'s world in line with what changed
  * since it last looked, for these players to see if they have the chunks:
  * doors, trapdoors and fence gates swinging, with their sounds, and the
@@ -3089,7 +3118,7 @@ private fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPa
     changes.broken.flatMap { (pos, broken) ->
         withData(pos) + (pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
     } + changes.reshaped.flatMap(::withData) + changes.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) } +
-        changes.events.map { it.pos to LevelEvent(it.event, it.pos.centre, it.data) } +
+        changes.events.map { it.pos to LevelEvent(it.event, if (it.centred) it.pos.centre else it.pos.corner, it.data) } +
         changes.data.mapNotNull { pos -> blockEntityAt(pos)?.let { pos to BlockActorData(pos, it) } } +
         changes.notes.flatMap { (pos, instrument, note) ->
             // The note sounds, and rises out of the block in its colour.
@@ -3177,6 +3206,7 @@ class Sessions(
         game.world.tickItems()
         sessions.values.tickMachines(game)
         sessions.values.tickSky(game)
+        sessions.values.tickGrowth(game, dropItems = config.gameMode != GameMode.CREATIVE)
         sessions.values.tickPower(game)
         sessions.values.forEach { it.tickEffects() }
         sessions.values.tickBeacons(game)

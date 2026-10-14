@@ -293,6 +293,13 @@ internal fun FlatWorld.rainFills(pos: BlockPos, state: BlockState): Boolean {
     return true
 }
 
+/** Fills the cauldron at [pos], [state], with lava dripping into it, if it's empty. Returns whether it did. */
+internal fun FlatWorld.lavaFills(pos: BlockPos, state: BlockState): Boolean {
+    if ((state.properties[LEVEL] as? Int ?: 0) > 0) return false
+    fillCauldron(pos, OF_LAVA, FULL)
+    return true
+}
+
 /**
  * The network ID of the cauldron at [pos] a level off, for the client to
  * see before the cauldron as it is: the client draws a cauldron's water,

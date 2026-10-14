@@ -484,7 +484,7 @@ private fun Box.carries(other: Box) = other.min[1] in max[1] - CARRY_SINK..max[1
     other.max[0] > min[0] && other.min[0] < max[0] && other.max[2] > min[2] && other.min[2] < max[2]
 
 /** The block [steps] blocks away on its [face] side. */
-private fun BlockPos.side(face: Face, steps: Int) = BlockPos(x + face.dx * steps, y + face.dy * steps, z + face.dz * steps)
+internal fun BlockPos.side(face: Face, steps: Int) = BlockPos(x + face.dx * steps, y + face.dy * steps, z + face.dz * steps)
 
 /** What a piston moves, nearest the piston first, and what it breaks. */
 private class Push(val moved: List<BlockPos>, val broken: List<BlockPos>)

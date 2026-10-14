@@ -96,6 +96,15 @@ class FlatWorld(
     /** Where the water inside blocks changed lately, which players are shown as well as the blocks. */
     internal val liquidChanges = LinkedHashSet<BlockPos>()
 
+    /** The blocks giving off light in each chunk light was asked about since a block in it last changed. */
+    internal val lightSources = HashMap<ChunkPos, List<LightSource>>()
+
+    /** For each chunk light was asked about since a block in it last changed, how far down the sky's light falls whole in each column. */
+    internal val skyTops = HashMap<ChunkPos, IntArray>()
+
+    /** The network IDs of the blocks a random tick does something to, once they've been asked for. */
+    internal var randomTicking: Set<Int>? = null
+
     init {
         require(layers.size < SUB_CHUNK_COUNT * 16) { "${layers.size} layers leave no room to stand in the overworld" }
 
@@ -177,6 +186,13 @@ class FlatWorld(
         unsaved += pos.chunk
         blockChanges += pos
         liquidChanges += pos
+        lightChanged(pos.chunk)
+    }
+
+    /** Forgets what was worked out about the light in the chunk at [chunk], a block in it having changed. */
+    private fun lightChanged(chunk: ChunkPos) {
+        lightSources -= chunk
+        skyTops -= chunk
     }
 
     /**
@@ -214,6 +230,7 @@ class FlatWorld(
         }
         changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
         unsaved += pos.chunk
+        lightChanged(pos.chunk)
         // A hopper works from the moment it's there, whether anyone opens it or not.
         if (state.name == HOPPER) machines.getOrPut(pos) { Hopper() }
         if (state.isComparator) comparators += pos else comparators -= pos

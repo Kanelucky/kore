@@ -13,7 +13,7 @@ private val PARTIAL_ENDINGS = listOf(
     "chest", "anvil", "_shelf", "golem_statue", "lightning_rod", "sapling", "_tulip", "_mushroom", "_fungus",
     "_vines", "_petals", "_bush", "_grass", "_plant", "dripleaf", "_dripleaf_block", "blossom", "_flower",
     "_propagule", "_bud", "_cluster", "coral", "_fan", "_egg", "_spike", "_spawn", "detector", "repeater", "comparator",
-    "piston_arm_collision",
+    "_crop", "piston_arm_collision",
 )
 
 /** Blocks that aren't whole cubes and have names of their own. */
@@ -26,7 +26,10 @@ private val PARTIAL_NAMES = setOf(
     // Plants
     "large_fern", "leaf_litter", "pale_hanging_moss", "wildflowers", "allium", "azure_bluet", "blue_orchid",
     "cornflower", "dandelion", "golden_dandelion", "lily_of_the_valley", "oxeye_daisy", "poppy", "torchflower",
-    "wither_rose", "lilac", "peony", "sunflower",
+    "wither_rose", "lilac", "peony", "sunflower", "wheat", "carrots", "potatoes", "beetroot", "melon_stem", "pumpkin_stem",
+    "reeds", "nether_wart", "cocoa", "kelp", "azalea", "flowering_azalea",
+    // Item frames, and Education Edition's coloured torches
+    "frame", "glow_frame", "colored_torch_blue", "colored_torch_green", "colored_torch_purple", "colored_torch_red",
 )
 
 /** Whole cubes whose names end like those of a family that isn't. */
