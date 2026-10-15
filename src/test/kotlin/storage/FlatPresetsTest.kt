@@ -6,7 +6,7 @@ import org.koremc.registry.AIR
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.VanillaData
 import org.koremc.registry.assumeGameData
-import org.koremc.registry.gameData
+import org.koremc.registry.vanillaData
 import org.koremc.world.BlockPos
 import org.koremc.world.MIN_Y
 import org.koremc.world.PLAINS_BIOME_ID
@@ -145,6 +145,6 @@ class FlatPresetsTest {
     }
 
     private companion object {
-        val data: VanillaData by lazy { VanillaData.load(gameData) }
+        val data: VanillaData get() = vanillaData
     }
 }

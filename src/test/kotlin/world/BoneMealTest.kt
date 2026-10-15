@@ -7,7 +7,7 @@ import org.koremc.registry.Fuel
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.VanillaData
 import org.koremc.registry.assumeGameData
-import org.koremc.registry.gameData
+import org.koremc.registry.vanillaData
 import kotlin.math.abs
 import kotlin.random.Random
 import kotlin.test.BeforeTest
@@ -240,6 +240,6 @@ class BoneMealTest {
     }
 
     private companion object {
-        val data: VanillaData by lazy { VanillaData.load(gameData) }
+        val data: VanillaData get() = vanillaData
     }
 }

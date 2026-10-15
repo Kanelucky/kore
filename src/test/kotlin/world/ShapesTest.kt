@@ -8,6 +8,7 @@ import org.koremc.registry.ItemStacks
 import org.koremc.registry.VanillaData
 import org.koremc.registry.assumeGameData
 import org.koremc.registry.gameData
+import org.koremc.registry.vanillaData
 import kotlin.io.path.readText
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -42,6 +43,6 @@ class ShapesTest {
     }
 
     private companion object {
-        val data: VanillaData by lazy { VanillaData.load(gameData) }
+        val data: VanillaData get() = vanillaData
     }
 }

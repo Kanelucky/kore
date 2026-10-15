@@ -4,7 +4,7 @@ import org.koremc.registry.AIR
 import org.koremc.registry.BlockState
 import org.koremc.registry.VanillaData
 import org.koremc.registry.assumeGameData
-import org.koremc.registry.gameData
+import org.koremc.registry.vanillaData
 import kotlin.random.Random
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -267,6 +267,6 @@ class WeatherTest {
     }
 
     private companion object {
-        val data: VanillaData by lazy { VanillaData.load(gameData) }
+        val data: VanillaData get() = vanillaData
     }
 }

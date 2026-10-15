@@ -7,7 +7,7 @@ import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.VanillaData
 import org.koremc.registry.assumeGameData
-import org.koremc.registry.gameData
+import org.koremc.registry.vanillaData
 import org.koremc.registry.withEnchantments
 import kotlin.random.Random
 import kotlin.test.BeforeTest
@@ -139,6 +139,6 @@ class DropsTest {
     }
 
     private companion object {
-        val data: VanillaData by lazy { VanillaData.load(gameData) }
+        val data: VanillaData get() = vanillaData
     }
 }
