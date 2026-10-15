@@ -199,7 +199,7 @@ class WorldStorage private constructor(
             }
         }
         world.unsaved.clear()
-        levelDat = levelDat.updated(world.spawn, settings.gameMode, settings.difficulty, settings.cheats, settings.version, settings.protocol)
+        levelDat = levelDat.updated(world.spawn, settings.gameMode, world.difficulty, settings.cheats, settings.version, settings.protocol)
             .keeping(world.time, world.gameTime, world.weather, world.rules)
         levelDat.write(directory.resolve("level.dat"))
         directory.resolve("levelname.txt").writeText(levelDat.name)
@@ -358,7 +358,7 @@ class WorldStorage private constructor(
             for ((_, value) in storage.db.startingWith(MAP_PREFIX)) {
                 runCatching { mapFrom(readAll(value).first()) }.getOrNull()?.let(storage.world.maps::add)
             }
-            log.info("{} the world \"{}\" in {}", if (existing) "Opened" else "Made", levelDat.name, directory.toAbsolutePath())
+            log.info("{} the world \"{}\" in {}", if (existing) "Opened" else "Made", levelDat.name, directory)
             if (!existing) {
                 for ((pos, state) in defaultLayers.platform) storage.world[pos] = state
                 storage.save()

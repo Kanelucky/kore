@@ -22,7 +22,10 @@ val GAME_RULE_DEFAULTS: Map<String, Any> = linkedMapOf(
  * still kept with the world and sent to clients, as the game does, so a
  * world keeps its settings either way.
  */
-val GAME_RULES_IN_USE = setOf("doDaylightCycle", "doFireTick", "doTileDrops", "doWeatherCycle", "randomTickSpeed", "showCoordinates", "showDaysPlayed")
+val GAME_RULES_IN_USE = setOf(
+    "doDaylightCycle", "doFireTick", "doTileDrops", "doWeatherCycle", "keepInventory", "randomTickSpeed", "showCoordinates", "showDaysPlayed",
+    "showDeathMessages",
+)
 
 /**
  * A world's game rules: each on or off, or a number, by its name, which the
@@ -68,6 +71,12 @@ class GameRules(saved: Map<String, Any> = emptyMap()) {
 
     /** Whether fire spreads, burns blocks away and burns out, and lightning and lava start it. Off, fire stays as it's lit. */
     val doFireTick get() = values["dofiretick"] == true
+
+    /** Whether players keep what they have, and their experience, when they die. */
+    val keepInventory get() = values["keepinventory"] == true
+
+    /** Whether everyone hears how a player died. */
+    val showDeathMessages get() = values["showdeathmessages"] == true
 
     /** How many blocks in each sub-chunk around the players get a random tick each tick: what grows, how fast. */
     val randomTickSpeed get() = values["randomtickspeed"] as? Int ?: 1

@@ -142,8 +142,12 @@ internal fun FlatWorld.schedule(pos: BlockPos, ticks: Int, update: BlockUpdate) 
     scheduled.getOrPut(blockTicks + ticks) { LinkedHashSet() } += pos to update
 }
 
-/** How many blocks [settle] looks at, at most, so that nothing can keep it going for ever. */
-private const val MAX_SETTLE_STEPS = 20_000
+/**
+ * How many blocks [settle] looks at before it gives up, so that nothing can
+ * keep it going for ever: this many, or twice as many as are beside what
+ * changed, for the many blocks a command changes at once.
+ */
+private const val MIN_SETTLE_STEPS = 20_000
 
 /** How far apart, at most, two tripwire hooks can be and still be strung together. */
 internal const val TRIPWIRE_REACH = 41
@@ -297,8 +301,9 @@ fun FlatWorld.settle(changed: Collection<BlockPos>): Changes {
     }
     changed.forEach(::around)
 
+    val maxSteps = maxOf(MIN_SETTLE_STEPS, toCheck.size * 2)
     var steps = 0
-    while (toCheck.isNotEmpty() && steps++ < MAX_SETTLE_STEPS) {
+    while (toCheck.isNotEmpty() && steps++ < maxSteps) {
         val at = toCheck.removeFirst()
         val state = stateAt(at)?.takeIf { it.name != AIR } ?: continue
         val faces = remainingFaces(at, state)

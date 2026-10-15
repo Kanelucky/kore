@@ -13,23 +13,27 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 class SyntaxTest {
-    private data class Player(
+    private data class Entity(
         override val name: String,
         override val feet: Vec3,
-        override val gameMode: GameMode = GameMode.SURVIVAL,
+        override val gameMode: GameMode? = GameMode.SURVIVAL,
+        override val level: Int? = 0,
+        override val type: String = PLAYER_TYPE,
         override val yaw: Float = 0f,
         override val pitch: Float = 0f,
     ) : Selectable
 
-    private val steve = Player("Steve", Vec3(0f, 0f, 0f))
-    private val alex = Player("Alex", Vec3(10f, 0f, 0f), GameMode.CREATIVE)
-    private val bob = Player("Bob Builder", Vec3(3f, 0f, 4f))
-    private val players = listOf(steve, alex, bob)
+    private val steve = Entity("Steve", Vec3(0f, 0f, 0f))
+    private val alex = Entity("Alex", Vec3(10f, 0f, 0f), GameMode.CREATIVE)
+    private val bob = Entity("Bob Builder", Vec3(3f, 0f, 4f), level = 30)
+    private val apple = Entity("Apple", Vec3(1f, 0f, 0f), gameMode = null, level = null, type = "minecraft:item")
+    private val orb = Entity("Experience Orb", Vec3(20f, 0f, 0f), gameMode = null, level = null, type = "minecraft:xp_orb")
+    private val entities = listOf(steve, alex, bob, apple, orb)
 
     private fun coordinates(text: String) = Coordinates.read(CommandReader(text))
 
-    private fun select(text: String, source: Player? = steve) =
-        readTarget(CommandReader(text)).select(players, source, source?.feet ?: Vec3(0f, 0f, 0f), 0f, 0f, Random(1)).map { it.name }
+    private fun select(text: String, source: Entity? = steve) =
+        readTarget(CommandReader(text)).select(entities, source, source?.feet ?: Vec3(0f, 0f, 0f), 0f, 0f, Random(1)).map { it.name }
 
     @Test
     fun `whole numbers across are the middle of the block, and offsets go from where the command runs`() {
@@ -65,8 +69,39 @@ class SyntaxTest {
         assertEquals(listOf("Steve"), select("@p"))
         assertEquals(listOf("Alex"), select("@p", source = alex))
         assertEquals(listOf("Steve", "Alex", "Bob Builder"), select("@a"))
-        assertEquals(listOf("Steve", "Alex", "Bob Builder"), select("@e"))
         assertEquals(1, select("@r").size)
+    }
+
+    @Test
+    fun `@e and @n pick anything, while names, @a, @p and @r mean players, unless @r is given a type to pick from`() {
+        assertEquals(listOf("Steve", "Alex", "Bob Builder", "Apple", "Experience Orb"), select("@e"))
+        assertEquals(listOf("Apple"), select("@e[type=item]"))
+        assertEquals(listOf("Apple"), select("@e[name=apple]"))
+        assertEquals(listOf("Steve"), select("@n"))
+        assertEquals(listOf("Apple"), select("@n[type=!player]"))
+        assertEquals(listOf("Experience Orb"), select("@r[type=minecraft:xp_orb]"))
+        assertEquals(setOf("Steve", "Alex", "Bob Builder"), select("@r[c=10]").toSet())
+        assertEquals(emptyList(), select("Apple"))
+        assertEquals(listOf("Steve", "Alex", "Bob Builder"), select("@e[family=player]"))
+    }
+
+    @Test
+    fun `only players have a game mode and a level to pick them out by`() {
+        assertEquals(listOf("Steve", "Bob Builder"), select("@e[m=survival]"))
+        assertEquals(listOf("Alex"), select("@e[m=!survival]"))
+        assertEquals(listOf("Bob Builder"), select("@e[lm=10]"))
+        assertEquals(listOf("Steve", "Alex"), select("@e[l=9]"))
+    }
+
+    @Test
+    fun `block states are read as each name with its value, text, a whole number, or true or false`() {
+        fun states(text: String) = BlockStatesType.read(CommandReader(text))
+        assertEquals(mapOf("wood_type" to "birch", "age" to 3, "open_bit" to true), states("""["wood_type"="birch", "age"=3,"open_bit"=true]"""))
+        assertEquals(mapOf("facing_direction" to 2), states("""[ "facing_direction" : 2 ]"""))
+        assertEquals(emptyMap(), states("[]"))
+        for (text in listOf("""["age"=three]""", """["age"=3""", """"age"=3""", """["age"]""")) {
+            assertFailsWith<SyntaxError>(text) { states(text) }
+        }
     }
 
     @Test
@@ -83,7 +118,7 @@ class SyntaxTest {
         assertEquals(listOf("Bob Builder"), select("@a[x=2,y=0,z=3,dx=1,dy=0,dz=1]"))
         assertEquals(emptyList(), select("@a[type=zombie]"))
         assertEquals(emptyList(), select("@a[tag=builder]"))
-        assertEquals(3, select("@a[tag=!builder,type=minecraft:player,family=player,l=0]").size)
+        assertEquals(listOf("Steve", "Alex"), select("@a[tag=!builder,type=minecraft:player,family=player,l=0]"))
     }
 
     @Test

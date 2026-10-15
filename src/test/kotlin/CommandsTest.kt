@@ -15,10 +15,18 @@ import org.koremc.protocol.BatchCodec
 import org.koremc.protocol.BlockDefinitions
 import org.koremc.protocol.CommandMessage
 import org.koremc.protocol.Disconnect
+import org.koremc.protocol.Difficulty
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.GameRulesChanged
 import org.koremc.protocol.LevelEvent
+import org.koremc.protocol.MobEffect
 import org.koremc.protocol.MovePlayer
+import org.koremc.protocol.PlaySound
+import org.koremc.protocol.SetDifficulty
+import org.koremc.protocol.SetSpawnPosition
+import org.koremc.protocol.SetTitle
+import org.koremc.protocol.SpawnParticleEffect
+import org.koremc.protocol.StopSound
 import org.koremc.protocol.SetTime
 import org.koremc.protocol.SetPlayerGameType
 import org.koremc.protocol.Text
@@ -53,6 +61,7 @@ import org.koremc.registry.ItemStacks
 import org.koremc.registry.ItemVersion
 import org.koremc.registry.damage
 import org.koremc.registry.enchantments
+import org.koremc.world.BlockPos
 import org.koremc.world.Drops
 import org.koremc.world.FlatWorld
 import org.koremc.world.Vec3
@@ -76,6 +85,7 @@ private const val INVENTORY_SLOT = 50
 private const val AVAILABLE_COMMANDS = 76
 private const val COMMAND_OUTPUT = 79
 private const val UPDATE_ABILITIES = 187
+private const val UPDATE_BLOCK = 21
 
 /** The input flag set on the tick after the client moved its player where a teleport put them. */
 private const val HANDLED_TELEPORT = 37
@@ -471,7 +481,7 @@ class CommandsTest {
 
         alex.runs("/list")
         assertEquals(
-            listOf(CommandMessage("commands.players.list", true, listOf("2", "20")), CommandMessage("commands.players.list.names", true, listOf("Steve, Alex"))),
+            listOf(CommandMessage("commands.players.list", true, listOf("2", "10")), CommandMessage("commands.players.list.names", true, listOf("Steve, Alex"))),
             alex.output(),
         )
         alex.runs("/help")
@@ -564,6 +574,157 @@ class CommandsTest {
     }
 
     @Test
+    fun `selectors pick out items, which teleport to a player and can be killed, while nothing kills a creative player`() {
+        val (steve, _) = steveAndAlex()
+        world.spawnItem(ItemStack(diamond), Vec3(20.5f, -63f, 20.5f), Vec3(0f, 0f, 0f), pickupDelay = 100)
+
+        steve.runs("/tp @e[type=item] @s")
+        assertEquals(listOf(CommandMessage("commands.tp.success", true, listOf("Diamond", "Steve"))), steve.output())
+        assertEquals(steve.session.feet, world.items.single().position)
+        steve.runs("/kill @e[type=item,name=diamond]")
+        assertEquals(listOf(CommandMessage("commands.kill.successful", true, listOf("Diamond"))), steve.output())
+        assertTrue(world.items.isEmpty())
+
+        steve.runs("/gamemode c")
+        steve.runs("/kill")
+        assertEquals(listOf(CommandMessage("commands.kill.attemptKillPlayerCreative", false)), steve.output())
+    }
+
+    @Test
+    fun `effect gives an effect for a while or for ever, takes one or all away, and only players have effects`() {
+        val (steve, alex) = steveAndAlex()
+
+        steve.runs("/effect Alex speed 10 2")
+        assertEquals(listOf(CommandMessage("commands.effect.success", true, listOf("%potion.moveSpeed", "2", "Alex", "10"))), steve.output())
+        assertTrue(alex.received().any { it.contentEquals(MobEffect(2, MobEffect.ADD, 1, 2, 200).encode()) })
+        steve.runs("/effect @s night_vision infinite 0 true")
+        assertEquals(listOf(CommandMessage("commands.effect.success.infinite", true, listOf("%potion.nightVision", "0", "Steve"))), steve.output())
+
+        steve.runs("/effect Alex clear")
+        assertEquals(listOf(CommandMessage("commands.effect.success.removed.all", true, listOf("Alex"))), steve.output())
+        steve.runs("/effect Alex clear speed")
+        assertEquals(listOf(CommandMessage("commands.effect.failure.notActive", false, listOf("%potion.moveSpeed", "Alex"))), steve.output())
+        world.spawnItem(ItemStack(diamond), Vec3(0.5f, -63f, 0.5f), Vec3(0f, 0f, 0f), pickupDelay = 100)
+        steve.runs("/effect @e[type=item] speed")
+        assertEquals(listOf(CommandMessage("commands.effect.failure.notAMob", false, listOf("Diamond"))), steve.output())
+    }
+
+    @Test
+    fun `difficulty sets the world's difficulty by name, letter or number, which everyone hears of`() {
+        val (steve, alex) = steveAndAlex()
+        alex.received()
+
+        steve.runs("/difficulty h")
+        assertEquals(listOf(CommandMessage("commands.difficulty.success", true, listOf("%options.difficulty.hard"))), steve.output())
+        assertEquals(Difficulty.HARD, world.difficulty)
+        assertTrue(alex.received().any { it.contentEquals(SetDifficulty(Difficulty.HARD).encode()) })
+        steve.runs("/difficulty 0")
+        assertEquals(Difficulty.PEACEFUL, world.difficulty)
+        steve.runs("/difficulty 7")
+        assertEquals(listOf(CommandMessage("commands.generic.parameter.invalid", false, listOf("7"))), steve.output())
+    }
+
+    @Test
+    fun `setworldspawn moves the world's spawn, and spawnpoint sets where players respawn, which clearspawnpoint takes away`() {
+        val (steve, alex) = steveAndAlex()
+        alex.received()
+
+        steve.runs("/setworldspawn 5 -60 5")
+        assertEquals(listOf(CommandMessage("commands.setworldspawn.success", true, listOf("5", "-60", "5"))), steve.output())
+        assertEquals(BlockPos(5, -60, 5), world.spawn)
+        assertTrue(alex.received().any { it.contentEquals(SetSpawnPosition(SetSpawnPosition.WORLD, BlockPos(5, -60, 5)).encode()) })
+
+        steve.runs("/spawnpoint Alex 10 -62 10")
+        assertEquals(listOf(CommandMessage("commands.spawnpoint.success.single", true, listOf("Alex", "10", "-62", "10"))), steve.output())
+        assertEquals(BlockPos(10, -62, 10), alex.session.spawnPoint)
+        steve.runs("/spawnpoint @a")
+        assertEquals(listOf(CommandMessage("commands.spawnpoint.success.multiple.generic", true, listOf("Steve, Alex"))), steve.output())
+        steve.runs("/clearspawnpoint Alex")
+        assertEquals(listOf(CommandMessage("commands.clearspawnpoint.success.single", true, listOf("Alex"))), steve.output())
+        assertEquals(null, alex.session.spawnPoint)
+    }
+
+    @Test
+    fun `title shows a title, and tellraw and titleraw send rawtext, with its selectors written out as names`() {
+        val (steve, alex) = steveAndAlex()
+        alex.received()
+
+        steve.runs("/title Alex title Hello there")
+        assertEquals(listOf(CommandMessage("commands.title.success", true)), steve.output())
+        assertTrue(alex.received().any { it.contentEquals(SetTitle(SetTitle.TITLE, "Hello there").encode()) })
+        steve.runs("""/tellraw @a {"rawtext":[{"text":"Hi "},{"selector":"@a"}]}""")
+        assertTrue(alex.received().any { it.contentEquals(Text(Text.OBJECT, """{"rawtext":[{"text":"Hi "},{"text":"Steve, Alex"}]}""").encode()) })
+        steve.runs("""/titleraw Alex actionbar {"rawtext":[{"translate":"gui.ok"}]}""")
+        assertTrue(alex.received().any { it.contentEquals(SetTitle(SetTitle.ACTION_BAR + SetTitle.RAW, """{"rawtext":[{"translate":"gui.ok"}]}""").encode()) })
+
+        steve.runs("""/tellraw @a {"rawtext":{"text":"no"}}""")
+        assertEquals(listOf(CommandMessage("commands.tellraw.error.notArray", false)), steve.output())
+        steve.runs("/tellraw @a {not json")
+        assertEquals(listOf(CommandMessage("commands.tellraw.jsonStringException", false)), steve.output())
+    }
+
+    @Test
+    fun `playsound plays to the players in range, stopsound stops it, and particle shows an effect`() {
+        val (steve, alex) = steveAndAlex()
+        alex.received()
+
+        steve.runs("/playsound random.levelup Alex")
+        assertEquals(listOf(CommandMessage("commands.playsound.success", true, listOf("random.levelup", "Alex"))), steve.output())
+        assertTrue(alex.received().any { it.contentEquals(PlaySound("random.levelup", alex.session.feet, 1f, 1f).encode()) })
+        steve.runs("/playsound random.levelup Alex 100 -60 100")
+        assertEquals(listOf(CommandMessage("commands.playsound.playerTooFar", false, listOf("Alex"))), steve.output())
+        steve.runs("/stopsound Alex")
+        assertEquals(listOf(CommandMessage("commands.stopsound.success.all", true)), steve.output())
+        assertTrue(alex.received().any { it.contentEquals(StopSound(null).encode()) })
+
+        steve.runs("/particle minecraft:heart_particle 0 -62 0")
+        assertEquals(listOf(CommandMessage("commands.particle.success", true, listOf("minecraft:heart_particle", "1"))), steve.output())
+        assertTrue(alex.received().any { it.contentEquals(SpawnParticleEffect("minecraft:heart_particle", Vec3(0.5f, -62f, 0.5f)).encode()) })
+    }
+
+    @Test
+    fun `setblock and fill change blocks for everyone to see, within their limits, and testfor and testforblocks look`() {
+        val (steve, alex) = steveAndAlex()
+        alex.received()
+
+        steve.runs("/setblock 0 -60 0 stone")
+        assertEquals(listOf(CommandMessage("commands.setblock.success", true)), steve.output())
+        assertEquals(stone, world.stateAt(BlockPos(0, -60, 0)))
+        assertTrue(alex.received().any { idOf(it) == UPDATE_BLOCK })
+        steve.runs("/setblock 0 -60 0 stone")
+        assertEquals(listOf(CommandMessage("commands.setblock.noChange", false)), steve.output())
+        steve.runs("""/setblock 0 -60 0 stone ["no"=1]""")
+        assertEquals(listOf(CommandMessage("commands.blockstate.stateError", false, listOf("no", "stone"))), steve.output())
+        steve.runs("/fill 0 -60 0 2 -60 2 stone keep")
+        assertEquals(listOf(CommandMessage("commands.fill.success", true, listOf("8"))), steve.output())
+        steve.runs("/fill 0 -60 0 100 -50 100 stone")
+        assertEquals(listOf(CommandMessage("commands.fill.tooManyBlocks", false, listOf("112211", "32768"))), steve.output())
+
+        steve.runs("/testfor @a")
+        assertEquals(listOf(CommandMessage("commands.testfor.success", true, listOf("Steve, Alex"))), steve.output())
+        steve.runs("/testforblocks 0 -60 0 3 -60 0 10 -60 0")
+        assertEquals(listOf(CommandMessage("commands.compare.failed", false)), steve.output())
+        steve.runs("/testforblocks 0 -60 0 3 -60 0 10 -60 0 masked")
+        assertEquals(listOf(CommandMessage("commands.compare.failed", false)), steve.output())
+        steve.runs("/clone 0 -60 0 3 -60 0 10 -60 0")
+        steve.runs("/testforblocks 0 -60 0 3 -60 0 10 -60 0")
+        assertEquals(listOf(CommandMessage("commands.compare.success", true, listOf("4"))), steve.output())
+        steve.runs("/testforblocks 0 -60 0 3 -60 0 10 -60 0 masked")
+        assertEquals(listOf(CommandMessage("commands.compare.success", true, listOf("3"))), steve.output())
+    }
+
+    @Test
+    fun `setmaxplayers sets how many can be on at once, though never fewer than are`() {
+        val (steve, _) = steveAndAlex()
+
+        steve.runs("/setmaxplayers 1")
+        assertEquals(listOf(CommandMessage("commands.setmaxplayers.success", true, listOf("2")), CommandMessage("commands.setmaxplayers.success.lowerbound", true)), steve.output())
+        assertEquals(2, game.maxPlayers)
+        steve.runs("/setmaxplayers 10")
+        assertEquals(10, game.maxPlayers)
+    }
+
+    @Test
     fun `the console shows output in English, with the keys in it filled in`() {
         assertEquals(
             "Set Steve's game mode to Creative Mode",
@@ -573,6 +734,7 @@ class CommandsTest {
         assertEquals("/list", english(CommandMessage("/list", true)))
         assertEquals("§2--- Showing help page 1 of 4 (/help <page>) ---", english(CommandMessage("§2%commands.help.header", true, listOf("1", "4"))))
         assertEquals("§eSets a player's game mode.", english(CommandMessage("§e%commands.gamemode.description", true)))
+        assertEquals("Gave Speed * 2 to Alex for 10 seconds", english(CommandMessage("commands.effect.success", true, listOf("%potion.moveSpeed", "2", "Alex", "10"))))
     }
 
     private fun idOf(packet: ByteArray) = Unpooled.wrappedBuffer(packet).readVarUInt() and 0x3FF

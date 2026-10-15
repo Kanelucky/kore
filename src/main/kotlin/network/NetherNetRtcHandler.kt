@@ -109,7 +109,7 @@ class NetherNetRtcHandler(
     private fun select(peer: Peer, address: InetSocketAddress) {
         if (peer.address == address) return
         peer.address = address
-        log.info("ICE path for network {}: {}", peer.networkId, address)
+        log.debug("ICE path for network {}: {}", peer.networkId, address)
     }
 
     private fun onDtls(ctx: ChannelHandlerContext, sender: InetSocketAddress, datagram: ByteBuffer) {
@@ -133,7 +133,7 @@ class NetherNetRtcHandler(
         }
 
         if (!wasConnected && transport.isConnected) {
-            log.info("DTLS connected for network {} ({})", peer.networkId, transport.cipherSuite)
+            log.debug("DTLS connected for network {} ({})", peer.networkId, transport.cipherSuite)
         }
         if (transport.isClosed) {
             drop(peer, DisconnectReason.CLOSED_BY_CLIENT)
@@ -156,7 +156,7 @@ class NetherNetRtcHandler(
 
         val wasEstablished = association.isEstablished
         val messages = association.receive(packet)
-        if (!wasEstablished && association.isEstablished) log.info("SCTP association up for network {}", peer.networkId)
+        if (!wasEstablished && association.isEstablished) log.debug("SCTP association up for network {}", peer.networkId)
 
         for (message in messages) {
             when (val event = channels.receive(message)) {
@@ -174,7 +174,7 @@ class NetherNetRtcHandler(
             log.warn("Network {} opened '{}', which NetherNet doesn't use", peer.networkId, channel.label)
             return
         }
-        log.info(
+        log.debug(
             "Network {} opened '{}' on stream {} ({}, {})",
             peer.networkId, channel.label, channel.streamId,
             if (channel.ordered) "ordered" else "unordered",
@@ -182,7 +182,7 @@ class NetherNetRtcHandler(
         )
 
         if (!wasOpen && connection.isOpen) {
-            log.info("Network {} connected", peer.networkId)
+            log.debug("Network {} connected", peer.networkId)
             callGameCode("onConnect", peer) { onConnect(connection) }
         }
     }
@@ -202,7 +202,7 @@ class NetherNetRtcHandler(
     private fun sweep() {
         val cutoff = System.nanoTime() - PEER_TIMEOUT.inWholeNanoseconds
         for (peer in peers.removeIdle(cutoff)) {
-            if (peer.address == null) log.info("Network {} never connected", peer.networkId)
+            if (peer.address == null) log.debug("Network {} never connected", peer.networkId)
             forget(peer, DisconnectReason.TIMED_OUT)
         }
     }
@@ -219,7 +219,7 @@ class NetherNetRtcHandler(
 
         val connection = connections.remove(peer) ?: return
         if (connection.isOpen) {
-            log.info("Network {} disconnected ({})", peer.networkId, reason)
+            log.debug("Network {} disconnected ({})", peer.networkId, reason)
             callGameCode("onDisconnect", peer) { onDisconnect(connection, reason) }
         }
     }

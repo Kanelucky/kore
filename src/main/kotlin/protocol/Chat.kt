@@ -3,6 +3,7 @@ package org.koremc.protocol
 import io.netty.buffer.ByteBuf
 
 internal const val TEXT = 9
+private const val SET_TITLE = 88
 
 /**
  * A message in the chat, or above the hotbar. The client sends one when
@@ -25,7 +26,7 @@ data class Text(
 
     override fun encodeBody(out: ByteBuf) {
         out.writeBoolean(needsTranslation)
-        // Each type has its kind of body: a message alone, one with its sender, or one with parameters.
+        // Each type has its kind of body: a message alone, one with its sender, or one with parameters. Rawtext goes alone.
         when (type) {
             CHAT, WHISPER, ANNOUNCEMENT -> out.writeByte(AUTHORED).writeByte(type).writeString(sourceName).writeString(message)
             TRANSLATION, POPUP, JUKEBOX_POPUP -> {
@@ -50,6 +51,9 @@ data class Text(
         const val SYSTEM = 6
         const val WHISPER = 7
         const val ANNOUNCEMENT = 8
+
+        /** A message in rawtext, the JSON `/tellraw` gives, which the client puts together itself. */
+        const val OBJECT = 10
 
         // The kinds of body.
         private const val MESSAGE_ONLY = 0
@@ -76,4 +80,37 @@ internal fun decodeText(buffer: ByteBuf): Text {
     buffer.readString() // Platform chat ID
     if (buffer.readBoolean()) buffer.readString() // The filtered version, which only servers make
     return Text(type, message, sourceName, parameters, needsTranslation, xuid)
+}
+
+/**
+ * Shows the player a title, as `/title` does: what [action] says, with
+ * [text] for the title, subtitle or line above the hotbar, plain or in
+ * rawtext, and for [TIMES], how many ticks it fades in, stays and fades
+ * out for.
+ */
+data class SetTitle(val action: Int, val text: String = "", val fadeIn: Int = 0, val stay: Int = 0, val fadeOut: Int = 0) : ServerPacket {
+    override val id get() = SET_TITLE
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarInt(action)
+        out.writeString(text)
+        out.writeVarInt(fadeIn)
+        out.writeVarInt(stay)
+        out.writeVarInt(fadeOut)
+        out.writeString("") // The XUID of whoever it's from
+        out.writeString("") // Their platform's ID for them
+        out.writeString("") // A version with profanity filtered out
+    }
+
+    companion object {
+        const val CLEAR = 0
+        const val RESET = 1
+        const val TITLE = 2
+        const val SUBTITLE = 3
+        const val ACTION_BAR = 4
+        const val TIMES = 5
+
+        /** How much further along the rawtext form of each of [TITLE], [SUBTITLE] and [ACTION_BAR] is. */
+        const val RAW = 4
+    }
 }

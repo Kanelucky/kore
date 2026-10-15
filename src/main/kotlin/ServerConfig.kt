@@ -5,6 +5,7 @@ import org.koremc.protocol.Difficulty
 import org.koremc.protocol.GameMode
 import org.koremc.storage.FlatPreset
 import org.koremc.storage.LevelType
+import org.koremc.world.CommandLimits
 import org.koremc.world.Features
 import java.nio.file.Path
 
@@ -43,7 +44,7 @@ data class ServerConfig(
     /** Where worlds are saved, each in a folder of its own, as the game's dedicated server keeps them. */
     val worldsDirectory: Path = Path.of("worlds"),
     /** The most players on the server at once. Anyone else who tries to join is told it's full. */
-    val maxPlayers: Int = 20,
+    val maxPlayers: Int = 10,
     /** Whether games on the local network find the server, as they find each other's worlds. */
     val lanVisibility: Boolean = true,
     /** The game mode new players start in, and a new world's. */
@@ -65,12 +66,14 @@ data class ServerConfig(
     val viewDistance: Int = 8,
     /** The game's systems Kore runs, all of them unless kore.json switches some off. */
     val features: Features = Features(),
+    /** The most blocks a command changes at once: the game's own limits, unless kore.json changes them. */
+    val commandLimits: CommandLimits = CommandLimits(),
     // Must match the client's protocol number and version string.
     val protocol: Int = 2193,
     val version: String = "1.26.50",
 )
 
-fun ServerConfig.toJoinInfo(onlinePlayers: Int) = JoinInfo(
+fun ServerConfig.toJoinInfo(onlinePlayers: Int, maxPlayers: Int = this.maxPlayers) = JoinInfo(
     name = name,
     protocol = protocol,
     version = version,

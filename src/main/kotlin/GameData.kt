@@ -49,9 +49,20 @@ class GameData(
     val traits: BlockTraits = BlockTraits.NONE,
     /** Where players' own data is kept between sessions. */
     val players: PlayerSaves = PlayerSaves.NONE,
+    maxPlayers: Int = ServerConfig().maxPlayers,
 ) {
+    /** The most players on the server at once: server.properties says, until `/setmaxplayers` changes it. */
+    @Volatile
+    var maxPlayers = maxPlayers
+
     companion object {
-        fun of(vanilla: VanillaData, world: FlatWorld, items: ItemStacks = ItemStacks(vanilla.items, vanilla.creative, vanilla.blocks), players: PlayerSaves = PlayerSaves.NONE) = GameData(
+        fun of(
+            vanilla: VanillaData,
+            world: FlatWorld,
+            items: ItemStacks = ItemStacks(vanilla.items, vanilla.creative, vanilla.blocks),
+            players: PlayerSaves = PlayerSaves.NONE,
+            maxPlayers: Int = ServerConfig().maxPlayers,
+        ) = GameData(
             world = world,
             definitions = listOf(ItemRegistry(vanilla.items), BiomeDefinitionList(vanilla.biomes), CreativeContent(vanilla.creative), CraftingData(vanilla.recipes)),
             blockDefinitions = BlockDefinitions(vanilla.blockDefinitions),
@@ -63,6 +74,7 @@ class GameData(
             enchantments = vanilla.enchantments,
             traits = vanilla.traits,
             players = players,
+            maxPlayers = maxPlayers,
         )
     }
 }

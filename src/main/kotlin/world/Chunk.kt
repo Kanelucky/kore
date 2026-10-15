@@ -43,6 +43,17 @@ class Chunk(val subChunks: List<PalettedStorage>, val biomes: List<PalettedStora
         return Chunk(subChunks, biomes, liquids.take(subChunks.size))
     }
 
+    /** This column with each block in [blocks] the network ID it's paired with: each sub-chunk built afresh once, for all of its own. */
+    fun with(blocks: Map<BlockPos, Int>): Chunk {
+        val subChunks = subChunks.toMutableList()
+        for ((index, inSubChunk) in blocks.entries.groupBy { subChunkOf(it.key) }) {
+            while (subChunks.size <= index) subChunks += PalettedStorage.filled(AIR_NETWORK_ID)
+            subChunks[index] = subChunks[index].with(inSubChunk.associate { (pos, networkId) -> indexOf(pos) to networkId })
+        }
+        while (subChunks.lastOrNull()?.palette == listOf(AIR_NETWORK_ID)) subChunks.removeAt(subChunks.lastIndex)
+        return Chunk(subChunks, biomes, liquids.take(subChunks.size))
+    }
+
     /** This column with [networkId] in the second layer at [pos], inside the block there. A layer left with nothing but air goes. */
     fun withLiquid(pos: BlockPos, networkId: Int): Chunk {
         val liquids = liquids.toMutableList()

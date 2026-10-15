@@ -39,8 +39,8 @@ class FlatWorld(
     /** The one biome the world is in, by number. */
     val biome: Int = PLAINS_BIOME_ID,
     private val loader: ChunkLoader = ChunkLoader.NONE,
-    /** Where players appear: by default standing on the top layer, in the corner of chunk 0, 0. */
-    val spawn: BlockPos = BlockPos(0, MIN_Y + layers.size, 0),
+    /** Where players appear: by default standing on the top layer, in the corner of chunk 0, 0. `/setworldspawn` moves it. */
+    var spawn: BlockPos = BlockPos(0, MIN_Y + layers.size, 0),
     /** What the game says of each block state, like what liquid does to it. */
     val traits: BlockTraits = BlockTraits.NONE,
     /** The climate of [biome]: how warm it is, what falls from the sky when it rains, and how deep snow lies. */
@@ -167,7 +167,28 @@ class FlatWorld(
     }
 
     /** The network ID of the block at [pos]. */
-    fun blockAt(pos: BlockPos): Int = chunkAt(pos.chunk).blockAt(pos)
+    fun blockAt(pos: BlockPos): Int = pending?.get(pos.chunk)?.get(pos) ?: chunkAt(pos.chunk).blockAt(pos)
+
+    /** The blocks set while [inBulk] runs, by chunk, waiting to go into their chunks together. */
+    private var pending: HashMap<ChunkPos, HashMap<BlockPos, Int>>? = null
+
+    /**
+     * Runs [edit], which sets many blocks, putting them into their chunks
+     * together once it's done, each sub-chunk built afresh once rather
+     * than for every block, as is far quicker for a command's thousands.
+     * Within it, blocks read as they've been set.
+     */
+    internal fun <T> inBulk(edit: () -> T): T {
+        if (pending != null) return edit()
+        val bulk = HashMap<ChunkPos, HashMap<BlockPos, Int>>()
+        pending = bulk
+        try {
+            return edit()
+        } finally {
+            pending = null
+            for ((chunk, blocks) in bulk) changed[chunk] = chunkAt(chunk).with(blocks)
+        }
+    }
 
     /** The block at [pos], or null if it's one [blocks] doesn't have. */
     fun stateAt(pos: BlockPos): BlockState? = blocks[blockAt(pos)]
@@ -250,19 +271,9 @@ class FlatWorld(
             setLiquid(pos, liquidState(Liquid.WATER, 0, inside = true))
         }
         // A furnace lighting up, or going out, is the same furnace.
-        if (replaced?.let(::kindOf) != kindOf(state)) {
-            blockEntities[pos.chunk]?.remove(pos)
-            containers.remove(pos)
-            machines.remove(pos)
-            poweredOpen.remove(pos)
-            torchToggles.remove(pos)
-            redstoneDue.remove(pos)
-            comparatorPower.remove(pos)
-            pistonArms.remove(pos)
-            beacons.remove(pos)
-            playing.remove(pos)
-        }
-        changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
+        if (replaced?.let(::kindOf) != kindOf(state)) forget(pos)
+        val bulk = pending
+        if (bulk != null) bulk.getOrPut(pos.chunk) { HashMap() }[pos] = state.networkId else changed[pos.chunk] = chunkAt(pos.chunk).with(pos, state.networkId)
         unsaved += pos.chunk
         lightChanged(pos.chunk)
         // A hopper works from the moment it's there, whether anyone opens it or not.
@@ -272,6 +283,24 @@ class FlatWorld(
         if (state.isDaylightDetector) daylightDetectors += pos else daylightDetectors -= pos
         if (features.redstone) powerChanges += pos
         blockChanges += pos
+    }
+
+    /**
+     * Forgets what the block at [pos] kept: its block entity, what it held,
+     * a machine's work, and what redstone knew of it, as a block of another
+     * kind put there does.
+     */
+    internal fun forget(pos: BlockPos) {
+        blockEntities[pos.chunk]?.remove(pos)
+        containers.remove(pos)
+        machines.remove(pos)
+        poweredOpen.remove(pos)
+        torchToggles.remove(pos)
+        redstoneDue.remove(pos)
+        comparatorPower.remove(pos)
+        pistonArms.remove(pos)
+        beacons.remove(pos)
+        playing.remove(pos)
     }
 
     /** Where blocks changed since redstone last looked, which may have powered something, or stopped powering it. */

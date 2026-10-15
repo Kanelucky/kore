@@ -199,6 +199,9 @@ data class ActorEvent(val entityId: Long, val event: Int, val data: Int) : Serve
     }
 
     companion object {
+        /** An entity dying: it falls over, tinted red. */
+        const val DEATH = 3
+
         /** An item entity's stack changing size, as when items merge. The data is how many it holds now. */
         const val UPDATE_STACK_SIZE = 69
     }

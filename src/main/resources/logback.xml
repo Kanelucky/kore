@@ -2,13 +2,16 @@
     <!-- Names each run's log file after the moment the server started. -->
     <timestamp key="started" datePattern="yyyy-MM-dd_HH-mm-ss"/>
 
-    <!-- What's happening, without the detail. -->
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <!--
+        What's happening, without the detail, which the file has: the time to the second, and how much it matters.
+        Written above the line being typed at the console, never into it.
+    -->
+    <appender name="CONSOLE" class="org.koremc.command.ConsoleLogAppender">
         <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
             <level>INFO</level>
         </filter>
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) [%thread] %cyan(%logger{20}) - %msg%n</pattern>
+            <pattern>[%d{HH:mm:ss} %highlight(%level)] %msg%n</pattern>
         </encoder>
     </appender>
 

@@ -8,6 +8,7 @@ import org.koremc.world.Vec3
 import java.util.UUID
 
 private const val START_GAME = 11
+private const val SET_DIFFICULTY = 60
 
 /** Game modes, with their wire values. */
 enum class GameMode(val id: Int) {
@@ -22,6 +23,15 @@ enum class GameMode(val id: Int) {
 
 /** Declared in wire order: each is sent as its ordinal. */
 enum class Difficulty { PEACEFUL, EASY, NORMAL, HARD }
+
+/** The world's difficulty changing, as `/difficulty` changes it. */
+data class SetDifficulty(val difficulty: Difficulty) : ServerPacket {
+    override val id get() = SET_DIFFICULTY
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarUInt(difficulty.ordinal)
+    }
+}
 
 /** Declared in wire order: each is sent as its ordinal. */
 enum class PermissionLevel { VISITOR, MEMBER, OPERATOR, CUSTOM }

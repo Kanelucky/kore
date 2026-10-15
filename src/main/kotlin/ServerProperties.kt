@@ -116,7 +116,7 @@ private val SETTINGS_BY_KEY = SETTINGS.associateBy { it.key }
 fun loadServerConfig(file: Path, defaults: ServerConfig = ServerConfig()): ServerConfig {
     if (!file.exists()) {
         file.writeText(serverProperties(defaults))
-        log.info("Made {} with the default settings", file.toAbsolutePath())
+        log.info("Made {} with the default settings", file)
         return defaults
     }
     val values = file.readLines().mapNotNull { line ->

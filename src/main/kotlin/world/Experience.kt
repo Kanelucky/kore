@@ -48,13 +48,13 @@ class ExperienceOrb(val id: Long, val value: Int, position: Vec3, velocity: Vec3
     var moved = false
         private set
 
-    /** Whether a piston moved it this tick, which holds it up until the piston's done. */
+    /** Whether a piston or a command moved it this tick, which holds it up until the piston's done. */
     private var pushed = false
 
     /**
-     * Whether a piston moved it in the last tick, so those who see it need
-     * to see it there at once, keeping up with the piston, rather than
-     * have it glide there after.
+     * Whether a piston or a command moved it in the last tick, so those who
+     * see it need to see it there at once, keeping up with the piston,
+     * rather than have it glide there after.
      */
     var snapped = false
         private set
@@ -114,6 +114,13 @@ class ExperienceOrb(val id: Long, val value: Int, position: Vec3, velocity: Vec3
     internal fun pushBy(world: FlatWorld, axis: Axis, by: Double) {
         position = world.pushed(position, axis, by)
         velocity = velocity.stoppedAlong(axis)
+        pushed = true
+    }
+
+    /** Puts it [at] a point, stopped, as a command does. */
+    fun teleport(at: Vec3) {
+        position = at
+        velocity = Vec3(0f, 0f, 0f)
         pushed = true
     }
 

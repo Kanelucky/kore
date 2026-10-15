@@ -34,20 +34,29 @@ import org.koremc.storage.LevelType
 import org.koremc.storage.WorldSettings
 import org.koremc.storage.WorldStorage
 import org.slf4j.LoggerFactory
+import java.net.BindException
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.nio.file.FileSystems
 import java.nio.file.NoSuchFileException
+import java.nio.file.Path
+import java.util.Locale
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.io.path.exists
 import kotlin.random.Random
 import kotlin.system.exitProcess
 
 private val log = LoggerFactory.getLogger("Kore")
 
 fun main() {
+    val started = System.nanoTime()
     // A crash on any thread lands in the log file too, not just the console.
     Thread.setDefaultUncaughtExceptionHandler { thread, e -> log.error("Uncaught exception on {}", thread.name, e) }
+    // The jar says which Kore it is; run from the build, there's no telling.
+    val kore = listOfNotNull("Kore", Sessions::class.java.`package`?.implementationVersion).joinToString(" ")
+    log.info("Starting {} for Minecraft {}", kore, ServerConfig().version)
     val config = try {
         loadServerConfig(SERVER_PROPERTIES).withKoreSettings(KORE_JSON)
     } catch (e: IllegalStateException) {
@@ -55,12 +64,12 @@ fun main() {
         exitProcess(1)
     }
     val vanilla = try {
-        VanillaData.load(config.dataDirectory)
+        VanillaData.load(gameDataIn(config.dataDirectory))
     } catch (e: NoSuchFileException) {
         log.error("Missing {}. Kore needs the game data for {} in {}: clone https://github.com/KoreMC/data there.", e.file, config.version, config.dataDirectory.toAbsolutePath())
         exitProcess(1)
     }
-    log.info(
+    log.debug(
         "Loaded {} items, {} block states, {} biomes, {} recipes and {} enchantments for {}",
         vanilla.items.size, vanilla.blocks.states.size, vanilla.biomes.size, vanilla.recipes.recipes.size, vanilla.enchantments.all.size, config.version,
     )
@@ -68,7 +77,7 @@ fun main() {
     val addresses = config.advertisedAddresses.map(InetAddress::getByName).ifEmpty { localAddresses() }
     val candidates = hostCandidates(config.port, addresses)
     if (candidates.isEmpty()) log.warn("No routable addresses found; clients will have nowhere to connect")
-    candidates.forEach { log.info("ICE candidate: {}", it) }
+    candidates.forEach { log.debug("ICE candidate: {}", it) }
 
     val certificate = DtlsCertificate.generate()
     val localPeer = LocalPeer(
@@ -103,8 +112,9 @@ fun main() {
     // Completes when the server should stop: when `/stop` runs, or the signaling server closes.
     val stopping = CompletableFuture<Unit>()
     // Built once, on start, so no player's login pays to encode the definitions.
+    val game = GameData.of(vanilla, storage.world, items, players = storage, maxPlayers = config.maxPlayers)
     val sessions = Sessions(
-        running, GameData.of(vanilla, storage.world, items, players = storage), LoginAuthenticator(auth.verifier, config.onlineMode), loop.next(),
+        running, game, LoginAuthenticator(auth.verifier, config.onlineMode), loop.next(),
         stop = { stopping.complete(Unit) }, saveWorld = storage::save,
     )
 
@@ -120,7 +130,7 @@ fun main() {
     }
 
     // What the server list, LAN discovery and joining show of the server, as it is now.
-    val status = { running.toJoinInfo(onlinePlayers = sessions.playerCount) }
+    val status = { running.toJoinInfo(onlinePlayers = sessions.playerCount, maxPlayers = game.maxPlayers) }
     val serverList = ServerListPing(serverId = Random.nextLong(), port = config.port, portV6 = config.portV6, status = status)
     // A client's offer, over HTTP or LAN discovery, answered as the peer it'll connect as.
     val answerOffer = { networkId: String, offer: SdpOffer ->
@@ -146,15 +156,23 @@ fun main() {
         ),
     )
 
-    Runtime.getRuntime().addShutdownHook(Thread({ closeWorld(); signaling.close(); rtc.close(); auth.close() }, "kore-shutdown"))
+    val console = Console(sessions::runConsole)
+    Runtime.getRuntime().addShutdownHook(Thread({ closeWorld(); signaling.close(); rtc.close(); auth.close(); console.close() }, "kore-shutdown"))
 
     try {
-        val tcp = signaling.bind()
-        rtc.bind()
-        log.info("Kore is listening for NetherNet on {} (TCP signaling, UDP gameplay)", tcp.localAddress())
+        val tcp = try {
+            signaling.bind().also { rtc.bind() }
+        } catch (e: BindException) {
+            log.error("Port {} is taken, most likely by another server: stop it, or give this one another server-port in {}", config.port, SERVER_PROPERTIES)
+            // The shutdown hook closes the world on the way out.
+            exitProcess(1)
+        }
+        log.debug("Listening for NetherNet on {} (TCP signaling, UDP gameplay)", tcp.localAddress())
+        if (candidates.isNotEmpty()) log.info("Players can join on port {}, at {}", config.port, addresses.joinToString { it.hostAddress })
         if (config.portV6 != config.port) bindServerListV6(loop, config.portV6, serverList)
         if (config.lanVisibility) bindLanDiscovery(loop, LanDiscovery(Random.nextLong(), config.onlineMode, status, answerOffer))
-        Console(sessions::runConsole).start()
+        console.start()
+        log.info("Started in {} seconds. Type help for the commands", String.format(Locale.ROOT, "%.1f", (System.nanoTime() - started) / 1e9))
         tcp.closeFuture().addListener { stopping.complete(Unit) }
         stopping.join()
     } finally {
@@ -162,11 +180,24 @@ fun main() {
         signaling.close()
         rtc.close()
         auth.close()
+        console.close()
     }
 }
 
 /** How long the last save waits for the sessions' thread before the server stops without it. */
 private const val SAVE_TIMEOUT_SECONDS = 30L
+
+/**
+ * Where the game data is: in [directory], if it's there, as in a checkout
+ * of Kore, and otherwise in the server's jar, which carries it. Without
+ * either, [directory], for the error to name.
+ */
+private fun gameDataIn(directory: Path): Path {
+    if (directory.exists()) return directory
+    val carried = VanillaData::class.java.getResource("/data/blocks.json")?.toURI() ?: return directory
+    if (carried.scheme == "jar") runCatching { FileSystems.newFileSystem(carried, emptyMap<String, Any>()) }
+    return Path.of(carried).parent
+}
 
 /**
  * Answers the server list's pings on [port], for players who reach the
@@ -205,7 +236,7 @@ private fun bindLanDiscovery(group: EventLoopGroup, discovery: LanDiscovery) {
             .bind(InetSocketAddress(LAN_DISCOVERY_PORT))
             .sync()
     }.onSuccess {
-        log.info("Games on the local network can find the server, on port {}", LAN_DISCOVERY_PORT)
+        log.debug("Games on the local network can find the server, on port {}", LAN_DISCOVERY_PORT)
     }.onFailure {
         log.warn("Games on the local network won't find the server: port {} isn't free ({})", LAN_DISCOVERY_PORT, it.message)
     }

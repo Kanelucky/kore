@@ -50,6 +50,13 @@ class PalettedStorage private constructor(
      */
     fun with(block: Int, value: Int): PalettedStorage = of(IntArray(SUB_CHUNK_VOLUME) { if (it == block) value else this[it] })
 
+    /** This storage with each block in [values] set to the value it's paired with, built afresh once for them all. */
+    fun with(values: Map<Int, Int>): PalettedStorage {
+        val all = IntArray(SUB_CHUNK_VOLUME) { this[it] }
+        for ((block, value) in values) all[block] = value
+        return of(all)
+    }
+
     companion object {
         /** The same value in every block. */
         fun filled(value: Int) = PalettedStorage(listOf(value), null)

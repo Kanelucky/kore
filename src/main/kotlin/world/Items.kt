@@ -23,7 +23,10 @@ private const val GRAVITY = 0.04
 private const val DRAG = 0.98
 private const val GROUND_FRICTION = 0.6
 
-/** Half an item's width, and its height: an item entity is a quarter of a block each way. */
+/** An item entity's size, a quarter of a block each way, as an experience orb's is. */
+const val ITEM_SIZE = 0.25f
+
+/** Half an item's width, and its height. */
 private const val HALF_WIDTH = 0.125
 private const val HEIGHT = 0.25
 
@@ -96,13 +99,13 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
     var moved = false
         private set
 
-    /** Whether a piston moved it this tick, which holds it up until the piston's done. */
+    /** Whether a piston or a command moved it this tick, which holds it up until the piston's done. */
     private var pushed = false
 
     /**
-     * Whether a piston moved it in the last tick, so those who see it need
-     * to see it there at once, keeping up with the piston, rather than
-     * have it glide there after.
+     * Whether a piston or a command moved it in the last tick, so those who
+     * see it need to see it there at once, keeping up with the piston,
+     * rather than have it glide there after.
      */
     var snapped = false
         private set
@@ -229,6 +232,13 @@ class ItemEntity(val id: Long, stack: ItemStack, position: Vec3, velocity: Vec3,
     internal fun pushBy(world: FlatWorld, axis: Axis, by: Double) {
         position = world.pushed(position, axis, by)
         velocity = velocity.stoppedAlong(axis)
+        pushed = true
+    }
+
+    /** Puts it [at] a point, stopped, as a command does. */
+    fun teleport(at: Vec3) {
+        position = at
+        velocity = Vec3(0f, 0f, 0f)
         pushed = true
     }
 

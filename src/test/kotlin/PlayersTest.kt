@@ -167,7 +167,7 @@ class PlayersTest {
 
     @Test
     fun `a full server turns away anyone else who joins, telling them so, until someone leaves`() {
-        config = config.copy(maxPlayers = 1)
+        game.maxPlayers = 1
         val steve = Client(1, "Steve", "1111")
 
         val alex = Client(2, "Alex", "2222")

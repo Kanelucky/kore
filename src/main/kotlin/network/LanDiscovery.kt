@@ -147,7 +147,7 @@ class LanDiscovery(
             log.warn("Rejected a LAN offer from network {}: {}", sender.toULong(), e.message)
             "CONNECTERROR $connection $CONNECTION_FAILED"
         }
-        log.info("Answered network {} over LAN discovery", sender.toULong())
+        log.debug("Answered network {} over LAN discovery", sender.toULong())
         val text = reply.toByteArray(UTF_8)
         val body = ByteBuffer.allocate(12 + text.size).order(ByteOrder.LITTLE_ENDIAN).putLong(sender).putInt(text.size).put(text).array()
         ctx.reply(datagram, encodeDiscovery(MESSAGE, networkId, body))

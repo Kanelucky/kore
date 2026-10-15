@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "org.koremc"
-version = "1.0-SNAPSHOT"
+version = "0.1.0"
 
 repositories {
     mavenCentral()
@@ -29,6 +29,9 @@ dependencies {
 
     // Logback for clean server console logging
     implementation("ch.qos.logback:logback-classic:1.4.14")
+
+    // JLine, so commands typed at the console keep their own line below what the server logs
+    implementation("org.jline:jline:3.30.17")
 }
 
 kotlin {
@@ -37,6 +40,17 @@ kotlin {
 
 application {
     mainClass = "org.koremc.MainKt"
+}
+
+// The jar is the whole server: Kore, what it runs on, and the game data from data/, to run with java -jar wherever it's put.
+tasks.jar {
+    // The console reaches the terminal through native code, which Java asks the jar to allow.
+    manifest { attributes("Main-Class" to application.mainClass, "Implementation-Version" to version, "Enable-Native-Access" to "ALL-UNNAMED") }
+    from(configurations.runtimeClasspath.map { files -> files.map { if (it.isDirectory) it else zipTree(it) } })
+    from("data") { into("data") }
+    // A signed library's signatures don't hold for a jar of everything.
+    exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
 tasks.test {

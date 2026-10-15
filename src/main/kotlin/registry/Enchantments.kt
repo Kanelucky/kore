@@ -80,6 +80,7 @@ class Enchantments(val all: List<Enchantment>, val book: ItemDefinition? = null,
 const val EFFICIENCY = 15
 const val UNBREAKING = 17
 const val MENDING = 26
+const val VANISHING = 28
 
 internal const val BOOK = "minecraft:book"
 internal const val ENCHANTED_BOOK = "minecraft:enchanted_book"

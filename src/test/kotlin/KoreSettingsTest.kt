@@ -1,6 +1,7 @@
 package org.koremc
 
 import org.koremc.storage.FlatPreset
+import org.koremc.world.CommandLimits
 import org.koremc.world.Features
 import kotlin.io.path.createTempDirectory
 import kotlin.io.path.readText
@@ -65,6 +66,16 @@ class KoreSettingsTest {
                     // Furnaces, brewing stands, hoppers, dispensers, droppers, crafters and beacons working.
                     // Off, they keep what's put in them, and do nothing with it.
                     "machines": true
+                },
+
+                // The most blocks a command changes at once: a number, true for the game's own limit, or false for none.
+                // Past the game's own, a big fill or clone can hold the server up a moment as it works, and players' games as they take it in.
+                "commandLimits": {
+                    // The most blocks /fill fills. The game's own limit is 32768.
+                    "fill": 32768,
+
+                    // The most blocks /clone copies. The game's own limit is 655360.
+                    "clone": 655360
                 }
             }
 
@@ -82,6 +93,27 @@ class KoreSettingsTest {
         file.writeText("""{ "flatWorldPreset": "the void" }""")
         val refused = assertFailsWith<IllegalStateException> { ServerConfig().withKoreSettings(file) }
         assertTrue("\"the void\"" in refused.message!! && "\"The Void\"" in refused.message!!, refused.message)
+    }
+
+    @Test
+    fun `a command limit is a number, true for the game's own, or false for none, which stays false in the file`() {
+        file.writeText("""{ "commandLimits": { "fill": 400000 } }""")
+        assertEquals(CommandLimits(fill = 400000, clone = 655360), ServerConfig().withKoreSettings(file).commandLimits)
+
+        file.writeText("""{ "commandLimits": { "fill": false, "clone": true } }""")
+        assertEquals(CommandLimits(fill = null, clone = 655360), ServerConfig().withKoreSettings(file).commandLimits)
+        assertTrue("\"fill\": false" in file.readText())
+
+        for (refused in listOf("0", "-5", "\"lots\"", "1.5")) {
+            file.writeText("""{ "commandLimits": { "fill": $refused } }""")
+            assertFailsWith<IllegalStateException>(refused) { ServerConfig().withKoreSettings(file) }
+        }
+    }
+
+    @Test
+    fun `with no command limit, the file says so with false`() {
+        assertEquals(CommandLimits(fill = null, clone = 655360), ServerConfig(commandLimits = CommandLimits(fill = null)).withKoreSettings(file).commandLimits)
+        assertTrue("\"fill\": false" in file.readText(), file.readText())
     }
 
     @Test

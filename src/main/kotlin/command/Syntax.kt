@@ -130,6 +130,53 @@ object MessageType : BasicType(0x44, "message") {
     override fun read(reader: CommandReader): String = reader.rest()
 }
 
+/** JSON, like the rawtext `/tellraw` takes: the rest of the line, which the command reads as JSON itself. */
+object JsonType : BasicType(0x4A, "json") {
+    override fun read(reader: CommandReader): String = reader.rest()
+}
+
+/**
+ * A block's states, in square brackets, like `["facing_direction"=2,
+ * "open_bit"=true]`: each name in quotes, then its value, which is text in
+ * quotes, a whole number, or true or false. Older commands set them apart
+ * with a colon, which still reads. Read as each name with its value.
+ */
+object BlockStatesType : BasicType(0x54, "block states") {
+    override fun read(reader: CommandReader): Map<String, Any> {
+        val start = reader.skipSpaces().cursor
+        if (reader.peek() != '[') reader.failAt(start)
+        reader.cursor++
+        val states = LinkedHashMap<String, Any>()
+        if (reader.peek() == ']') return states.also { reader.cursor++ }
+        while (true) {
+            val name = readPiece(reader, start)
+            if (reader.peek() !in listOf('=', ':')) reader.failAt(start)
+            reader.cursor++
+            val valueStart = reader.skipSpaces().cursor
+            val quoted = reader.peek() == '"'
+            val text = readPiece(reader, start)
+            states[name] = when {
+                quoted -> text
+                text == "true" || text == "false" -> text.toBooleanStrict()
+                else -> text.toIntOrNull() ?: reader.failAt(valueStart)
+            }
+            when (reader.peek()) {
+                ',' -> reader.cursor++
+                ']' -> return states.also { reader.cursor++ }
+                else -> reader.failAt(start)
+            }
+        }
+    }
+
+    /** A name or value: in quotes, or up to the next sign that ends one. */
+    private fun readPiece(reader: CommandReader, start: Int): String {
+        if (reader.peek() == '"') return reader.string()
+        val from = reader.cursor
+        while (reader.cursor < reader.line.length && reader.line[reader.cursor] !in "=:,] \t") reader.cursor++
+        return reader.line.substring(from, reader.cursor).ifEmpty { reader.failAt(start) }
+    }
+}
+
 /**
  * One of a fixed set of words, like a game mode, which the client offers
  * as it completes the command. Words are told apart without regard to case,

@@ -110,7 +110,7 @@ Players run commands from the chat, and the console runs them without the slash.
 op Steve
 ```
 
-Operators are kept in `permissions.json`, as the dedicated server does. Everyone may run `/list`, `/me` and `/tell`. Operators also get `/say`, `/kick`, `/op` and `/deop`, and with cheats on, `/gamemode`, `/give`, `/clear`, `/teleport`, `/xp`, `/enchant`, `/time`, `/weather`, `/toggledownfall`, `/daylock` and `/gamerule`. The console can also `/stop` the server. Target selectors like `@a[r=10]` and relative coordinates work as in the game.
+Operators are kept in `permissions.json`, as the dedicated server does. Everyone may run `/list`, `/me` and `/tell`. Operators also get `/say`, `/kick`, `/op`, `/deop` and `/setmaxplayers`, and with cheats on, the game's commands for players (`/gamemode`, `/give`, `/clear`, `/teleport`, `/kill`, `/effect`, `/xp`, `/enchant`, `/spawnpoint`, `/clearspawnpoint`), the world (`/time`, `/weather`, `/toggledownfall`, `/daylock`, `/difficulty`, `/gamerule`, `/setworldspawn`), building (`/setblock`, `/fill`, `/clone`, `/testforblock`, `/testforblocks`, `/testfor`) and showing players things (`/title`, `/titleraw`, `/tellraw`, `/playsound`, `/stopsound`, `/particle`). The console can also `/stop` the server. Target selectors like `@a[r=10]` and `@e[type=item]`, block states and relative coordinates work as in the game.
 
 ## ✨ What Works
 

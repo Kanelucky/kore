@@ -26,6 +26,7 @@ import org.koremc.protocol.BlockDefinitions
 import org.koremc.protocol.BlockEvent
 import org.koremc.protocol.ContainerClose
 import org.koremc.protocol.ContainerOpen
+import org.koremc.protocol.DeathInfo
 import org.koremc.protocol.FloatItem
 import org.koremc.protocol.GameMode
 import org.koremc.protocol.LevelEvent
@@ -39,6 +40,7 @@ import org.koremc.protocol.UpdateSoundData
 import org.koremc.protocol.RecordStarted
 import org.koremc.protocol.PlaySound
 import org.koremc.protocol.RemoveActor
+import org.koremc.protocol.Respawn
 import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.UpdateBlock
 import org.koremc.protocol.SetActorData
@@ -1205,6 +1207,35 @@ class SessionTest {
         )
         val reply = String(receivedPacket(), Charsets.ISO_8859_1)
         assertTrue("Furnace" in reply && "Items" in reply && "BurnTime" in reply, reply)
+    }
+
+    @Test
+    fun `a player killed falls over, drops what they had, is told how they died, and once they choose to, respawns at the spawn`() {
+        spawn()
+        session.give(ItemStack(hoe))
+        sent.clear()
+
+        assertTrue(session.kill())
+        val dying = receivedPackets()
+        assertTrue(dying.any { it.contentEquals(ActorEvent(7, ActorEvent.DEATH, 0).encode()) })
+        assertTrue(dying.any { it.contentEquals(DeathInfo("death.attack.generic", listOf(session.name)).encode()) })
+        assertEquals(listOf(ItemStack(hoe)), world.items.map { it.stack })
+        assertNull(session.heldStack)
+        assertTrue(session.dead)
+
+        clientSends(ByteBufUtil.getBytes(Unpooled.buffer().writeVarUInt(45).writeZero(12).writeByte(Respawn.CLIENT_READY_TO_SPAWN).writeVarULong(7)))
+        val eyes = Vec3(world.spawn.x + 0.5f, world.spawn.y + PLAYER_EYE_HEIGHT, world.spawn.z + 0.5f)
+        assertTrue(receivedPackets().any { it.contentEquals(Respawn(eyes, Respawn.READY_TO_SPAWN, 7).encode()) })
+        assertFalse(session.dead)
+        assertEquals(eyes, session.position)
+    }
+
+    @Test
+    fun `nothing kills a player in creative`() {
+        config = config.copy(gameMode = GameMode.CREATIVE)
+        spawn()
+        assertFalse(session.kill())
+        assertFalse(session.dead)
     }
 
     @Test

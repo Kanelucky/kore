@@ -98,6 +98,8 @@ class CommandCall(val source: CommandSource, private val values: Map<String, Any
 
     fun intOr(name: String, default: Int): Int = values[name] as Int? ?: default
 
+    fun doubleOr(name: String, default: Double): Double = values[name] as Double? ?: default
+
     fun string(name: String): String = values.getValue(name) as String
 
     fun stringOrNull(name: String): String? = values[name] as String?
@@ -107,6 +109,10 @@ class CommandCall(val source: CommandSource, private val values: Map<String, Any
     fun target(name: String): Target = values.getValue(name) as Target
 
     fun targetOrNull(name: String): Target? = values[name] as Target?
+
+    /** The block states the parameter called [name] gives, each by its name, or null if it's left out. */
+    @Suppress("UNCHECKED_CAST")
+    fun blockStatesOrNull(name: String): Map<String, Any>? = values[name] as Map<String, Any>?
 
     /** The point the coordinates called [name] give from where the command runs. */
     fun point(name: String): Vec3 = (values.getValue(name) as Coordinates).point(source.origin, source.yaw, source.pitch)

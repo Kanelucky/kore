@@ -60,6 +60,7 @@ import org.koremc.protocol.ContainerName
 import org.koremc.protocol.ContainerOpen
 import org.koremc.protocol.ContainerSetData
 import org.koremc.protocol.ContainerType
+import org.koremc.protocol.DeathInfo
 import org.koremc.protocol.Disconnect
 import org.koremc.protocol.EditedBlockData
 import org.koremc.protocol.EnchantOption
@@ -113,6 +114,7 @@ import org.koremc.protocol.RecordStarted
 import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.RequestChunkRadius
 import org.koremc.protocol.RequestNetworkSettings
+import org.koremc.protocol.Respawn
 import org.koremc.protocol.ResourcePackClientResponse
 import org.koremc.protocol.ResourcePackStack
 import org.koremc.protocol.ResourcePacksInfo
@@ -121,6 +123,7 @@ import org.koremc.protocol.SetActorData
 import org.koremc.protocol.SetActorMotion
 import org.koremc.protocol.SetLocalPlayerAsInitialised
 import org.koremc.protocol.SetPlayerGameType
+import org.koremc.protocol.SetSpawnPosition
 import org.koremc.protocol.SetTime
 import org.koremc.protocol.ShortItem
 import org.koremc.protocol.ShowArmour
@@ -158,6 +161,7 @@ import org.koremc.registry.EFFICIENCY
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.MENDING
+import org.koremc.registry.VANISHING
 import org.koremc.registry.damage
 import org.koremc.registry.levelOf
 import org.koremc.registry.mendedBy
@@ -188,6 +192,7 @@ import org.koremc.world.EMPTY_MAP
 import org.koremc.world.ENDER_EYE
 import org.koremc.world.Effect
 import org.koremc.world.EffectLevel
+import org.koremc.world.INFINITE_EFFECT
 import org.koremc.world.Effects
 import org.koremc.world.ExperienceOrb
 import org.koremc.world.FALLING_BLOCK_SIZE
@@ -330,6 +335,7 @@ import java.security.interfaces.ECPublicKey
 import java.util.UUID
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.floor
@@ -526,6 +532,21 @@ private const val JOIN_MESSAGE_DELAY = 10
 /** The messages, in each client's own language, that a player joined or left: yellow, with their name filled in. */
 private const val JOINED = "\u00a7e%multiplayer.player.joined"
 private const val LEFT = "\u00a7e%multiplayer.player.left"
+
+/** The message for a player who died, as `/kill` kills them. */
+private const val DIED = "death.attack.generic"
+
+/** How long a player lies dead before others stop seeing them, in ticks: long enough to fall over. */
+private const val DEAD_BODY_TICKS = 22
+
+/** How far below their eyes a player drops what they had as they die, and how far out it flies, at most, and how long before anyone can pick it up. */
+private const val DEATH_DROP_BELOW_EYES = 0.3f
+private const val DEATH_DROP_SPREAD = 0.5f
+private const val DEATH_PICKUP_DELAY = 40
+
+/** How much of their experience a player drops as they die: so much a level, up to a limit. */
+private const val DEATH_EXPERIENCE_PER_LEVEL = 7
+private const val MAX_DEATH_EXPERIENCE = 100
 
 /** What a player turned away from a full server is told, in their own language. */
 private const val SERVER_FULL = "disconnectionScreen.serverFull"
@@ -756,6 +777,17 @@ class Session(
     /** Where a teleport put the player's eyes, until the client says it has moved them there. */
     private var teleportedTo: Vec3? = null
 
+    /** Whether the player has died and not yet respawned. */
+    var dead = false
+        private set
+
+    /** Whether the player has lain dead long enough for others to stop seeing them. */
+    private var bodyGone = false
+
+    /** Where the player respawns, as `/spawnpoint` set it, or null for the world's spawn. */
+    var spawnPoint: BlockPos? = null
+        private set
+
     /**
      * Blocks the player sees otherwise while a piston moves them through
      * the player, and the block tick by which it's done, when they see them
@@ -795,6 +827,9 @@ class Session(
 
     /** Commands the player runs start from their feet. */
     override val origin get() = feet
+
+    /** The player's experience level, which selectors can pick them out by. */
+    override val level get() = experience.level
 
     /** Whether the player is one of the server's operators. */
     val isOperator get() = player?.let { commands.operators.contains(it.displayName, it.xuid) } == true
@@ -879,7 +914,8 @@ class Session(
                 else -> unexpected(packet)
             }
             State.SPAWNING, State.IN_GAME -> when (packet) {
-                is PlayerAuthInput -> {
+                // A dead player lies where they fell, doing nothing, until they respawn.
+                is PlayerAuthInput -> if (!dead) {
                     onMove(packet)
                     // The item use first: a block breaking this tick is checked against when the player
                     // started on it, before the step that ends the breaking clears that.
@@ -903,6 +939,7 @@ class Session(
                 is MapInfoRequest -> onMapInfoRequest(packet)
                 is MapCreateLockedCopy -> onLockedCopy(packet)
                 is BlockPick -> onBlockPick(packet)
+                is Respawn -> onRespawn(packet)
                 is Text -> onChat(packet)
                 is CommandRequest -> onCommand(packet)
                 is RequestChunkRadius -> onRequestChunkRadius(packet)
@@ -947,8 +984,8 @@ class Session(
             reject()
             return
         }
-        if (viewers().count { it !== this && it.player != null && it.state != State.CLOSED } >= config.maxPlayers) {
-            log.info("Turned away {}: the server is full, with {} players", player.displayName, config.maxPlayers)
+        if (viewers().count { it !== this && it.player != null && it.state != State.CLOSED } >= game.maxPlayers) {
+            log.info("Turned away {}: the server is full, with {} players", player.displayName, game.maxPlayers)
             send(Disconnect(Disconnect.Reason.SERVER_FULL, SERVER_FULL))
             state = State.CLOSED
             return
@@ -959,7 +996,7 @@ class Session(
         skin = skinFrom(request.clientData, config.version)
 
         val client = request.clientInfo
-        log.info(
+        log.debug(
             "{} ({}, {}) logged in on network {}{}: {} {}, OS {}, {}",
             player.displayName, player.xuid ?: "no XUID", player.uuid, networkId,
             if (player.verified) "" else " without verification (offline mode)",
@@ -1002,7 +1039,7 @@ class Session(
                 position = position,
                 seed = config.seed ?: 0,
                 worldGameMode = config.gameMode,
-                difficulty = config.difficulty,
+                difficulty = world.difficulty,
                 playerPermissions = permissionLevel,
                 worldSpawn = spawn,
                 worldName = config.level,
@@ -1017,7 +1054,7 @@ class Session(
             *game.definitions.toTypedArray(),
         )
         state = State.LOADING_WORLD
-        log.info("{} is loading the world, spawning at {}", player?.displayName, spawn)
+        log.debug("{} is loading the world, spawning at {}", player?.displayName, spawn)
     }
 
     /**
@@ -1797,6 +1834,25 @@ class Session(
         if (effects.visible() != visible) send(visibleEffects())
     }
 
+    /**
+     * Gives the player [given] for [ticks], or for ever, for
+     * [INFINITE_EFFECT], whatever they had of it, as `/effect` does, its
+     * [particles] showing or not. They see it start, or change.
+     */
+    fun setEffect(given: EffectLevel, ticks: Int, particles: Boolean) {
+        val had = effects[given.effect] != null
+        effects.set(given, ticks, particles)
+        send(MobEffect(entityId, if (had) MobEffect.MODIFY else MobEffect.ADD, given.effect, given.amplifier, ticks, particles = particles), visibleEffects())
+    }
+
+    /** Takes [effect] from the player, or every effect, for null. Returns whether they had any to take. */
+    fun takeEffects(effect: Int? = null): Boolean {
+        val taken = if (effect == null) effects.clear() else listOfNotNull(effect.takeIf(effects::remove))
+        if (taken.isEmpty()) return false
+        send(*taken.map { MobEffect(entityId, MobEffect.REMOVE, it) }.toTypedArray(), visibleEffects())
+        return true
+    }
+
     /** Wears the player's effects down a tick. They see those that wear off end. Run once a tick. */
     fun tickEffects() {
         val ended = effects.tick()
@@ -2209,7 +2265,7 @@ class Session(
     }
 
     /** Where the player's feet are, if they're in the game and standing on something. */
-    internal val standingAt: Vec3? get() = if (isInGame && onGround) Vec3(position.x, position.y - PLAYER_EYE_HEIGHT, position.z) else null
+    internal val standingAt: Vec3? get() = if (isInGame && onGround && !dead) Vec3(position.x, position.y - PLAYER_EYE_HEIGHT, position.z) else null
 
     /**
      * Breaks the block at [pos], as the client predicted, if the player
@@ -2300,7 +2356,7 @@ class Session(
      * the chunk sees the item fly to them. Run once a tick.
      */
     fun collectItems() {
-        if (state != State.IN_GAME || gameMode == GameMode.SPECTATOR) return
+        if (state != State.IN_GAME || gameMode == GameMode.SPECTATOR || dead) return
         for (item in world.items.toList()) {
             if (item.pickupDelay > 0 || !inPickupReach(item)) continue
             val (slots, left) = inventory.add(item.stack)
@@ -2318,7 +2374,7 @@ class Session(
      * everyone with the chunk. Run once a tick.
      */
     fun collectOrbs() {
-        if (state != State.IN_GAME || gameMode == GameMode.SPECTATOR) return
+        if (state != State.IN_GAME || gameMode == GameMode.SPECTATOR || dead) return
         if (orbPickupDelay > 0) {
             orbPickupDelay--
             return
@@ -2358,7 +2414,7 @@ class Session(
     }
 
     /** Where experience orbs fly to this player from, their feet, if they're in the game and pick orbs up. */
-    internal val orbTarget: Vec3? get() = if (isInGame && gameMode != GameMode.SPECTATOR) feet else null
+    internal val orbTarget: Vec3? get() = if (isInGame && gameMode != GameMode.SPECTATOR && !dead) feet else null
 
     /**
      * Shows the client the experience orbs in the chunks it has: those it
@@ -2541,11 +2597,13 @@ class Session(
         val armour: List<ItemStack?>,
         /** The effects whose particles show around them. */
         val effects: Long,
+        /** Whether Invisibility hides them. */
+        val invisible: Boolean,
     )
 
     private fun look() = Look(
         position, pitch, yaw, headYaw, onGround, sneaking, sprinting, heldSlot, inventory.items[heldSlot]?.stack,
-        inventory.offhand[0]?.stack, inventory.armour.contents().map { it?.stack }, effects.visible(),
+        inventory.offhand[0]?.stack, inventory.armour.contents().map { it?.stack }, effects.visible(), effects[Effect.INVISIBILITY] != null,
     )
 
     /**
@@ -2570,7 +2628,7 @@ class Session(
         }
         if (entries.isNotEmpty()) packets += PlayerList(entries)
 
-        val inView = players.filter { it !== this && it.position.toBlockPos().chunk in sentChunks }
+        val inView = players.filter { it !== this && !it.bodyGone && it.position.toBlockPos().chunk in sentChunks }
         val viewIds = inView.mapTo(HashSet()) { it.entityId }
         for (gone in shownPlayers.keys.filter { it !in viewIds }) {
             shownPlayers.remove(gone)
@@ -2589,7 +2647,7 @@ class Session(
             if (now.position != before.position || now.pitch != before.pitch || now.yaw != before.yaw || now.headYaw != before.headYaw || now.onGround != before.onGround) {
                 packets += MovePlayer(other.entityId, now.position, now.pitch, now.yaw, now.headYaw, now.onGround)
             }
-            if (now.sneaking != before.sneaking || now.sprinting != before.sprinting) {
+            if (now.sneaking != before.sneaking || now.sprinting != before.sprinting || now.invisible != before.invisible) {
                 packets += SetActorData(other.entityId, listOf(flagsItem(shownFlags(now)), FloatItem(ActorDataId.HEIGHT, heightOf(now))))
             }
             if (now.held != before.held || now.heldSlot != before.heldSlot) packets += ShowEquipment(other.entityId, now.held, now.heldSlot)
@@ -2629,9 +2687,9 @@ class Session(
         )
     }
 
-    /** The flags others see a player with as they [look]: their own, and that their name shows above them. */
+    /** The flags others see a player with as they [look]: their own, that their name shows above them, and whether they can't be seen. */
     private fun shownFlags(look: Look) = PLAYER_FLAGS + ActorFlag.SHOW_NAME + ActorFlag.ALWAYS_SHOW_NAME +
-        listOfNotNull(ActorFlag.SPRINTING.takeIf { look.sprinting }, ActorFlag.SNEAKING.takeIf { look.sneaking })
+        listOfNotNull(ActorFlag.SPRINTING.takeIf { look.sprinting }, ActorFlag.SNEAKING.takeIf { look.sneaking }, ActorFlag.INVISIBLE.takeIf { look.invisible })
 
     private fun heightOf(look: Look) = if (look.sneaking) PLAYER_SNEAKING_HEIGHT else PLAYER_HEIGHT
 
@@ -2814,8 +2872,9 @@ class Session(
         }
         state = State.IN_GAME
         send(*playerState(), commands.map.availableTo(permission), SetTime(world.time), *weatherNow())
+        spawnPoint?.let { send(SetSpawnPosition(SetSpawnPosition.PLAYER, it)) }
         showSavedItems()
-        log.info("{} spawned", player?.displayName)
+        log.info("{} joined the game", player?.displayName)
         announceJoin()
     }
 
@@ -2911,6 +2970,105 @@ class Session(
         log.debug("{} was teleported to {}", name, feet)
     }
 
+    /** Kills the player, as `/kill` does, unless they're in creative, where nothing can. Returns whether they died. */
+    fun kill(): Boolean {
+        if (gameMode == GameMode.CREATIVE) return false
+        if (!dead) die(DIED)
+        return true
+    }
+
+    /**
+     * The player dying, of [cause], the key of the message that says so.
+     * Everyone around sees them fall over, and a moment later they're gone,
+     * and everyone hears how they died, if the rules say to. They drop what
+     * they had, but what's cursed to vanish, which goes, and some of their
+     * experience, unless the rules keep it, and their effects end. Their
+     * screen says how they died, and waits for them to respawn.
+     */
+    private fun die(cause: String) {
+        dead = true
+        stopBreaking()
+        closeWindow(reply = true, byServer = true)
+        send(UpdateAttributes(entityId, listOf(Attribute("minecraft:health", 0f, 20f, 0f, default = 20f))))
+        viewers().filter { it.isInGame }.forEach { it.showDeath(entityId) }
+        if (world.rules.showDeathMessages) tellEveryone(Text(Text.TRANSLATION, "%$cause", parameters = listOf(name), needsTranslation = true))
+        if (!world.rules.keepInventory) dropEverything()
+        val ended = effects.clear()
+        if (ended.isNotEmpty()) send(*ended.map { MobEffect(entityId, MobEffect.REMOVE, it) }.toTypedArray(), visibleEffects())
+        send(DeathInfo(cause, listOf(name)), Respawn(spawnEyes(), Respawn.SEARCHING_FOR_SPAWN, entityId))
+        schedule(DEAD_BODY_TICKS) { if (dead) bodyGone = true }
+        log.info("{} died", name)
+    }
+
+    /** Shows the client the player [entityId] dying, if it's its own player or one it can see. */
+    private fun showDeath(entityId: Long) {
+        if (entityId == this.entityId || entityId in shownPlayers) send(ActorEvent(entityId, ActorEvent.DEATH, 0))
+    }
+
+    /**
+     * Drops everything the player had, as dying does, around where they
+     * were, but what's cursed to vanish, which goes; and some of their
+     * experience, the rest of which they lose.
+     */
+    private fun dropEverything() {
+        val from = Vec3(position.x, position.y - DEATH_DROP_BELOW_EYES, position.z)
+        val windows = listOf(INVENTORY_WINDOW to inventory.items, OFFHAND_WINDOW to inventory.offhand, ARMOUR_WINDOW to inventory.armour)
+        for ((_, container) in windows) {
+            for (slot in 0 until container.size) {
+                val there = container[slot] ?: continue
+                container[slot] = null
+                if (there.stack.levelOf(VANISHING) > 0) continue
+                val spread = Random.nextFloat() * DEATH_DROP_SPREAD
+                val angle = Random.nextDouble(2 * PI)
+                world.spawnItem(there.stack, from, Vec3((-sin(angle) * spread).toFloat(), 0.2f, (cos(angle) * spread).toFloat()), DEATH_PICKUP_DELAY)
+            }
+        }
+        send(*windows.map { (window, container) -> InventoryContent(window, List(container.size) { null }) }.toTypedArray())
+        val dropped = minOf(experience.level * DEATH_EXPERIENCE_PER_LEVEL, MAX_DEATH_EXPERIENCE)
+        experience = PlayerExperience()
+        sendExperience()
+        if (dropped > 0) world.dropExperience(feet, dropped)
+    }
+
+    /** Where the player respawns, at their eyes: the middle of their spawn point, or of the world's spawn. */
+    private fun spawnEyes(): Vec3 {
+        val spawn = spawnPoint ?: world.spawn
+        return Vec3(spawn.x + 0.5f, spawn.y + PLAYER_EYE_HEIGHT, spawn.z + 0.5f)
+    }
+
+    /** Sets where the player respawns, as `/spawnpoint` does, or, for null, back to the world's spawn. */
+    fun setSpawnPoint(pos: BlockPos?) {
+        spawnPoint = pos
+        tell(SetSpawnPosition(SetSpawnPosition.PLAYER, pos ?: world.spawn))
+    }
+
+    /** Sends the client [packets], if it's in the game, as commands show players titles and sounds, and where spawns are. */
+    fun tell(vararg packets: ServerPacket) {
+        if (isInGame) send(*packets)
+    }
+
+    /**
+     * Brings the player back to life at the world's spawn, once they've
+     * chosen to respawn and the client is ready: whole again, where everyone
+     * sees them again.
+     */
+    private fun onRespawn(packet: Respawn) {
+        if (!dead || packet.state != Respawn.CLIENT_READY_TO_SPAWN) return
+        dead = false
+        bodyGone = false
+        val eyes = spawnEyes()
+        send(Respawn(eyes, Respawn.READY_TO_SPAWN, entityId), *playerState())
+        teleport(Vec3(eyes.x, eyes.y - PLAYER_EYE_HEIGHT, eyes.z), yaw, pitch)
+        // Anyone still seeing them lie dead sees them afresh, alive.
+        viewers().forEach { it.forgetPlayer(entityId) }
+        log.info("{} respawned", name)
+    }
+
+    /** Takes the player [entityId] away from the client, if it shows them, to show them afresh as players sync. */
+    private fun forgetPlayer(entityId: Long) {
+        if (shownPlayers.remove(entityId) != null) send(RemoveActor(entityId))
+    }
+
     /** What the player holds, if anything. */
     val heldStack: ItemStack? get() = inventory.items[heldSlot]?.stack
 
@@ -2986,7 +3144,8 @@ class Session(
      * What's kept of the player between sessions, as the game saves a
      * player: where their eyes are and which way they look, their game
      * mode, their items, by slot, in their inventory, armour, offhand and
-     * ender chest, the hotbar slot they hold, and their experience.
+     * ender chest, the hotbar slot they hold, their experience, and where
+     * they respawn, if `/spawnpoint` set it.
      */
     private fun savedData(): NbtMap {
         fun listed(container: Container) = (0 until container.size).map { slot -> container[slot]?.let { ItemStacks.nbtOf(it.stack, slot) } ?: EMPTY_SLOT }
@@ -3002,6 +3161,7 @@ class Session(
             .putList("EnderChestInventory", NbtType.COMPOUND, listed(enderChest))
             .putInt("PlayerLevel", experience.level)
             .putFloat("PlayerLevelProgress", experience.progress)
+            .apply { spawnPoint?.let { putInt("SpawnX", it.x).putInt("SpawnY", it.y).putInt("SpawnZ", it.z) } }
             .build()
     }
 
@@ -3027,6 +3187,7 @@ class Session(
             }
         }
         experience = PlayerExperience(data.getInt("PlayerLevel", 0).coerceAtLeast(0), data.getFloat("PlayerLevelProgress", 0f).coerceIn(0f, 1f))
+        if (listOf("SpawnX", "SpawnY", "SpawnZ").all(data::containsKey)) spawnPoint = BlockPos(data.getInt("SpawnX"), data.getInt("SpawnY"), data.getInt("SpawnZ"))
         log.debug("{} picks up at {}, in {}", player?.displayName, position, gameMode)
     }
 
@@ -3043,9 +3204,11 @@ class Session(
         val identity = player ?: return
         if (state != State.IN_GAME) return
         closeWindow(reply = false)
+        // A player who leaves dead comes back as if they'd respawned.
+        if (dead) position = spawnEyes()
         game.players.save(identity.uuid, savedData())
         state = State.CLOSED
-        log.info("{} left", identity.displayName)
+        log.info("{} left the game", identity.displayName)
         tellEveryone(Text(Text.TRANSLATION, LEFT, parameters = listOf(identity.displayName), needsTranslation = true))
     }
 
@@ -3123,7 +3286,7 @@ class Session(
  * these players who has that block's chunk: one batch for each chunk, in
  * order.
  */
-private fun Collection<Session>.showAround(packets: List<Pair<BlockPos, ServerPacket>>) {
+internal fun Collection<Session>.showAround(packets: List<Pair<BlockPos, ServerPacket>>) {
     for ((chunk, inChunk) in packets.groupBy { (pos, _) -> pos.chunk }) {
         val batch = inChunk.map { (_, packet) -> packet }.toTypedArray()
         forEach { it.show(chunk, *batch) }
@@ -3145,7 +3308,7 @@ private fun Collection<Session>.showAround(packets: List<Pair<BlockPos, ServerPa
 internal fun Collection<Session>.tickBlocks(game: GameData, dropItems: Boolean) {
     val world = game.world
     val stood = world.stepOn(mapNotNull { it.standingAt } + world.items.filter { it.onGround }.map { it.position })
-    val pressed = world.pressPlates(filter { it.isInGame && it.gameMode != GameMode.SPECTATOR }.map { it.feet })
+    val pressed = world.pressPlates(filter { it.isInGame && it.gameMode != GameMode.SPECTATOR && !it.dead }.map { it.feet })
     val ticked = world.tickBlocks()
     val changes = Changes(ticked.broken, (stood + pressed.reshaped + ticked.reshaped).distinct(), pressed.sounds + ticked.sounds, ticked.data, events = ticked.events)
     val packets = if (changes.isEmpty) emptyList() else world.packetsFor(changes)
@@ -3179,7 +3342,7 @@ private fun GameData.dropFallen(at: Vec3, state: BlockState) {
  * container dropping it loose. The experience a furnace's work earned that
  * nobody took drops too.
  */
-private fun GameData.dropBroken(pos: BlockPos, broken: BrokenBlock, harvested: Boolean, tool: ItemStack? = null) {
+internal fun GameData.dropBroken(pos: BlockPos, broken: BrokenBlock, harvested: Boolean, tool: ItemStack? = null) {
     val keepsItems = broken.state.storage == Storage.SHULKER_BOX
     val dropping = harvested && world.rules.doTileDrops
     if (dropping || (keepsItems && broken.contents.any { it != null })) world.dropFromBlock(pos, drops.of(broken.state, broken.blockEntity, broken.contents, tool))
@@ -3221,7 +3384,7 @@ internal fun Collection<Session>.tickBeacons(game: GameData) {
     if (world.blockTicks % BEACON_INTERVAL != 0L) return
     val looked = world.lookAtBeacons(game.traits)
     showAround(looked.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) })
-    val players = filter { it.isInGame && it.gameMode != GameMode.SPECTATOR }
+    val players = filter { it.isInGame && it.gameMode != GameMode.SPECTATOR && !it.dead }
     for (beacon in looked.shining) {
         for (player in players.filter { beacon.reaches(it.feet) }) beacon.effects.forEach { player.giveEffect(it, beacon.ticks, ambient = true) }
     }
@@ -3318,7 +3481,7 @@ private fun FlatWorld.nowPlaying(pos: BlockPos): Pair<BlockPos, ServerPacket>? =
  * out, the notes note blocks played, and the songs jukeboxes started or
  * stopped.
  */
-private fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPacket>> =
+internal fun FlatWorld.packetsFor(changes: Changes): List<Pair<BlockPos, ServerPacket>> =
     changes.broken.flatMap { (pos, broken) ->
         withData(pos) + (pos to LevelEvent(LevelEvent.PARTICLES_DESTROY_BLOCK, pos.centre, broken.state.networkId))
     } + changes.reshaped.flatMap(::withData) + changes.sounds.map { it.pos to LevelSoundEvent(it.sound, it.pos.centre, it.data) } +

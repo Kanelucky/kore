@@ -9,6 +9,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import org.koremc.storage.FlatPreset
+import org.koremc.world.CommandLimits
 import org.koremc.world.Features
 import org.slf4j.LoggerFactory
 import java.nio.file.Path
@@ -38,6 +39,7 @@ private data class KoreSettings(
     val shutdownMessage: String,
     val flatWorldPreset: String,
     val features: Features,
+    val commandLimits: CommandLimits,
 )
 
 /** What each setting is for, written above it, and each of those within a setting, by the setting's name and its own. */
@@ -62,6 +64,10 @@ private val COMMENTS = mapOf(
     "features.growth" to "Random ticks, bone meal, trampling farmland, and snow and ice forming: whatever grows, spreads, dries, decays, melts, freezes or weathers.",
     "features.machines" to "Furnaces, brewing stands, hoppers, dispensers, droppers, crafters and beacons working.\n" +
         "Off, they keep what's put in them, and do nothing with it.",
+    "commandLimits" to "The most blocks a command changes at once: a number, true for the game's own limit, or false for none.\n" +
+        "Past the game's own, a big fill or clone can hold the server up a moment as it works, and players' games as they take it in.",
+    "commandLimits.fill" to "The most blocks /fill fills. The game's own limit is 32768.",
+    "commandLimits.clone" to "The most blocks /clone copies. The game's own limit is 655360.",
 )
 
 /**
@@ -73,11 +79,11 @@ private val COMMENTS = mapOf(
  */
 fun ServerConfig.withKoreSettings(file: Path): ServerConfig {
     val defaults = json.encodeToJsonElement(
-        KoreSettings.serializer(), KoreSettings(advertisedAddresses, operatorDomain, shutdownMessage, flatWorldPreset.title, features),
+        KoreSettings.serializer(), KoreSettings(advertisedAddresses, operatorDomain, shutdownMessage, flatWorldPreset.title, features, commandLimits),
     ).jsonObject
     if (!file.exists()) {
         file.writeText(written(defaults))
-        log.info("Made {} with Kore's own settings", file.toAbsolutePath())
+        log.info("Made {} with Kore's own settings", file)
         return this
     }
     val saved = try {
@@ -106,7 +112,7 @@ fun ServerConfig.withKoreSettings(file: Path): ServerConfig {
     )
     return copy(
         advertisedAddresses = settings.advertisedAddresses, operatorDomain = settings.operatorDomain, shutdownMessage = settings.shutdownMessage,
-        flatWorldPreset = preset, features = settings.features,
+        flatWorldPreset = preset, features = settings.features, commandLimits = settings.commandLimits,
     )
 }
 

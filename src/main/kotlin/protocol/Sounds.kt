@@ -5,6 +5,8 @@ import org.koremc.world.BlockPos
 import org.koremc.world.Vec3
 
 private const val PLAY_SOUND = 86
+private const val STOP_SOUND = 87
+private const val SPAWN_PARTICLE_EFFECT = 118
 private const val UPDATE_SOUND_DATA = 348
 private const val RECORD_STARTED = 352
 
@@ -56,5 +58,29 @@ data class UpdateSoundData(val handle: Long) : ServerPacket {
         out.writeLongLE(handle)
         // Each change names its kind first; the kind that stops a sound has nothing more, and stands for no change in the rest.
         repeat(SOUND_CHANGES) { out.writeVarUInt(STOP) }
+    }
+}
+
+/** Stops the sound the game calls [sound] wherever the player hears it, or every sound, for none. */
+data class StopSound(val sound: String?) : ServerPacket {
+    override val id get() = STOP_SOUND
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeString(sound.orEmpty())
+        out.writeBoolean(sound == null)
+        out.writeBoolean(false) // Whether the old music stops too
+    }
+}
+
+/** Shows the particle effect the game calls [name], like `minecraft:heart_particle`, at [position], in the overworld. */
+data class SpawnParticleEffect(val name: String, val position: Vec3) : ServerPacket {
+    override val id get() = SPAWN_PARTICLE_EFFECT
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeByte(0) // The overworld
+        out.writeVarLong(-1) // No entity it follows
+        out.writeVec3(position)
+        out.writeString(name)
+        out.writeBoolean(false) // Molang variables to set for it
     }
 }

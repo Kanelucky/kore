@@ -30,6 +30,7 @@ enum class ActorFlag(val bit: Int) {
     ON_FIRE(0),
     SNEAKING(1),
     SPRINTING(3),
+    INVISIBLE(5),
     SHOW_NAME(14),
     ALWAYS_SHOW_NAME(15),
     CAN_CLIMB(19),

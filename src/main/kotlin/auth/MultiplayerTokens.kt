@@ -137,7 +137,7 @@ class AuthService(private val gameVersion: String) : AutoCloseable {
         try {
             val keys = fetch()
             published = keys
-            log.info("Loaded {} signing keys from Minecraft's authorization service ({})", keys.keys.size, keys.issuer)
+            log.debug("Loaded {} signing keys from Minecraft's authorization service ({})", keys.keys.size, keys.issuer)
         } catch (e: Exception) {
             log.warn("Couldn't load Minecraft's authorization keys: {}", e.message)
         }

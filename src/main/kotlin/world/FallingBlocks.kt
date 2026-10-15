@@ -88,6 +88,9 @@ class FallingBlock(val id: Long, val state: BlockState, position: Vec3, internal
     var moved = false
         private set
 
+    /** Whether a command moved it since it last fell. */
+    private var teleported = false
+
     /** How long it's been falling, in ticks. */
     internal var age = 0
 
@@ -99,10 +102,18 @@ class FallingBlock(val id: Long, val state: BlockState, position: Vec3, internal
         val dy = world.clip(box, Axis.Y, vy)
         val start = position
         position = box.shifted(Axis.Y, dy).bottom()
-        moved = position != start
+        moved = teleported || position != start
+        teleported = false
         val landed = dy != vy
         velocity = Vec3(0f, if (landed) 0f else (vy * DRAG).toFloat(), 0f)
         return landed
+    }
+
+    /** Puts it [at] a point, stopped, to fall on from there, as a command does. */
+    fun teleport(at: Vec3) {
+        position = at
+        velocity = Vec3(0f, 0f, 0f)
+        teleported = true
     }
 }
 

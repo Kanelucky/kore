@@ -2,13 +2,70 @@ package org.koremc.protocol
 
 import io.netty.buffer.ByteBuf
 import org.koremc.registry.ItemStack
+import org.koremc.world.BlockPos
 import org.koremc.world.Vec3
 import java.util.UUID
 
 private const val ADD_PLAYER = 12
 private const val MOVE_PLAYER = 19
+private const val SET_SPAWN_POSITION = 43
 internal const val ANIMATE = 44
+internal const val RESPAWN = 45
 private const val PLAYER_LIST = 63
+private const val DEATH_INFO = 189
+
+/**
+ * A player who died respawning, in steps: the server saying it's looking
+ * for where they'll respawn, the client, once the player has chosen to,
+ * that it's ready, and the server where, [position], at their eyes.
+ */
+data class Respawn(val position: Vec3, val state: Int, val entityId: Long) : ServerPacket, ClientPacket {
+    override val id get() = RESPAWN
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVec3(position)
+        out.writeByte(state)
+        out.writeVarULong(entityId)
+    }
+
+    companion object {
+        const val SEARCHING_FOR_SPAWN = 0
+        const val READY_TO_SPAWN = 1
+        const val CLIENT_READY_TO_SPAWN = 2
+    }
+}
+
+/**
+ * Where the player respawns, their own spawn point, or the world's spawn,
+ * which compasses point to, as [type] says: at [position], in the
+ * overworld.
+ */
+data class SetSpawnPosition(val type: Int, val position: BlockPos) : ServerPacket {
+    override val id get() = SET_SPAWN_POSITION
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeVarInt(type)
+        out.writeBlockPos(position)
+        out.writeVarInt(0) // The overworld
+        out.writeBlockPos(position) // Where the spawn was set from, the same
+    }
+
+    companion object {
+        const val PLAYER = 0
+        const val WORLD = 1
+    }
+}
+
+/** What the death screen says killed the player: the key of the message in the client's language, [cause], with its [parameters]. */
+data class DeathInfo(val cause: String, val parameters: List<String>) : ServerPacket {
+    override val id get() = DEATH_INFO
+
+    override fun encodeBody(out: ByteBuf) {
+        out.writeString(cause)
+        out.writeVarUInt(parameters.size)
+        parameters.forEach(out::writeString)
+    }
+}
 
 /** A change to the player list: a player joining it, with how they look, or leaving it. */
 sealed interface PlayerListEntry {

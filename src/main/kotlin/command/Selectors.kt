@@ -1,19 +1,37 @@
 package org.koremc.command
 
 import org.koremc.protocol.GameMode
+import org.koremc.world.PLAYER_HEIGHT
+import org.koremc.world.PLAYER_WIDTH
 import org.koremc.world.Vec3
 import kotlin.random.Random
 
-/** What selectors know of a player to pick them out by. */
+/** The game's name for a player, as an entity. */
+const val PLAYER_TYPE = "minecraft:player"
+
+/** What selectors know of an entity, a player or anything else, to pick it out by. */
 interface Selectable {
+    /** A player's name, or for anything else, what it's called, like an item's name. */
     val name: String
 
-    /** Where the player's feet are, which distances are measured to. */
+    /** What it is, as the game names its kind, like `minecraft:item`. */
+    val type: String get() = PLAYER_TYPE
+
+    /** Where its feet are, the middle of its bottom, which distances are measured to. */
     val feet: Vec3
     val yaw: Float
     val pitch: Float
-    val gameMode: GameMode
+
+    /** How wide and how tall it is, which a selector's box takes in. */
+    val width: Float get() = PLAYER_WIDTH
+    val height: Float get() = PLAYER_HEIGHT
+
+    /** Its game mode and experience level, which only players have. */
+    val gameMode: GameMode?
+    val level: Int? get() = null
 }
+
+val Selectable.isPlayer get() = type == PLAYER_TYPE
 
 /** Who a command means: a player by name, or those a selector like `@a[r=10]` picks out. */
 sealed interface Target {
@@ -22,15 +40,23 @@ sealed interface Target {
     data class Selector(val kind: Char, val filters: Filters = Filters()) : Target
 
     /**
-     * The players among [players] this means, for a command run by [source]
-     * from [origin], facing the way [yaw] and [pitch] say. Only a player can
-     * be `@s`, so from anywhere else, it means nobody.
+     * The entities among [entities] this means, for a command run by
+     * [source] from [origin], facing the way [yaw] and [pitch] say. A name
+     * means a player, as do `@a` and `@p`, and `@r`, unless it names another
+     * type to pick from, while `@e` and `@n` mean anything. Only a player
+     * can be `@s`, so from anywhere else, it means nobody.
      */
-    fun <T : Selectable> select(players: List<T>, source: T?, origin: Vec3, yaw: Float, pitch: Float, random: Random = Random): List<T> = when (this) {
-        is Name -> players.filter { it.name.equals(name, ignoreCase = true) }
+    fun <T : Selectable> select(entities: List<T>, source: T?, origin: Vec3, yaw: Float, pitch: Float, random: Random = Random): List<T> = when (this) {
+        is Name -> entities.filter { it.isPlayer && it.name.equals(name, ignoreCase = true) }
         is Selector -> {
             val from = filters.origin(origin, yaw, pitch)
-            val matching = (if (kind == 's') listOfNotNull(source) else players).filter { filters.match(it, from) }
+            val among = when (kind) {
+                's' -> listOfNotNull(source)
+                'e', 'n' -> entities
+                'r' -> if (filters.types.any { !it.negated }) entities else entities.filter { it.isPlayer }
+                else -> entities.filter { it.isPlayer }
+            }
+            val matching = among.filter { filters.match(it, from) }
             val count = filters.count
             when (kind) {
                 'p', 'n' -> byDistance(matching, from, count ?: 1)
@@ -40,9 +66,9 @@ sealed interface Target {
         }
     }
 
-    private fun <T : Selectable> byDistance(players: List<T>, from: Vec3, count: Int): List<T> {
+    private fun <T : Selectable> byDistance(entities: List<T>, from: Vec3, count: Int): List<T> {
         // A negative count takes the farthest.
-        val sorted = players.sortedBy { distanceSquared(it.feet, from) }
+        val sorted = entities.sortedBy { distanceSquared(it.feet, from) }
         return if (count < 0) sorted.reversed().take(-count) else sorted.take(count)
     }
 }
@@ -56,8 +82,8 @@ data class Match<T>(val value: T, val negated: Boolean) {
  * The arguments that narrow down what a selector picks: where to measure
  * from (`x`, `y`, `z`), within what distance (`r`, `rm`) or box (`dx`,
  * `dy`, `dz`), how many (`c`), and by name, game mode, type, tag, family,
- * experience level and rotation. Players are the only entities a selector
- * picks, and they have no tags and no experience yet.
+ * experience level and rotation. Only players have a game mode, a level
+ * and a family, and nothing has tags yet.
  */
 data class Filters(
     val x: Coordinate? = null,
@@ -88,21 +114,24 @@ data class Filters(
         return Vec3(resolve(x, origin.x), resolve(y, origin.y), resolve(z, origin.z))
     }
 
-    fun match(player: Selectable, from: Vec3): Boolean {
-        val distance = distanceSquared(player.feet, from)
+    fun match(entity: Selectable, from: Vec3): Boolean {
+        val distance = distanceSquared(entity.feet, from)
         if (radius != null && distance > radius * radius) return false
         if (minRadius != null && distance < minRadius * minRadius) return false
-        if ((dx != null || dy != null || dz != null) && !inBox(player.feet, from)) return false
-        if (!names.all { match -> match.test { it.equals(player.name, ignoreCase = true) } }) return false
-        if (!gameModes.all { match -> match.test { it == player.gameMode } }) return false
-        if (!types.all { match -> match.test { it.removePrefix("minecraft:") == "player" } }) return false
-        // An empty tag means having no tags, which every player has.
+        if ((dx != null || dy != null || dz != null) && !inBox(entity, from)) return false
+        if (!names.all { match -> match.test { it.equals(entity.name, ignoreCase = true) } }) return false
+        if (gameModes.isNotEmpty() && entity.gameMode == null || !gameModes.all { match -> match.test { it == entity.gameMode } }) return false
+        if (!types.all { match -> match.test { it.removePrefix("minecraft:") == entity.type.removePrefix("minecraft:") } }) return false
+        // An empty tag means having no tags, which everything has.
         if (!tags.all { match -> match.test { it.isEmpty() } }) return false
-        if (!families.all { match -> match.test { it == "player" } }) return false
-        if (minLevel != null && minLevel > 0 || maxLevel != null && maxLevel < 0) return false
-        if (minPitch != null && player.pitch < minPitch || maxPitch != null && player.pitch > maxPitch) return false
+        if (!families.all { match -> match.test { it == "player" && entity.isPlayer } }) return false
+        if (minLevel != null || maxLevel != null) {
+            val level = entity.level ?: return false
+            if (minLevel != null && level < minLevel || maxLevel != null && level > maxLevel) return false
+        }
+        if (minPitch != null && entity.pitch < minPitch || maxPitch != null && entity.pitch > maxPitch) return false
         if (minYaw != null || maxYaw != null) {
-            val yaw = wrapDegrees(player.yaw.toDouble())
+            val yaw = wrapDegrees(entity.yaw.toDouble())
             val min = wrapDegrees(minYaw ?: -180.0)
             val max = wrapDegrees(maxYaw ?: 180.0)
             // A range across the back, where the angle wraps, takes either end.
@@ -112,24 +141,22 @@ data class Filters(
         return true
     }
 
-    /** Whether a player standing at [feet] reaches into the box from [from] across `dx`, `dy` and `dz` blocks, which takes in the block at its far corner. */
-    private fun inBox(feet: Vec3, from: Vec3): Boolean {
+    /** Whether [entity] reaches into the box from [from] across `dx`, `dy` and `dz` blocks, which takes in the block at its far corner. */
+    private fun inBox(entity: Selectable, from: Vec3): Boolean {
         fun span(start: Float, size: Double?): ClosedFloatingPointRange<Double> {
             val length = size ?: 0.0
             return if (length >= 0) start.toDouble()..start + length + 1 else start + length..start + 1.0
         }
-        val half = PLAYER_HALF_WIDTH
+        val feet = entity.feet
+        val half = entity.width / 2
         val xs = span(from.x, dx)
         val ys = span(from.y, dy)
         val zs = span(from.z, dz)
         return feet.x + half >= xs.start && feet.x - half <= xs.endInclusive &&
-            feet.y + PLAYER_HEIGHT >= ys.start && feet.y <= ys.endInclusive &&
+            feet.y + entity.height >= ys.start && feet.y <= ys.endInclusive &&
             feet.z + half >= zs.start && feet.z - half <= zs.endInclusive
     }
 }
-
-private const val PLAYER_HALF_WIDTH = 0.3
-private const val PLAYER_HEIGHT = 1.8
 
 private fun distanceSquared(a: Vec3, b: Vec3): Double {
     val dx = (a.x - b.x).toDouble()

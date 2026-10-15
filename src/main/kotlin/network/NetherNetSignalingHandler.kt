@@ -60,7 +60,7 @@ class NetherNetSignalingHandler(
         }
 
         val path = QueryStringDecoder(request.uri()).path()
-        log.info("{} {} from {} ({} bytes)", request.method(), path, remote, request.content().readableBytes())
+        log.debug("{} {} from {} ({} bytes)", request.method(), path, remote, request.content().readableBytes())
         log.debug("Headers from {}: {}", remote, request.headers())
 
         ctx.reply(request, route(request, path))
@@ -91,7 +91,7 @@ class NetherNetSignalingHandler(
             return textResponse(HttpResponseStatus.BAD_REQUEST)
         }
 
-        log.info(
+        log.debug(
             "Answered network {} ({} candidates, {} identity)",
             networkId, offer.candidates.size, if (offer.identity != null) "with" else "no",
         )
