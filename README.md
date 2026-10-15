@@ -12,7 +12,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20us-5865F2?logo=discord&logoColor=white)](https://discord.gg/hNG9t24NNK)
 
-[Philosophy](#-philosophy) · [Getting Started](#-getting-started) · [What Works](#-what-works) · [Milestones](#-milestones) · [Contributing](CONTRIBUTING.md)
+[Philosophy](#-philosophy) · [Getting Started](#-getting-started) · [Milestones](#-milestones) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -76,19 +76,13 @@ git clone https://github.com/KoreMC/data.git data
 ./gradlew run
 ```
 
-The second clone fetches the game data Kore reads on start, from `data/`. Kore won't start without it, and it must be for the same client release as Kore (1.26.50, protocol `2193`).
+The second clone fetches the game data Kore needs, for the same client release (1.26.50, protocol `2193`). `./gradlew jar` builds a single jar with the data inside, to run anywhere with `java -jar`.
 
-Kore uses port `19132` for both signaling (TCP) and gameplay (UDP), so open both in your firewall. Check that signaling is reachable:
-
-```bash
-curl -i http://localhost:19132/v1/join
-```
-
-The console logs at `INFO`. Each run also writes everything at `DEBUG` to its own file in `logs/`. Kore never deletes old logs, so clear them out now and then.
+Kore uses port `19132` for signaling (TCP) and gameplay (UDP), so open both in your firewall.
 
 ### ⚙️ Configuration
 
-Settings live in `server.properties`, with the dedicated server's names, and Kore's own in `kore.json`. Kore writes both on first run. Behind NAT, set `advertisedAddresses` in `kore.json` to your public IP so clients get a candidate they can reach. `flatWorldPreset` picks the preset a new flat world is made from, by the game's name for it, like `Classic Flat` or `The Void`, and `features` switch whole game systems off, for a server without them: `redstone`, `liquids`, `fallingBlocks`, `growth` and `machines`. When moving to a new client release, update `protocol` and `version` in [`ServerConfig.kt`](src/main/kotlin/ServerConfig.kt) and the data together.
+Settings live in `server.properties`, as the dedicated server names them, and Kore's own in `kore.json`. Both are written on first run, each setting explained. Behind NAT, set `advertisedAddresses` in `kore.json` to your public IP.
 
 ### 🔑 The Operator Key
 
@@ -100,36 +94,15 @@ On first run, Kore creates `operator.key`, which signs every SDP answer. Players
 
 ### 🛡️ Authentication
 
-Kore runs in **online mode** by default: every player proves who they are through Xbox Live, and their login is tied to the key in their connection's offer. The server needs outbound HTTPS to fetch Minecraft's signing keys. `online-mode=false` turns this off for local testing; never run it where the public can reach it.
+Players sign in through Xbox Live. `online-mode=false` turns this off for local testing; never run it where the public can reach it.
 
-### ⌨️ Commands and Operators
+### ⌨️ Operators
 
-Players run commands from the chat, and the console runs them without the slash. No one is an operator to start with, so once you've joined, type this in the console:
+No one is an operator to start with. Once you've joined, type this in the console:
 
 ```text
 op Steve
 ```
-
-Operators are kept in `permissions.json`, as the dedicated server does. Everyone may run `/list`, `/me` and `/tell`. Operators also get `/say`, `/kick`, `/op`, `/deop` and `/setmaxplayers`, and with cheats on, the game's commands for players (`/gamemode`, `/give`, `/clear`, `/teleport`, `/kill`, `/effect`, `/xp`, `/enchant`, `/spawnpoint`, `/clearspawnpoint`), the world (`/time`, `/weather`, `/toggledownfall`, `/daylock`, `/difficulty`, `/gamerule`, `/setworldspawn`), building (`/setblock`, `/fill`, `/clone`, `/testforblock`, `/testforblocks`, `/testfor`) and showing players things (`/title`, `/titleraw`, `/tellraw`, `/playsound`, `/stopsound`, `/particle`). The console can also `/stop` the server. Target selectors like `@a[r=10]` and `@e[type=item]`, block states and relative coordinates work as in the game.
-
-## ✨ What Works
-
-- **World:** a flat world from any of the game's nine flat presets, streamed to players as they move, and saved every minute and on stop in the game's own format, in `worlds/`, so it opens in the game too. Players keep where they were and what they had.
-- **Building and mining:** placing blocks with the game's rules for slabs, stairs, doors, rails, fences, walls, scaffolding and the like; sand, gravel, concrete powder, anvils, snow and hanging dripstone falling; survival mining at the right pace, tool wear, and drops, with Silk Touch, Fortune and shears.
-- **Using items on blocks:** hoes, shovels and axes, waxing and scraping copper, carving pumpkins, writing on, dyeing and waxing signs, item frames, flower pots, and eyes of ender opening end portals.
-- **Note blocks, jukeboxes, composters and cauldrons:** tuning and playing notes by the block below, discs and their songs, put in by hand or hopper, composting with hoppers, and cauldrons of water, lava, powder snow, potions and dye.
-- **Items and inventory:** dropped items, picking up and merging, the creative inventory, and server-authoritative inventories.
-- **Containers and workstations:** chests, barrels, shulker boxes and ender chests; crafting; furnaces and brewing stands; stonecutters, smithing tables, anvils, grindstones, looms, enchanting tables and cartography tables; hoppers, dispensers, droppers and crafters; lecterns, and writing and signing books; beacons and their powers; experience.
-- **Maps:** drawn as players explore, locator maps, and zooming out, copying and locking them.
-- **Redstone:** levers, buttons, pressure plates, redstone blocks, torches, dust, repeaters, comparators and observers, powering doors, trapdoors, fence gates, lamps, note blocks, hoppers, dispensers and droppers.
-- **Water and lava:** flowing as in the game, buckets, water inside blocks like fences and stairs, lava and water making obsidian, cobblestone and stone, and concrete powder hardening.
-- **Time and weather:** day and night, rain and thunderstorms in their own time, lightning drawn to lightning rods, rain and snow filling cauldrons, snow settling and water freezing in the cold, daylight detectors, and the game rules, saved with the world.
-- **Fire:** flint and steel and fire charges, fire spreading, burning and burning out, started by lightning and lava, and nether portals opening in obsidian frames.
-- **Growth:** light, crops, stems, sugar cane, cactus, bamboo, berries and vines growing and spreading, saplings growing into every kind of tree, bee nests among them, huge mushrooms and fungi, grass spreading, farmland drying, leaves decaying, ice and snow melting, copper weathering, amethyst and dripstone, bone meal, from dispensers too, on moss, lichen, seagrass, sea pickles and the seabed, and picking berries.
-- **Pistons:** pushing and pulling blocks, slime and honey, flying machines, chests and furnaces with their contents, and the players, items and orbs in the way or on top.
-- **Finding the server:** its name and players in the server list, and listed with LAN games on the local network.
-- **Players:** seeing each other, skins, chat, and joining and leaving messages in each player's language.
-- **Health:** falls, the void, lava, fire, drowning, suffocation, magma, cactus, berry bushes, lightning, poison and wither hurt players, armour, enchantments and effects protect them, they heal over time, and they die and respawn.
 
 ## 🗂️ Project Layout
 
@@ -176,6 +149,10 @@ Packages leave out the common root, so `org.koremc.network` lives in `src/main/k
 - [x] Redstone, pistons, pressure plates and lamps
 - [x] Players seeing each other, chat and commands
 - [x] Beacons, maps and cartography tables
+- [x] Water, lava and fire
+- [x] Growth, time and weather
+- [x] Health, damage and respawning
+- [ ] Hunger and eating
 - [ ] Mobs
 - [ ] The rest of the game's commands
 
