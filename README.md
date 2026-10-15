@@ -129,6 +129,7 @@ Operators are kept in `permissions.json`, as the dedicated server does. Everyone
 - **Pistons:** pushing and pulling blocks, slime and honey, flying machines, chests and furnaces with their contents, and the players, items and orbs in the way or on top.
 - **Finding the server:** its name and players in the server list, and listed with LAN games on the local network.
 - **Players:** seeing each other, skins, chat, and joining and leaving messages in each player's language.
+- **Health:** falls, the void, lava, fire, drowning, suffocation, magma, cactus, berry bushes, lightning, poison and wither hurt players, armour, enchantments and effects protect them, they heal over time, and they die and respawn.
 
 ## 🗂️ Project Layout
 

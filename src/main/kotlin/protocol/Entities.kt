@@ -199,6 +199,9 @@ data class ActorEvent(val entityId: Long, val event: Int, val data: Int) : Serve
     }
 
     companion object {
+        /** An entity hurt: it flinches, tinted red, and a player's view shakes. */
+        const val HURT = 2
+
         /** An entity dying: it falls over, tinted red. */
         const val DEATH = 3
 

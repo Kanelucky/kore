@@ -40,7 +40,7 @@ private val BURNS_FOREVER = setOf("minecraft:netherrack", "minecraft:magma")
 /** Blocks soul fire burns on, and only on. */
 private val SOUL_GROUND = setOf("minecraft:soul_sand", "minecraft:soul_soil")
 
-private const val CAMPFIRE_OUT = "extinguished"
+internal const val CAMPFIRE_OUT = "extinguished"
 private const val LIT = "lit"
 
 val BlockState.isFire get() = name == FIRE || name == SOUL_FIRE

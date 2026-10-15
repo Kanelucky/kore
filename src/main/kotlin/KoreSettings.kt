@@ -40,6 +40,7 @@ private data class KoreSettings(
     val flatWorldPreset: String,
     val features: Features,
     val commandLimits: CommandLimits,
+    val logs: LogSettings,
 )
 
 /** What each setting is for, written above it, and each of those within a setting, by the setting's name and its own. */
@@ -64,10 +65,17 @@ private val COMMENTS = mapOf(
     "features.growth" to "Random ticks, bone meal, trampling farmland, and snow and ice forming: whatever grows, spreads, dries, decays, melts, freezes or weathers.",
     "features.machines" to "Furnaces, brewing stands, hoppers, dispensers, droppers, crafters and beacons working.\n" +
         "Off, they keep what's put in them, and do nothing with it.",
+    "features.damage" to "Players being hurt: by falling, the void, lava, fire and burning, drowning, suffocating, magma, campfires,\n" +
+        "cactus and berry bushes, poison and wither, and healing again over time. Off, nothing hurts them but /kill.",
     "commandLimits" to "The most blocks a command changes at once: a number, true for the game's own limit, or false for none.\n" +
         "Past the game's own, a big fill or clone can hold the server up a moment as it works, and players' games as they take it in.",
     "commandLimits.fill" to "The most blocks /fill fills. The game's own limit is 32768.",
     "commandLimits.clone" to "The most blocks /clone copies. The game's own limit is 655360.",
+    "logs" to "What the console and log file keep. Off, what players say, or the commands they run, aren't logged at all,\n" +
+        "to keep the logs short. How players die is logged as the showdeathmessages game rule says.",
+    "logs.debug" to "Detail for working out what went wrong, DBG, in the console too, but for every packet. The log file always has it.",
+    "logs.chat" to "What players say in the chat, CHT.",
+    "logs.commands" to "The commands players run, CMD.",
 )
 
 /**
@@ -79,7 +87,7 @@ private val COMMENTS = mapOf(
  */
 fun ServerConfig.withKoreSettings(file: Path): ServerConfig {
     val defaults = json.encodeToJsonElement(
-        KoreSettings.serializer(), KoreSettings(advertisedAddresses, operatorDomain, shutdownMessage, flatWorldPreset.title, features, commandLimits),
+        KoreSettings.serializer(), KoreSettings(advertisedAddresses, operatorDomain, shutdownMessage, flatWorldPreset.title, features, commandLimits, logs),
     ).jsonObject
     if (!file.exists()) {
         file.writeText(written(defaults))
@@ -112,7 +120,7 @@ fun ServerConfig.withKoreSettings(file: Path): ServerConfig {
     )
     return copy(
         advertisedAddresses = settings.advertisedAddresses, operatorDomain = settings.operatorDomain, shutdownMessage = settings.shutdownMessage,
-        flatWorldPreset = preset, features = settings.features, commandLimits = settings.commandLimits,
+        flatWorldPreset = preset, features = settings.features, commandLimits = settings.commandLimits, logs = settings.logs,
     )
 }
 

@@ -65,7 +65,11 @@ class KoreSettingsTest {
 
                     // Furnaces, brewing stands, hoppers, dispensers, droppers, crafters and beacons working.
                     // Off, they keep what's put in them, and do nothing with it.
-                    "machines": true
+                    "machines": true,
+
+                    // Players being hurt: by falling, the void, lava, fire and burning, drowning, suffocating, magma, campfires,
+                    // cactus and berry bushes, poison and wither, and healing again over time. Off, nothing hurts them but /kill.
+                    "damage": true
                 },
 
                 // The most blocks a command changes at once: a number, true for the game's own limit, or false for none.
@@ -76,6 +80,19 @@ class KoreSettingsTest {
 
                     // The most blocks /clone copies. The game's own limit is 655360.
                     "clone": 655360
+                },
+
+                // What the console and log file keep. Off, what players say, or the commands they run, aren't logged at all,
+                // to keep the logs short. How players die is logged as the showdeathmessages game rule says.
+                "logs": {
+                    // Detail for working out what went wrong, DBG, in the console too, but for every packet. The log file always has it.
+                    "debug": false,
+
+                    // What players say in the chat, CHT.
+                    "chat": true,
+
+                    // The commands players run, CMD.
+                    "commands": true
                 }
             }
 
@@ -114,6 +131,13 @@ class KoreSettingsTest {
     fun `with no command limit, the file says so with false`() {
         assertEquals(CommandLimits(fill = null, clone = 655360), ServerConfig(commandLimits = CommandLimits(fill = null)).withKoreSettings(file).commandLimits)
         assertTrue("\"fill\": false" in file.readText(), file.readText())
+    }
+
+    @Test
+    fun `the logs can show detail in the console, and leave out chat and commands`() {
+        file.writeText("""{ "logs": { "debug": true, "chat": false } }""")
+        assertEquals(LogSettings(debug = true, chat = false, commands = true), ServerConfig().withKoreSettings(file).logs)
+        assertTrue("\"commands\": true" in file.readText())
     }
 
     @Test

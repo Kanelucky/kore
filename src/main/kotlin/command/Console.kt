@@ -1,5 +1,6 @@
 package org.koremc.command
 
+import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
 import ch.qos.logback.core.encoder.Encoder
@@ -9,6 +10,7 @@ import org.jline.reader.LineReaderBuilder
 import org.jline.reader.UserInterruptException
 import org.jline.terminal.Terminal
 import org.jline.terminal.TerminalBuilder
+import org.koremc.PACKET_LOG
 import org.koremc.protocol.CommandMessage
 import org.koremc.protocol.CommandPermission
 import org.koremc.world.Vec3
@@ -82,13 +84,17 @@ class Console(private val run: (String) -> Unit) {
  * Writes the log's lines for the console above the line being typed at it,
  * which goes back below them as it was, so that what the server logs never
  * lands in the middle of a command. Without a terminal to keep them apart,
- * or before the console reads, it writes them out as they come.
+ * or before the console reads, it writes them out as they come. Detail it
+ * leaves to the log file, unless kore.json asks for it, and every packet
+ * it leaves there either way.
  */
 class ConsoleLogAppender : AppenderBase<ILoggingEvent>() {
     /** Turns each event into its line, as logback.xml has it. */
     var encoder: Encoder<ILoggingEvent>? = null
 
     override fun append(event: ILoggingEvent) {
+        // Detail, only when kore.json asks for it, and never every packet, which would bury the rest.
+        if (!event.level.isGreaterOrEqual(Level.INFO) && (!showDebug || event.loggerName == PACKET_LOG)) return
         val text = String(encoder?.encode(event) ?: return, Charsets.UTF_8)
         val reading = reader?.takeUnless { it.terminal.type.startsWith(Terminal.TYPE_DUMB) }
         if (reading == null || runCatching { reading.printAbove(text.trimEnd('\r', '\n')) }.isFailure) {
@@ -101,6 +107,10 @@ class ConsoleLogAppender : AppenderBase<ILoggingEvent>() {
         /** What reads the console, while it does. */
         @Volatile
         var reader: LineReader? = null
+
+        /** Whether the console shows detail for working out what went wrong, as kore.json says. */
+        @Volatile
+        var showDebug = false
     }
 }
 
@@ -313,6 +323,21 @@ private val ENGLISH = mapOf(
     "effect.weaving" to "Weaving",
     "effect.oozing" to "Oozing",
     "effect.infested" to "Infested",
+    "death.attack.generic" to "%1\$s died",
+    "death.attack.fall" to "%1\$s hit the ground too hard",
+    "death.attack.outOfWorld" to "%1\$s fell out of the world",
+    "death.attack.lava" to "%1\$s tried to swim in lava",
+    "death.attack.inFire" to "%1\$s went up in flames",
+    "death.attack.onFire" to "%1\$s burned to death",
+    "death.attack.magma" to "%1\$s discovered the floor was lava",
+    "death.attack.cactus" to "%1\$s was pricked to death",
+    "death.attack.sweetBerry" to "%1\$s was poked to death by a sweet berry bush",
+    "death.attack.inWall" to "%1\$s suffocated in a wall",
+    "death.attack.drown" to "%1\$s drowned",
+    "death.attack.lightningBolt" to "%1\$s was struck by lightning",
+    "death.attack.magic" to "%1\$s was killed by magic",
+    "death.attack.wither" to "%1\$s withered away",
+    "death.attack.starve" to "%1\$s starved to death",
 )
 
 /** A parameter in a message, numbered or in turn, as a string or a number. */
@@ -328,7 +353,8 @@ private val COLOURED_KEY = Regex("""((?:§.)*)%?(.*)""")
  */
 fun english(message: CommandMessage): String = english(message.message, message.parameters)
 
-private fun english(message: String, parameters: List<String>): String {
+/** [message], a key of the game's or text, in English, with [parameters] filled in, as [english] does a command's. */
+fun english(message: String, parameters: List<String>): String {
     val (colours, key) = COLOURED_KEY.matchEntire(message)!!.destructured
     val template = ENGLISH[key] ?: return message
     var next = 0

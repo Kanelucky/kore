@@ -338,7 +338,7 @@ private fun FlatWorld.liquidAround(box: Box, liquid: Liquid, vx: Double, vz: Dou
                 val pos = BlockPos(x, y, z)
                 val here = liquidHere(pos)?.takeIf { it.liquid == liquid } ?: continue
                 // Liquid with more of it above fills its block.
-                val top = y + if (liquidHere(pos.side(Face.UP))?.liquid == liquid) 1.0 else heightOf(here.depth)
+                val top = liquidTop(pos, here)
                 if (top < inner.min[1]) continue
                 depth = maxOf(depth, top - inner.min[1])
                 val way = flowAt(pos, liquid, here.depth)
@@ -355,9 +355,6 @@ private fun FlatWorld.liquidAround(box: Box, liquid: Liquid, vx: Double, vz: Dou
     return InLiquid(depth, push)
 }
 
-/** How high in its block liquid [depth] steps from its source fills it: still and falling liquid eight ninths, and each step less a ninth less. */
-private fun heightOf(depth: Int) = (if (depth >= FALLING_DEPTH) 8 else 8 - depth) / 9.0
-
 /**
  * The way [liquid] at [pos], [depth] steps from its source, flows, as the
  * game works it out: from it toward where beside it is lower, or empty,
@@ -365,18 +362,18 @@ private fun heightOf(depth: Int) = (if (depth >= FALLING_DEPTH) 8 else 8 - depth
  * Unit length, or none for still liquid.
  */
 private fun FlatWorld.flowAt(pos: BlockPos, liquid: Liquid, depth: Int): DoubleArray {
-    val own = heightOf(depth)
+    val own = liquidHeight(depth)
     var x = 0.0
     var z = 0.0
     for (side in AROUND) {
         val next = pos.side(side)
         val there = liquidHere(next)
         if (there != null && there.liquid != liquid) continue
-        val beside = there?.let { heightOf(it.depth) } ?: 0.0
+        val beside = there?.let { liquidHeight(it.depth) } ?: 0.0
         val drop = when {
             beside > 0 -> own - beside
             stateAt(next)?.solidHeights() != null -> 0.0
-            else -> liquidHere(next.side(Face.DOWN))?.takeIf { it.liquid == liquid }?.let { own - (heightOf(it.depth) - 8 / 9.0) } ?: 0.0
+            else -> liquidHere(next.side(Face.DOWN))?.takeIf { it.liquid == liquid }?.let { own - (liquidHeight(it.depth) - 8 / 9.0) } ?: 0.0
         }
         x += side.dx * drop
         z += side.dz * drop

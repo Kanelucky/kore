@@ -292,6 +292,17 @@ class PlayersTest {
     }
 
     @Test
+    fun `as the server stops, nobody hears that the others left, as everyone's leaving`() {
+        val steve = Client(1, "Steve", "1111")
+        val alex = Client(2, "Alex", "2222")
+        steve.received()
+
+        alex.session.disconnect(Disconnect.Reason.SHUTDOWN, "Server closed")
+        assertTrue(steve.received().isEmpty())
+        assertFalse(alex.session.isInGame)
+    }
+
+    @Test
     fun `chat goes to everyone in the game, under the name the player logged in with`() {
         val steve = Client(1, "Steve", "1111")
         val alex = Client(2, "Alex", "2222")

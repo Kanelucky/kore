@@ -92,6 +92,10 @@ enum class InputFlag(val id: Int) {
     SNEAKING(8),
     START_SPRINTING(25),
     STOP_SPRINTING(26),
+    START_SWIMMING(29),
+    STOP_SWIMMING(30),
+    START_GLIDING(32),
+    STOP_GLIDING(33),
 
     /** Set on the first tick after the client moved its player where a teleport put them. */
     HANDLED_TELEPORT(37),

@@ -23,8 +23,8 @@ val GAME_RULE_DEFAULTS: Map<String, Any> = linkedMapOf(
  * world keeps its settings either way.
  */
 val GAME_RULES_IN_USE = setOf(
-    "doDaylightCycle", "doFireTick", "doTileDrops", "doWeatherCycle", "keepInventory", "randomTickSpeed", "showCoordinates", "showDaysPlayed",
-    "showDeathMessages",
+    "doDaylightCycle", "doFireTick", "doTileDrops", "doWeatherCycle", "drowningDamage", "fallDamage", "fireDamage", "keepInventory",
+    "naturalRegeneration", "randomTickSpeed", "showCoordinates", "showDaysPlayed", "showDeathMessages",
 )
 
 /**
@@ -77,6 +77,14 @@ class GameRules(saved: Map<String, Any> = emptyMap()) {
 
     /** Whether everyone hears how a player died. */
     val showDeathMessages get() = values["showdeathmessages"] == true
+
+    /** Whether players are hurt by falling, by fire, lava and burning, and by running out of breath underwater. */
+    val fallDamage get() = values["falldamage"] == true
+    val fireDamage get() = values["firedamage"] == true
+    val drowningDamage get() = values["drowningdamage"] == true
+
+    /** Whether players heal over time by themselves. */
+    val naturalRegeneration get() = values["naturalregeneration"] == true
 
     /** How many blocks in each sub-chunk around the players get a random tick each tick: what grows, how fast. */
     val randomTickSpeed get() = values["randomtickspeed"] as? Int ?: 1

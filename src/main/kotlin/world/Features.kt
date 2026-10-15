@@ -26,11 +26,18 @@ data class Features(
     val growth: Boolean = true,
     /** Furnaces, brewing stands, hoppers, dispensers, droppers, crafters and beacons working. Off, they keep what's put in them, and do nothing with it. */
     val machines: Boolean = true,
+    /**
+     * Players being hurt: by falling, the void, lava, fire and burning,
+     * drowning, suffocating, magma, campfires, cactus and berry bushes,
+     * poison and wither, and healing again over time. Off, nothing hurts them
+     * but `/kill`.
+     */
+    val damage: Boolean = true,
 ) {
     /** The names of the systems switched off, as kore.json names them. */
     val off: List<String>
         get() = listOfNotNull(
             "redstone".takeUnless { redstone }, "liquids".takeUnless { liquids }, "fallingBlocks".takeUnless { fallingBlocks },
-            "growth".takeUnless { growth }, "machines".takeUnless { machines },
+            "growth".takeUnless { growth }, "machines".takeUnless { machines }, "damage".takeUnless { damage },
         )
 }

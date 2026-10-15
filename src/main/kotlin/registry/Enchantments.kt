@@ -77,8 +77,13 @@ class Enchantments(val all: List<Enchantment>, val book: ItemDefinition? = null,
 }
 
 // The enchantments that do something beyond what they cost, by the numbers items keep them under.
+const val PROTECTION = 0
+const val FIRE_PROTECTION = 1
+const val FEATHER_FALLING = 2
+const val RESPIRATION = 6
 const val EFFICIENCY = 15
 const val UNBREAKING = 17
+const val FROST_WALKER = 25
 const val MENDING = 26
 const val VANISHING = 28
 

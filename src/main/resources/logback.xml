@@ -2,16 +2,20 @@
     <!-- Names each run's log file after the moment the server started. -->
     <timestamp key="started" datePattern="yyyy-MM-dd_HH-mm-ss"/>
 
+    <!-- Each line's tag, INF, WRN, ERR, DBG, CHT, CMD or DTH, and its colour, the grey of its time, and words in backticks highlighted. -->
+    <conversionRule conversionWord="tag" converterClass="org.koremc.TagConverter"/>
+    <conversionRule conversionWord="colouredTag" converterClass="org.koremc.ColouredTagConverter"/>
+    <conversionRule conversionWord="grey" converterClass="org.koremc.GreyConverter"/>
+    <conversionRule conversionWord="highlightedMessage" converterClass="org.koremc.HighlightedMessageConverter"/>
+    <conversionRule conversionWord="plainMessage" converterClass="org.koremc.PlainMessageConverter"/>
+
     <!--
-        What's happening, without the detail, which the file has: the time to the second, and how much it matters.
-        Written above the line being typed at the console, never into it.
+        What's happening, without the detail, which the file has, unless kore.json asks for it: what each line is, when,
+        to the second, and what it says. Written above the line being typed at the console, never into it.
     -->
     <appender name="CONSOLE" class="org.koremc.command.ConsoleLogAppender">
-        <filter class="ch.qos.logback.classic.filter.ThresholdFilter">
-            <level>INFO</level>
-        </filter>
         <encoder>
-            <pattern>[%d{HH:mm:ss} %highlight(%level)] %msg%n</pattern>
+            <pattern>%colouredTag %grey([%d{dd-MM-yy HH:mm:ss}]) %highlightedMessage%n</pattern>
         </encoder>
     </appender>
 
@@ -22,7 +26,7 @@
     <appender name="FILE" class="ch.qos.logback.core.FileAppender">
         <file>logs/kore-${started}.log</file>
         <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            <pattern>%tag [%d{dd-MM-yy HH:mm:ss.SSS}] [%thread] %logger{36} - %plainMessage%n</pattern>
         </encoder>
     </appender>
 

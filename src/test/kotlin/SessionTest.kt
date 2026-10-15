@@ -96,6 +96,7 @@ import org.koremc.world.tickItems
 import org.koremc.world.Face
 import org.koremc.world.FlatWorld
 import org.koremc.world.PLAYER_EYE_HEIGHT
+import org.koremc.world.PLAYER_MAX_AIR
 import org.koremc.world.blockStateNbt
 import org.koremc.world.Vec3
 import org.koremc.world.chunksAround
@@ -123,6 +124,9 @@ private const val REMOVE_ACTOR = 14
 private const val SNEAKING = 8
 private const val START_SPRINTING = 25
 private const val STOP_SPRINTING = 26
+private const val START_SWIMMING = 29
+private const val STOP_SWIMMING = 30
+private const val START_GLIDING = 32
 private const val START_FLYING = 42
 private const val VERTICAL_COLLISION = 50
 
@@ -509,6 +513,18 @@ class SessionTest {
         clientSends(playerAuthInput(standing, inputs = listOf(STOP_SPRINTING), tick = 103))
         assertContentEquals(playerData(height = 1.8f, tick = 103), receivedPacket())
         assertFalse(session.sprinting)
+    }
+
+    @Test
+    fun `swimming and gliding lie the player flat, as their flags and height say, or the client neither swims nor glides`() {
+        spawn()
+
+        clientSends(playerAuthInput(standing, inputs = listOf(START_SWIMMING), tick = 101))
+        assertContentEquals(playerData(ActorFlag.SWIMMING, height = 0.6f, tick = 101), receivedPacket())
+        clientSends(playerAuthInput(standing, inputs = listOf(STOP_SWIMMING), tick = 102))
+        assertContentEquals(playerData(height = 1.8f, tick = 102), receivedPacket())
+        clientSends(playerAuthInput(standing, inputs = listOf(START_GLIDING), tick = 103))
+        assertContentEquals(playerData(ActorFlag.GLIDING, height = 0.6f, tick = 103), receivedPacket())
     }
 
     @Test
@@ -1228,6 +1244,52 @@ class SessionTest {
         assertTrue(receivedPackets().any { it.contentEquals(Respawn(eyes, Respawn.READY_TO_SPAWN, 7).encode()) })
         assertFalse(session.dead)
         assertEquals(eyes, session.position)
+    }
+
+    @Test
+    fun `a fall hurts a player but for its first three blocks, and they and everyone see them flinch, but not in creative`() {
+        spawn()
+        // Up ten blocks, then down eight, a tick at a time, and onto the ground.
+        for (feet in listOf(-53f, -55f, -57f, -59f, -61f)) clientSends(playerAuthInput(Vec3(0.5f, feet + PLAYER_EYE_HEIGHT, 0.5f)))
+        sent.clear()
+        clientSends(playerAuthInput(standing, inputs = listOf(VERTICAL_COLLISION)))
+        assertEquals(15f, session.vitals.health)
+        assertTrue(receivedPackets().any { it.contentEquals(ActorEvent(7, ActorEvent.HURT, 0).encode()) })
+
+        session.changeGameMode(GameMode.CREATIVE)
+        for (feet in listOf(-53f, -57f, -61f)) clientSends(playerAuthInput(Vec3(0.5f, feet + PLAYER_EYE_HEIGHT, 0.5f)))
+        clientSends(playerAuthInput(standing, inputs = listOf(VERTICAL_COLLISION)))
+        assertEquals(15f, session.vitals.health)
+    }
+
+    @Test
+    fun `a player under water holds their breath, and once it's gone drowns a little every second, until they die of it`() {
+        spawn()
+        world.rules.set("naturalRegeneration", false)
+        world[BlockPos(0, -63, 0)] = water[0]
+        world[BlockPos(0, -62, 0)] = water[0]
+
+        repeat(PLAYER_MAX_AIR + 19) { session.tickHealth() }
+        assertEquals(20f, session.vitals.health)
+        session.tickHealth()
+        assertEquals(18f, session.vitals.health)
+        sent.clear()
+        repeat(9 * 20) { session.tickHealth() }
+        assertTrue(session.dead)
+        assertTrue(receivedPackets().any { it.contentEquals(DeathInfo("death.attack.drown", listOf(session.name)).encode()) })
+    }
+
+    @Test
+    fun `a swimming player's eyes are down by their feet, so water there is over their head, though not a standing player's`() {
+        spawn()
+        world.rules.set("naturalRegeneration", false)
+        world[BlockPos(0, -63, 0)] = water[0]
+
+        repeat(PLAYER_MAX_AIR + 20) { session.tickHealth() }
+        assertEquals(20f, session.vitals.health)
+        clientSends(playerAuthInput(standing, inputs = listOf(START_SWIMMING)))
+        repeat(PLAYER_MAX_AIR + 20) { session.tickHealth() }
+        assertEquals(18f, session.vitals.health)
     }
 
     @Test

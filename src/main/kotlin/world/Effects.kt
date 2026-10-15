@@ -6,9 +6,20 @@ object Effect {
     const val HASTE = 3
     const val STRENGTH = 5
     const val JUMP_BOOST = 8
+    const val INSTANT_HEALTH = 6
+    const val INSTANT_DAMAGE = 7
     const val REGENERATION = 10
     const val RESISTANCE = 11
+    const val FIRE_RESISTANCE = 12
+    const val WATER_BREATHING = 13
     const val INVISIBILITY = 14
+    const val POISON = 19
+    const val WITHER = 20
+    const val HEALTH_BOOST = 21
+    const val ABSORPTION = 22
+    const val FATAL_POISON = 25
+    const val SLOW_FALLING = 26
+    const val CONDUIT_POWER = 27
 }
 
 /** An effect at a strength: its amplifier, which is 0 for level I. */

@@ -7,6 +7,7 @@ import org.koremc.command.Commands
 import org.koremc.command.ConsoleSource
 import org.koremc.command.Operators
 import org.koremc.command.Selectable
+import org.koremc.command.english
 import org.koremc.command.logOutput
 import org.koremc.inventory.CURSOR_SLOT
 import org.koremc.inventory.Container
@@ -61,6 +62,7 @@ import org.koremc.protocol.ContainerOpen
 import org.koremc.protocol.ContainerSetData
 import org.koremc.protocol.ContainerType
 import org.koremc.protocol.DeathInfo
+import org.koremc.protocol.Difficulty
 import org.koremc.protocol.Disconnect
 import org.koremc.protocol.EditedBlockData
 import org.koremc.protocol.EnchantOption
@@ -114,10 +116,10 @@ import org.koremc.protocol.RecordStarted
 import org.koremc.protocol.RemoveActor
 import org.koremc.protocol.RequestChunkRadius
 import org.koremc.protocol.RequestNetworkSettings
-import org.koremc.protocol.Respawn
 import org.koremc.protocol.ResourcePackClientResponse
 import org.koremc.protocol.ResourcePackStack
 import org.koremc.protocol.ResourcePacksInfo
+import org.koremc.protocol.Respawn
 import org.koremc.protocol.ServerPacket
 import org.koremc.protocol.SetActorData
 import org.koremc.protocol.SetActorMotion
@@ -128,16 +130,15 @@ import org.koremc.protocol.SetTime
 import org.koremc.protocol.ShortItem
 import org.koremc.protocol.ShowArmour
 import org.koremc.protocol.ShowEquipment
+import org.koremc.protocol.Skin
+import org.koremc.protocol.StackRequest
+import org.koremc.protocol.StartGame
+import org.koremc.protocol.StringItem
 import org.koremc.protocol.SubChunk
 import org.koremc.protocol.SubChunkEntry
 import org.koremc.protocol.SubChunkOffset
 import org.koremc.protocol.SubChunkRequest
 import org.koremc.protocol.SubChunkResult
-import org.koremc.protocol.subChunkPayload
-import org.koremc.protocol.Skin
-import org.koremc.protocol.StackRequest
-import org.koremc.protocol.StartGame
-import org.koremc.protocol.StringItem
 import org.koremc.protocol.TakeItemActor
 import org.koremc.protocol.Text
 import org.koremc.protocol.ToggleCrafterSlot
@@ -154,13 +155,17 @@ import org.koremc.protocol.encode
 import org.koremc.protocol.flagsItem
 import org.koremc.protocol.parseConnectionRequest
 import org.koremc.protocol.skinFrom
+import org.koremc.protocol.subChunkPayload
 import org.koremc.registry.AIR
 import org.koremc.registry.AIR_NETWORK_ID
 import org.koremc.registry.BlockState
 import org.koremc.registry.EFFICIENCY
+import org.koremc.registry.FIRE_PROTECTION
+import org.koremc.registry.FROST_WALKER
 import org.koremc.registry.ItemStack
 import org.koremc.registry.ItemStacks
 import org.koremc.registry.MENDING
+import org.koremc.registry.RESPIRATION
 import org.koremc.registry.VANISHING
 import org.koremc.registry.damage
 import org.koremc.registry.levelOf
@@ -187,16 +192,18 @@ import org.koremc.world.Changes
 import org.koremc.world.ChunkPos
 import org.koremc.world.Crafter as CrafterMachine
 import org.koremc.world.DISPENSER_SLOTS
+import org.koremc.world.DamageCause
 import org.koremc.world.Dispenser
 import org.koremc.world.EMPTY_MAP
 import org.koremc.world.ENDER_EYE
 import org.koremc.world.Effect
 import org.koremc.world.EffectLevel
-import org.koremc.world.INFINITE_EFFECT
 import org.koremc.world.Effects
 import org.koremc.world.ExperienceOrb
 import org.koremc.world.FALLING_BLOCK_SIZE
 import org.koremc.world.FILLED_MAP
+import org.koremc.world.FIRE_CHARGE
+import org.koremc.world.FLINT_AND_STEEL
 import org.koremc.world.FURNACE_FUEL
 import org.koremc.world.FURNACE_INPUT
 import org.koremc.world.FURNACE_OUTPUT
@@ -209,11 +216,14 @@ import org.koremc.world.HOPPER
 import org.koremc.world.HOPPER_SLOTS
 import org.koremc.world.HeldAfter
 import org.koremc.world.Hopper
+import org.koremc.world.INFINITE_EFFECT
 import org.koremc.world.ItemEntity
 import org.koremc.world.ItemUsedOn
 import org.koremc.world.LOCATOR
 import org.koremc.world.Liquid
 import org.koremc.world.MAX_BERRY_GROWTH
+import org.koremc.world.MAX_HEALTH
+import org.koremc.world.MIN_Y
 import org.koremc.world.Machine
 import org.koremc.world.MapData
 import org.koremc.world.NOTE_SOUND
@@ -222,18 +232,25 @@ import org.koremc.world.PLAYER_EYE_HEIGHT
 import org.koremc.world.PLAYER_HEIGHT
 import org.koremc.world.PLAYER_MAX_AIR
 import org.koremc.world.PLAYER_SNEAKING_HEIGHT
+import org.koremc.world.PLAYER_SWIMMING_EYE_HEIGHT
+import org.koremc.world.PLAYER_SWIMMING_HEIGHT
 import org.koremc.world.PLAYER_WALK_SPEED
 import org.koremc.world.PLAYER_WIDTH
 import org.koremc.world.Placer
 import org.koremc.world.PlayerExperience
 import org.koremc.world.SNOW_LAYER
 import org.koremc.world.STORAGE_SLOTS
+import org.koremc.world.SUB_CHUNK_COUNT
 import org.koremc.world.SWEET_BERRY_BUSH
 import org.koremc.world.SongChange
 import org.koremc.world.Storage
+import org.koremc.world.Surroundings
 import org.koremc.world.Vec3
+import org.koremc.world.Vitals
 import org.koremc.world.WRITABLE_BOOK
 import org.koremc.world.WRITTEN_BOOK
+import org.koremc.world.armourOf
+import org.koremc.world.armourWear
 import org.koremc.world.beaconLevel
 import org.koremc.world.bit
 import org.koremc.world.blockPlacedBy
@@ -244,6 +261,7 @@ import org.koremc.world.centre
 import org.koremc.world.chestHalves
 import org.koremc.world.chunksAround
 import org.koremc.world.corner
+import org.koremc.world.damageAfter
 import org.koremc.world.dispenserKind
 import org.koremc.world.drawMap
 import org.koremc.world.dropExperience
@@ -253,20 +271,14 @@ import org.koremc.world.facesFront
 import org.koremc.world.facing
 import org.koremc.world.fertilize
 import org.koremc.world.fertilizeSeabed
-import org.koremc.world.heightMap
-import org.koremc.world.savedBlockEntitiesIn
-import org.koremc.world.MIN_Y
-import org.koremc.world.SUB_CHUNK_COUNT
 import org.koremc.world.fillBucket
 import org.koremc.world.fillPortalFrame
-import org.koremc.world.FIRE_CHARGE
-import org.koremc.world.FLINT_AND_STEEL
-import org.koremc.world.ignite
-import org.koremc.world.putOutFire
 import org.koremc.world.furnaceKind
 import org.koremc.world.goesOnLectern
 import org.koremc.world.harvests
 import org.koremc.world.hasGlowBerries
+import org.koremc.world.heightMap
+import org.koremc.world.ignite
 import org.koremc.world.isBlockedOpen
 import org.koremc.world.isCauldron
 import org.koremc.world.isComposter
@@ -297,7 +309,10 @@ import org.koremc.world.place
 import org.koremc.world.playNote
 import org.koremc.world.pressPlates
 import org.koremc.world.putOnLectern
+import org.koremc.world.putOutFire
+import org.koremc.world.rainingAt
 import org.koremc.world.restoreBlockData
+import org.koremc.world.savedBlockEntitiesIn
 import org.koremc.world.setBeaconPowers
 import org.koremc.world.settle
 import org.koremc.world.showing
@@ -308,6 +323,7 @@ import org.koremc.world.snapsUp
 import org.koremc.world.songTitleIn
 import org.koremc.world.stepOn
 import org.koremc.world.storage
+import org.koremc.world.surroundings
 import org.koremc.world.takeFromFrame
 import org.koremc.world.tickBlocks
 import org.koremc.world.tickItems
@@ -337,6 +353,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.sin
@@ -345,7 +362,7 @@ import kotlin.random.Random
 private val log = LoggerFactory.getLogger(Session::class.java)
 
 /** Every batch in and out, by packet. The console leaves it out, and each run's log file has it all. */
-private val packetLog = LoggerFactory.getLogger("org.koremc.packets")
+private val packetLog = LoggerFactory.getLogger(PACKET_LOG)
 
 /** Batches this size or larger are compressed. Small ones cost more to compress than they save. */
 private const val COMPRESSION_THRESHOLD = 256
@@ -536,6 +553,9 @@ private const val LEFT = "\u00a7e%multiplayer.player.left"
 /** The message for a player who died, as `/kill` kills them. */
 private const val DIED = "death.attack.generic"
 
+/** The game's name for a player's health, as an attribute. */
+private const val HEALTH = "minecraft:health"
+
 /** How long a player lies dead before others stop seeing them, in ticks: long enough to fall over. */
 private const val DEAD_BODY_TICKS = 22
 
@@ -547,6 +567,60 @@ private const val DEATH_PICKUP_DELAY = 40
 /** How much of their experience a player drops as they die: so much a level, up to a limit. */
 private const val DEATH_EXPERIENCE_PER_LEVEL = 7
 private const val MAX_DEATH_EXPERIENCE = 100
+
+/** How far below the world the void starts hurting players, and how much it hurts them a time. */
+private const val VOID_DEPTH = 17
+private const val VOID_DAMAGE = 4f
+
+/** How much lava hurts a player a time, and how long it and fire set them burning for, in ticks, which hurts them once a second. */
+private const val LAVA_DAMAGE = 4f
+private const val LAVA_BURNS = 15 * 20
+private const val FIRE_BURNS = 8 * 20
+private const val BURN_INTERVAL = 20
+
+/** How far a player falls before it hurts them, and how much less a fall onto hay or honey, or a bed, hurts. */
+private const val SAFE_FALL = 3f
+private const val FALL_SLACK = 0.01f
+private const val SOFT_LANDING = 0.2f
+private const val BED_LANDING = 0.5f
+
+/** How much drowning hurts a player once their breath runs out, how many ticks apart, and how much breath they get back a tick above water. */
+private const val DROWNING_DAMAGE = 2f
+private const val DROWNING_INTERVAL = 20
+private const val BREATH_REGAINED = 4
+
+/** How often, in ticks, a player heals by themselves while well fed, and in peace. */
+private const val REGENERATION_INTERVAL = 80
+private const val PEACEFUL_REGENERATION_INTERVAL = 20
+
+/** How often, in ticks, Regeneration heals, poison hurts and wither hurts at level I, twice as often a level up. */
+private const val REGENERATION_EVERY = 50
+private const val POISON_EVERY = 25
+private const val WITHER_EVERY = 40
+
+/** How much Instant Health heals and Instant Damage hurts at level I, twice as much a level up. */
+private const val INSTANT_HEALTH = 4f
+private const val INSTANT_DAMAGE = 6f
+
+/** How much more health Health Boost gives, and Absorption gives on top of it, a level. */
+private const val BOOST_PER_LEVEL = 4f
+
+/** How many times an effect's strength doubles at most, level on level, before it's more than a number holds. */
+private const val MAX_DOUBLINGS = 24
+
+/** How hard lightning hurts the players it strikes near, and how near, across. */
+private const val LIGHTNING_DAMAGE = 5f
+private const val LIGHTNING_REACH = 3f
+
+/** How little a player must move across to be pricked by a berry bush they're in. */
+private const val BERRY_PRICK_MOVE = 0.003f
+
+/** How much shorter each level of Fire Protection makes a player burn, in hundredths. */
+private const val FIRE_PROTECTION_SHARE = 15
+
+/** The armour slots of a player's head and feet. */
+private const val HEAD_SLOT = 0
+private const val FEET_SLOT = 3
 
 /** What a player turned away from a full server is told, in their own language. */
 private const val SERVER_FULL = "disconnectionScreen.serverFull"
@@ -762,6 +836,10 @@ class Session(
     /** Whether the player is flying, where sneaking means descending rather than slowing down. */
     private var flying = false
 
+    /** Whether the player is swimming, or gliding with an elytra, lying flat either way. */
+    private var swimming = false
+    private var gliding = false
+
     /** Which way the player looks, around the vertical, as the client last reported. Blocks they place turn by it. */
     override var yaw = 0f
         private set
@@ -783,6 +861,13 @@ class Session(
 
     /** Whether the player has lain dead long enough for others to stop seeing them. */
     private var bodyGone = false
+
+    /** The player's health, breath and fire. */
+    val vitals = Vitals()
+
+    /** Ticks since the player last healed by themselves, and since they joined, for effects that last for ever to count by. */
+    private var sinceRegeneration = 0
+    private var aliveTicks = 0
 
     /** Where the player respawns, as `/spawnpoint` set it, or null for the world's spawn. */
     var spawnPoint: BlockPos? = null
@@ -1128,7 +1213,7 @@ class Session(
     private fun fall(fromY: Float) {
         val at = feet.toBlockPos()
         when {
-            flying || gameMode == GameMode.SPECTATOR || world.isWet(at) || world.stateAt(at)?.name in CLIMBABLE -> fallDistance = 0f
+            flying || gliding || gameMode == GameMode.SPECTATOR || world.isWet(at) || world.stateAt(at)?.name in CLIMBABLE -> fallDistance = 0f
             onGround && delta.y <= 0f -> {
                 if (fallDistance > 0f) landOn(fallDistance)
                 fallDistance = 0f
@@ -1140,10 +1225,14 @@ class Session(
     /**
      * The player landing, having fallen [distance] blocks, on the block just
      * under their feet: farmland may be trampled back to dirt, which breaks
-     * the crop on it a tick later, as everyone with the chunk sees.
+     * the crop on it a tick later, as everyone with the chunk sees. And the
+     * fall hurts them, but for the first three blocks of it, and Jump Boost's
+     * level, less onto hay, honey or a bed, not at all onto slime, unless
+     * they sneak, nor with Slow Falling.
      */
     private fun landOn(distance: Float) {
         val on = BlockPos(floor(feet.x).toInt(), floor(feet.y - LANDING_DEPTH).toInt(), floor(feet.z).toInt())
+        hurtByFall(distance, world.stateAt(on)?.name)
         if (!world.landOn(on, distance)) return
         val changes = world.settle(listOf(on))
         showAround(world.packetsFor(Changes(emptyMap(), (listOf(on) + changes.reshaped).distinct())))
@@ -1151,12 +1240,13 @@ class Session(
     }
 
     /**
-     * Follows the player's sprinting, from the client's flags for starting
-     * and stopping it, and their sneaking, from the flag set while they
-     * sneak. Starting to sneak ends a sprint, unless the player is flying.
-     * A change goes back to the client as the player's actor data, tagged
-     * with the input's tick so the client applies it at the moment it
-     * predicted it.
+     * Follows the player's sprinting, swimming and gliding, from the
+     * client's flags for starting and stopping each, and their sneaking,
+     * from the flag set while they sneak. Starting to sneak ends a sprint,
+     * unless the player is flying. A change goes back to the client as the
+     * player's actor data, tagged with the input's tick so the client
+     * applies it at the moment it predicted it: without it, the client
+     * doesn't swim or glide, lying flat.
      *
      * The sprint's speed boost is left to the client, which already applies
      * it: with Kore sending a walking speed of 0.1, a logged test measured
@@ -1166,9 +1256,15 @@ class Session(
         val inputs = packet.inputs
         val wasSprinting = sprinting
         val wasSneaking = sneaking
+        val wasSwimming = swimming
+        val wasGliding = gliding
 
         if (InputFlag.START_FLYING in inputs) flying = true
         if (InputFlag.STOP_FLYING in inputs) flying = false
+        if (InputFlag.START_SWIMMING in inputs) swimming = true
+        if (InputFlag.STOP_SWIMMING in inputs) swimming = false
+        if (InputFlag.START_GLIDING in inputs) gliding = true
+        if (InputFlag.STOP_GLIDING in inputs) gliding = false
         if (InputFlag.START_SPRINTING in inputs) {
             sprinting = true
             sneaking = false
@@ -1179,15 +1275,45 @@ class Session(
             if (sneaking && !flying) sprinting = false
         }
 
-        if (sprinting == wasSprinting && sneaking == wasSneaking) return
+        if (sprinting == wasSprinting && sneaking == wasSneaking && swimming == wasSwimming && gliding == wasGliding) return
         send(SetActorData(entityId, listOf(flagsItem(playerFlags()), FloatItem(ActorDataId.HEIGHT, playerHeight())), packet.tick))
-        log.debug("{} is now {}sprinting and {}sneaking", player?.displayName, if (sprinting) "" else "not ", if (sneaking) "" else "not ")
+        log.debug("{} is now {}", player?.displayName, listOf("sprinting" to sprinting, "sneaking" to sneaking, "swimming" to swimming, "gliding" to gliding).joinToString { (what, doing) -> if (doing) what else "not $what" })
     }
 
-    private fun playerFlags() = PLAYER_FLAGS +
-        listOfNotNull(ActorFlag.SPRINTING.takeIf { sprinting }, ActorFlag.SNEAKING.takeIf { sneaking })
+    private fun hurtByFall(distance: Float, landedOn: String?) {
+        if (!world.rules.fallDamage || effects[Effect.SLOW_FALLING] != null) return
+        val share = when (landedOn) {
+            "minecraft:hay_block", "minecraft:honey_block" -> SOFT_LANDING
+            "minecraft:slime" -> if (sneaking) 1f else 0f
+            else -> if (landedOn?.endsWith("bed") == true) BED_LANDING else 1f
+        }
+        // A hair over a whole number of blocks, as a float has it, isn't another block.
+        val damage = ceil((distance - SAFE_FALL - effects.level(Effect.JUMP_BOOST)) * share - FALL_SLACK)
+        if (damage > 0) hurt(damage, DamageCause.FALL)
+    }
 
-    private fun playerHeight() = if (sneaking) PLAYER_SNEAKING_HEIGHT else PLAYER_HEIGHT
+    /**
+     * The player's own flags: those every player has, but for breathing,
+     * which they stop doing under water, and whether they sprint, sneak,
+     * swim, glide or burn.
+     */
+    private fun playerFlags(): Set<ActorFlag> = PLAYER_FLAGS - ActorFlag.BREATHING +
+        listOfNotNull(
+            ActorFlag.BREATHING.takeIf { breathing }, ActorFlag.SPRINTING.takeIf { sprinting }, ActorFlag.SNEAKING.takeIf { sneaking },
+            ActorFlag.ON_FIRE.takeIf { vitals.fireTicks > 0 }, ActorFlag.SWIMMING.takeIf { swimming }, ActorFlag.GLIDING.takeIf { gliding },
+        )
+
+    /** Whether the player breathes, rather than holding their breath underwater. */
+    private var breathing = true
+
+    private fun playerHeight() = when {
+        swimming || gliding -> PLAYER_SWIMMING_HEIGHT
+        sneaking -> PLAYER_SNEAKING_HEIGHT
+        else -> PLAYER_HEIGHT
+    }
+
+    /** Where the player's eyes are: lower than where the client says the player is, which stays the standing height above their feet, while they swim or glide. */
+    private fun eyes(): Vec3 = if (swimming || gliding) Vec3(feet.x, feet.y + PLAYER_SWIMMING_EYE_HEIGHT, feet.z) else position
 
     /**
      * Centres the client's view on [viewCentre], after any packets in
@@ -1832,17 +1958,29 @@ class Session(
         if (!effects.give(given, ticks, ambient)) return
         send(MobEffect(entityId, if (had) MobEffect.MODIFY else MobEffect.ADD, given.effect, given.amplifier, ticks, ambient))
         if (effects.visible() != visible) send(visibleEffects())
+        effectStarted(given)
     }
 
     /**
      * Gives the player [given] for [ticks], or for ever, for
      * [INFINITE_EFFECT], whatever they had of it, as `/effect` does, its
-     * [particles] showing or not. They see it start, or change.
+     * [particles] showing or not. They see it start, or change. Instant
+     * Health and Instant Damage heal or hurt them at once, and are gone.
      */
     fun setEffect(given: EffectLevel, ticks: Int, particles: Boolean) {
+        // Doubling a level at a time, as far as a number goes.
+        val strength = 1 shl minOf(given.amplifier, MAX_DOUBLINGS)
+        when (given.effect) {
+            Effect.INSTANT_HEALTH -> return heal(INSTANT_HEALTH * strength)
+            Effect.INSTANT_DAMAGE -> {
+                hurt(INSTANT_DAMAGE * strength, DamageCause.MAGIC)
+                return
+            }
+        }
         val had = effects[given.effect] != null
         effects.set(given, ticks, particles)
         send(MobEffect(entityId, if (had) MobEffect.MODIFY else MobEffect.ADD, given.effect, given.amplifier, ticks, particles = particles), visibleEffects())
+        effectStarted(given)
     }
 
     /** Takes [effect] from the player, or every effect, for null. Returns whether they had any to take. */
@@ -1850,6 +1988,7 @@ class Session(
         val taken = if (effect == null) effects.clear() else listOfNotNull(effect.takeIf(effects::remove))
         if (taken.isEmpty()) return false
         send(*taken.map { MobEffect(entityId, MobEffect.REMOVE, it) }.toTypedArray(), visibleEffects())
+        effectsEnded(taken)
         return true
     }
 
@@ -1858,6 +1997,24 @@ class Session(
         val ended = effects.tick()
         for (effect in ended) send(MobEffect(entityId, MobEffect.REMOVE, effect))
         if (ended.isNotEmpty()) send(visibleEffects())
+        effectsEnded(ended)
+    }
+
+    /** What [given] does to the player's hearts as it starts: Health Boost adds to how many they can have, and Absorption puts more on top. */
+    private fun effectStarted(given: EffectLevel) {
+        when (given.effect) {
+            Effect.HEALTH_BOOST -> vitals.maxHealth = MAX_HEALTH + BOOST_PER_LEVEL * (given.amplifier + 1)
+            Effect.ABSORPTION -> vitals.absorption = maxOf(vitals.absorption, BOOST_PER_LEVEL * (given.amplifier + 1))
+            else -> return
+        }
+        sendHealth()
+    }
+
+    /** What the [ended] effects leave of the player's hearts: no more than they could have without Health Boost, and no Absorption. */
+    private fun effectsEnded(ended: List<Int>) {
+        if (Effect.HEALTH_BOOST in ended) vitals.maxHealth = MAX_HEALTH
+        if (Effect.ABSORPTION in ended) vitals.absorption = 0f
+        if (Effect.HEALTH_BOOST in ended || Effect.ABSORPTION in ended) sendHealth()
     }
 
     /** The particles of the effects on the player, which everyone else sees as the player list syncs. */
@@ -2590,6 +2747,8 @@ class Session(
         val onGround: Boolean,
         val sneaking: Boolean,
         val sprinting: Boolean,
+        val swimming: Boolean,
+        val gliding: Boolean,
         val heldSlot: Int,
         val held: ItemStack?,
         val offhand: ItemStack?,
@@ -2597,13 +2756,15 @@ class Session(
         val armour: List<ItemStack?>,
         /** The effects whose particles show around them. */
         val effects: Long,
-        /** Whether Invisibility hides them. */
+        /** Whether Invisibility hides them, and whether they burn. */
         val invisible: Boolean,
+        val onFire: Boolean,
     )
 
     private fun look() = Look(
-        position, pitch, yaw, headYaw, onGround, sneaking, sprinting, heldSlot, inventory.items[heldSlot]?.stack,
+        position, pitch, yaw, headYaw, onGround, sneaking, sprinting, swimming, gliding, heldSlot, inventory.items[heldSlot]?.stack,
         inventory.offhand[0]?.stack, inventory.armour.contents().map { it?.stack }, effects.visible(), effects[Effect.INVISIBILITY] != null,
+        vitals.fireTicks > 0,
     )
 
     /**
@@ -2647,7 +2808,9 @@ class Session(
             if (now.position != before.position || now.pitch != before.pitch || now.yaw != before.yaw || now.headYaw != before.headYaw || now.onGround != before.onGround) {
                 packets += MovePlayer(other.entityId, now.position, now.pitch, now.yaw, now.headYaw, now.onGround)
             }
-            if (now.sneaking != before.sneaking || now.sprinting != before.sprinting || now.invisible != before.invisible) {
+            if (now.sneaking != before.sneaking || now.sprinting != before.sprinting || now.swimming != before.swimming || now.gliding != before.gliding ||
+                now.invisible != before.invisible || now.onFire != before.onFire
+            ) {
                 packets += SetActorData(other.entityId, listOf(flagsItem(shownFlags(now)), FloatItem(ActorDataId.HEIGHT, heightOf(now))))
             }
             if (now.held != before.held || now.heldSlot != before.heldSlot) packets += ShowEquipment(other.entityId, now.held, now.heldSlot)
@@ -2687,11 +2850,17 @@ class Session(
         )
     }
 
-    /** The flags others see a player with as they [look]: their own, that their name shows above them, and whether they can't be seen. */
+    /** The flags others see a player with as they [look]: their own, that their name shows above them, whether they can't be seen, and whether they burn. */
     private fun shownFlags(look: Look) = PLAYER_FLAGS + ActorFlag.SHOW_NAME + ActorFlag.ALWAYS_SHOW_NAME +
-        listOfNotNull(ActorFlag.SPRINTING.takeIf { look.sprinting }, ActorFlag.SNEAKING.takeIf { look.sneaking }, ActorFlag.INVISIBLE.takeIf { look.invisible })
+        listOfNotNull(ActorFlag.SPRINTING.takeIf { look.sprinting }, ActorFlag.SNEAKING.takeIf { look.sneaking }, ActorFlag.INVISIBLE.takeIf { look.invisible }, ActorFlag.ON_FIRE.takeIf { look.onFire },
+            ActorFlag.SWIMMING.takeIf { look.swimming }, ActorFlag.GLIDING.takeIf { look.gliding },
+        )
 
-    private fun heightOf(look: Look) = if (look.sneaking) PLAYER_SNEAKING_HEIGHT else PLAYER_HEIGHT
+    private fun heightOf(look: Look) = when {
+        look.swimming || look.gliding -> PLAYER_SWIMMING_HEIGHT
+        look.sneaking -> PLAYER_SNEAKING_HEIGHT
+        else -> PLAYER_HEIGHT
+    }
 
     /** Shows the client the player [entityId] swinging their arm, for [source], if it can see them. */
     private fun showSwing(entityId: Long, source: String?) {
@@ -2908,7 +3077,7 @@ class Session(
             log.debug("Refused a blank chat message from {}", identity.displayName)
             return
         }
-        log.info("<{}> {}", identity.displayName, message)
+        if (config.logs.chat) chatLog.info("{} said {}", identity.displayName, message)
         tellEveryone(Text(Text.CHAT, message, sourceName = identity.displayName, xuid = identity.xuid.orEmpty()))
     }
 
@@ -2918,7 +3087,7 @@ class Session(
      */
     private fun onCommand(packet: CommandRequest) {
         if (state != State.IN_GAME) return
-        log.info("{} ran {}", name, packet.command)
+        if (config.logs.commands) commandLog.info("{} ran {}", name, packet.command)
         val result = commands.run(this, packet.command)
         send(CommandOutput(packet.origin, result.messages, result.successes))
     }
@@ -2970,6 +3139,183 @@ class Session(
         log.debug("{} was teleported to {}", name, feet)
     }
 
+    /** Whether anything can hurt the player: not in creative or spectator, nor with the damage system off. */
+    private val hurtable get() = world.features.damage && gameMode != GameMode.CREATIVE && gameMode != GameMode.SPECTATOR
+
+    /**
+     * Hurts the player by [amount] of [cause], as the game does, unless they
+     * can't be hurt, or the grace after their last hurt holds it off: armour,
+     * Resistance and protection lessen it, as [damageAfter] works out, and
+     * armour wears from it. They and everyone who sees them see them flinch,
+     * and if it's the end of them, they die of it. Returns whether it hurt them.
+     */
+    fun hurt(amount: Float, cause: DamageCause): Boolean {
+        if (!isInGame || dead || !hurtable) return false
+        val damage = damageAfter(amount, cause, inventory.armour.contents().map { it?.stack }, effects.level(Effect.RESISTANCE))
+        vitals.hurt(damage) ?: return false
+        if (cause.armour) wearArmour(armourWear(amount))
+        sendHealth()
+        viewers().filter { it.isInGame }.forEach { it.showHurt(entityId) }
+        log.debug("{} was hurt by {} of {}, down to {}", name, damage, cause.name.lowercase(), vitals.health)
+        if (vitals.isDead) die(cause.message)
+        return true
+    }
+
+    /** Heals the player by [amount], up to as many hearts as they can have. */
+    fun heal(amount: Float) {
+        if (!dead && vitals.heal(amount)) sendHealth()
+    }
+
+    /** Shows the client the player [entityId] flinching, if it's its own player or one it can see. */
+    private fun showHurt(entityId: Long) {
+        if (entityId == this.entityId || entityId in shownPlayers) send(ActorEvent(entityId, ActorEvent.HURT, 0))
+    }
+
+    /** Wears each piece of armour the player has on by [uses], as a blow does. One that wears out breaks, which everyone around hears. */
+    private fun wearArmour(uses: Int) {
+        val changed = mutableListOf<ServerPacket>()
+        for (slot in 0 until inventory.armour.size) {
+            val there = inventory.armour[slot]?.takeIf { armourOf(it.stack.item.name).first > 0 } ?: continue
+            val worn = there.stack.worn(uses)
+            if (worn == there.stack) continue
+            inventory.armour[slot] = worn?.let { there.copy(stack = it) }
+            changed += InventorySlot(slot, worn, if (worn == null) 0 else there.id, ARMOUR_WINDOW)
+            if (worn == null) showAround(position.toBlockPos(), LevelSoundEvent(LevelSoundEvent.BREAK, position, -1))
+        }
+        if (changed.isNotEmpty()) send(*changed.toTypedArray())
+    }
+
+    /** Sets the player burning for [ticks], unless they already burn for longer, less a share for each level of Fire Protection they wear. */
+    private fun ignite(ticks: Int) {
+        val protection = inventory.armour.contents().sumOf { it?.stack?.levelOf(FIRE_PROTECTION) ?: 0 }
+        vitals.fireTicks = maxOf(vitals.fireTicks, ticks - ticks * protection * FIRE_PROTECTION_SHARE / 100)
+    }
+
+    /**
+     * Hurts the player by lightning that struck at [at], if it struck near
+     * them, which sets them burning too.
+     */
+    fun struckNear(at: Vec3) {
+        if (abs(feet.x - at.x) > LIGHTNING_REACH || abs(feet.z - at.z) > LIGHTNING_REACH || feet.y + playerHeight() < at.y || feet.y > at.y + LIGHTNING_REACH * 2) return
+        if (!hurtable) return
+        ignite(FIRE_BURNS)
+        hurt(LIGHTNING_DAMAGE, DamageCause.LIGHTNING)
+    }
+
+    /**
+     * What hurts and heals the player this tick, unless nothing can hurt
+     * them: the void below the world; lava and fire, which set them burning,
+     * and burning itself, once a second, unless Fire Resistance keeps them
+     * from harm; a lit campfire or magma they don't sneak on; a cactus, a
+     * berry bush they move through, and a block they're inside; water they
+     * hold their breath under, once it runs out; poison, wither and
+     * Regeneration; and their own healing, while they're well fed. Water and
+     * rain put out their fire. They see what changes of their breath and fire.
+     * Run once a tick.
+     */
+    fun tickHealth() {
+        if (state != State.IN_GAME || dead) return
+        aliveTicks++
+        vitals.tick()
+        val flags = playerFlags()
+        val air = vitals.air
+        if (hurtable) {
+            val around = world.surroundings(feet, playerHeight(), eyes())
+            hurtByWorld(around)
+            breathe(around.underwater)
+            if (!dead) effectsOnHealth()
+            if (!dead) regenerate()
+        } else {
+            vitals.fireTicks = 0
+            breathe(underwater = false)
+        }
+        if (dead) return
+        if (playerFlags() != flags || vitals.air != air) {
+            send(SetActorData(entityId, listOf(flagsItem(playerFlags()), ShortItem(ActorDataId.AIR_SUPPLY, maxOf(vitals.air, 0).toShort()))))
+        }
+    }
+
+    private fun hurtByWorld(around: Surroundings) {
+        val rules = world.rules
+        val burns = rules.fireDamage && effects[Effect.FIRE_RESISTANCE] == null
+        if (feet.y < MIN_Y - VOID_DEPTH) hurt(VOID_DAMAGE, DamageCause.VOID)
+        if (around.lava) {
+            ignite(LAVA_BURNS)
+            if (burns) hurt(LAVA_DAMAGE, DamageCause.LAVA)
+        }
+        if (around.fire > 0) {
+            ignite(FIRE_BURNS)
+            if (burns) hurt(around.fire.toFloat(), DamageCause.FIRE)
+        }
+        if (around.campfire > 0 && !sneaking && burns) hurt(around.campfire.toFloat(), DamageCause.FIRE)
+        val frostWalker = inventory.armour[FEET_SLOT]?.stack?.levelOf(FROST_WALKER) ?: 0
+        if (around.magma && onGround && !sneaking && frostWalker == 0 && burns) hurt(1f, DamageCause.MAGMA)
+        if (around.cactus) hurt(1f, DamageCause.CACTUS)
+        if (around.berryBush && (abs(delta.x) >= BERRY_PRICK_MOVE || abs(delta.z) >= BERRY_PRICK_MOVE)) hurt(1f, DamageCause.BERRY_BUSH)
+        if (around.suffocating) hurt(1f, DamageCause.SUFFOCATION)
+        if (around.water || world.rainingAt(position.toBlockPos())) vitals.fireTicks = 0
+        if (vitals.fireTicks > 0) {
+            if (vitals.fireTicks % BURN_INTERVAL == 0 && !around.lava && burns) hurt(1f, DamageCause.BURNING)
+            vitals.fireTicks--
+        }
+    }
+
+    /**
+     * The player breathing, or holding their breath [underwater], unless
+     * Water Breathing or Conduit Power lets them breathe there, which runs out
+     * a tick at a time, less often with Respiration, and then drowns them a
+     * little every second. Above water, they get their breath back quickly.
+     */
+    private fun breathe(underwater: Boolean) {
+        breathing = !underwater || effects[Effect.WATER_BREATHING] != null || effects[Effect.CONDUIT_POWER] != null
+        if (breathing) {
+            vitals.air = minOf(PLAYER_MAX_AIR.toInt(), vitals.air + BREATH_REGAINED)
+            return
+        }
+        val respiration = inventory.armour[HEAD_SLOT]?.stack?.levelOf(RESPIRATION) ?: 0
+        if (respiration > 0 && Random.nextInt(respiration + 1) > 0) return
+        if (--vitals.air > -DROWNING_INTERVAL) return
+        vitals.air = 0
+        if (world.rules.drowningDamage) hurt(DROWNING_DAMAGE, DamageCause.DROWNING)
+    }
+
+    /**
+     * What the player's effects do to their health: Regeneration heals them
+     * and poison and wither hurt them, each so many ticks apart, twice as
+     * often a level up. Poison leaves them half a heart, but fatal poison doesn't.
+     */
+    private fun effectsOnHealth() {
+        fun due(effect: Int, every: Int): Boolean {
+            val on = effects[effect] ?: return false
+            val interval = every shr on.amplifier
+            val ticks = if (on.ticksLeft == INFINITE_EFFECT) aliveTicks else on.ticksLeft
+            return interval <= 0 || ticks % interval == 0
+        }
+        if (due(Effect.REGENERATION, REGENERATION_EVERY)) heal(1f)
+        if (due(Effect.POISON, POISON_EVERY) && vitals.health > 1) hurt(1f, DamageCause.MAGIC)
+        if (due(Effect.FATAL_POISON, POISON_EVERY)) hurt(1f, DamageCause.MAGIC)
+        if (due(Effect.WITHER, WITHER_EVERY)) hurt(1f, DamageCause.WITHER)
+    }
+
+    /** The player healing by themselves, as the rules let them: every four seconds while they're well fed, which for now they always are, and every second in peace. */
+    private fun regenerate() {
+        if (!world.rules.naturalRegeneration) return
+        val interval = if (world.difficulty == Difficulty.PEACEFUL) PEACEFUL_REGENERATION_INTERVAL else REGENERATION_INTERVAL
+        if (++sinceRegeneration < interval) return
+        sinceRegeneration = 0
+        heal(1f)
+    }
+
+    /** The player's health and absorption, as their client shows them: in whole half hearts, rounded up, as the game shows them. */
+    private fun healthAttributes() = listOf(
+        Attribute(HEALTH, 0f, vitals.maxHealth, ceil(vitals.health), default = MAX_HEALTH),
+        Attribute("minecraft:absorption", 0f, Float.MAX_VALUE, ceil(vitals.absorption), default = 0f),
+    )
+
+    private fun sendHealth() {
+        if (isInGame) send(UpdateAttributes(entityId, healthAttributes()))
+    }
+
     /** Kills the player, as `/kill` does, unless they're in creative, where nothing can. Returns whether they died. */
     fun kill(): Boolean {
         if (gameMode == GameMode.CREATIVE) return false
@@ -2989,15 +3335,18 @@ class Session(
         dead = true
         stopBreaking()
         closeWindow(reply = true, byServer = true)
-        send(UpdateAttributes(entityId, listOf(Attribute("minecraft:health", 0f, 20f, 0f, default = 20f))))
+        vitals.health = 0f
+        vitals.fireTicks = 0
+        sendHealth()
         viewers().filter { it.isInGame }.forEach { it.showDeath(entityId) }
         if (world.rules.showDeathMessages) tellEveryone(Text(Text.TRANSLATION, "%$cause", parameters = listOf(name), needsTranslation = true))
         if (!world.rules.keepInventory) dropEverything()
         val ended = effects.clear()
         if (ended.isNotEmpty()) send(*ended.map { MobEffect(entityId, MobEffect.REMOVE, it) }.toTypedArray(), visibleEffects())
+        effectsEnded(ended)
         send(DeathInfo(cause, listOf(name)), Respawn(spawnEyes(), Respawn.SEARCHING_FOR_SPAWN, entityId))
         schedule(DEAD_BODY_TICKS) { if (dead) bodyGone = true }
-        log.info("{} died", name)
+        if (world.rules.showDeathMessages) deathLog.info(english(cause, listOf(name))) else log.debug("{} died: {}", name, cause)
     }
 
     /** Shows the client the player [entityId] dying, if it's its own player or one it can see. */
@@ -3056,6 +3405,8 @@ class Session(
         if (!dead || packet.state != Respawn.CLIENT_READY_TO_SPAWN) return
         dead = false
         bodyGone = false
+        vitals.reset()
+        breathing = true
         val eyes = spawnEyes()
         send(Respawn(eyes, Respawn.READY_TO_SPAWN, entityId), *playerState())
         teleport(Vec3(eyes.x, eyes.y - PLAYER_EYE_HEIGHT, eyes.z), yaw, pitch)
@@ -3126,11 +3477,15 @@ class Session(
         disconnect(Disconnect.Reason.KICKED, reason)
     }
 
-    /** Disconnects the player, for [reason], with [message] to show them if there is one. Everyone hears they left. */
+    /**
+     * Disconnects the player, for [reason], with [message] to show them if
+     * there is one. Everyone hears they left, unless the server's stopping,
+     * when everyone's leaving, and the log has no need to say so of each.
+     */
     fun disconnect(reason: Disconnect.Reason, message: String? = null) {
         if (state == State.CLOSED) return
         send(Disconnect(reason, message))
-        leave()
+        leave(announce = reason != Disconnect.Reason.SHUTDOWN)
         state = State.CLOSED
     }
 
@@ -3144,8 +3499,8 @@ class Session(
      * What's kept of the player between sessions, as the game saves a
      * player: where their eyes are and which way they look, their game
      * mode, their items, by slot, in their inventory, armour, offhand and
-     * ender chest, the hotbar slot they hold, their experience, and where
-     * they respawn, if `/spawnpoint` set it.
+     * ender chest, the hotbar slot they hold, their experience, where they
+     * respawn, if `/spawnpoint` set it, and their health, breath and fire.
      */
     private fun savedData(): NbtMap {
         fun listed(container: Container) = (0 until container.size).map { slot -> container[slot]?.let { ItemStacks.nbtOf(it.stack, slot) } ?: EMPTY_SLOT }
@@ -3162,8 +3517,19 @@ class Session(
             .putInt("PlayerLevel", experience.level)
             .putFloat("PlayerLevelProgress", experience.progress)
             .apply { spawnPoint?.let { putInt("SpawnX", it.x).putInt("SpawnY", it.y).putInt("SpawnZ", it.z) } }
+            .putList("Attributes", NbtType.COMPOUND, listOf(savedHealth()))
+            .putShort("Air", vitals.air.coerceAtLeast(0).toShort())
+            .putShort("Fire", vitals.fireTicks.toShort())
             .build()
     }
+
+    /** The player's health, as the game saves it among their attributes. */
+    private fun savedHealth(): NbtMap = NbtMap.builder()
+        .putString("Name", HEALTH)
+        .putFloat("Base", MAX_HEALTH).putFloat("Current", vitals.health)
+        .putFloat("Min", 0f).putFloat("Max", MAX_HEALTH)
+        .putFloat("DefaultMin", 0f).putFloat("DefaultMax", MAX_HEALTH)
+        .build()
 
     /** Picks up where the player left off last time, as [savedData] kept it, for whatever it kept that Kore can use. */
     private fun restoreFrom(data: NbtMap) {
@@ -3188,6 +3554,11 @@ class Session(
         }
         experience = PlayerExperience(data.getInt("PlayerLevel", 0).coerceAtLeast(0), data.getFloat("PlayerLevelProgress", 0f).coerceIn(0f, 1f))
         if (listOf("SpawnX", "SpawnY", "SpawnZ").all(data::containsKey)) spawnPoint = BlockPos(data.getInt("SpawnX"), data.getInt("SpawnY"), data.getInt("SpawnZ"))
+        data.getList("Attributes", NbtType.COMPOUND, emptyList()).find { it.getString("Name") == HEALTH }?.let { vitals.health = it.getFloat("Current", MAX_HEALTH).coerceIn(0f, MAX_HEALTH) }
+        // Health saved as none is a player who left dead, back as if they'd respawned.
+        if (vitals.isDead) vitals.reset()
+        vitals.air = data.getShort("Air", PLAYER_MAX_AIR).toInt().coerceIn(0, PLAYER_MAX_AIR.toInt())
+        vitals.fireTicks = data.getShort("Fire", 0).toInt().coerceAtLeast(0)
         log.debug("{} picks up at {}, in {}", player?.displayName, position, gameMode)
     }
 
@@ -3199,15 +3570,22 @@ class Session(
         if (packets.isNotEmpty()) send(*packets.toTypedArray())
     }
 
-    /** Tells everyone still in the game that this player left, once their session has ended, and saves where they got to. */
-    fun leave() {
+    /**
+     * Saves where the player got to, once their session has ended, and if
+     * [announce], tells the log and everyone still in the game that they left.
+     */
+    fun leave(announce: Boolean = true) {
         val identity = player ?: return
         if (state != State.IN_GAME) return
         closeWindow(reply = false)
         // A player who leaves dead comes back as if they'd respawned.
-        if (dead) position = spawnEyes()
+        if (dead) {
+            position = spawnEyes()
+            vitals.reset()
+        }
         game.players.save(identity.uuid, savedData())
         state = State.CLOSED
+        if (!announce) return log.debug("{} left as the server stopped", identity.displayName)
         log.info("{} left the game", identity.displayName)
         tellEveryone(Text(Text.TRANSLATION, LEFT, parameters = listOf(identity.displayName), needsTranslation = true))
     }
@@ -3218,15 +3596,15 @@ class Session(
     /**
      * What the client needs to know about its own player to move it like
      * the game does. Without the flags, the client treats its player as
-     * something that doesn't breathe or fall. The attributes give it full
-     * health and hunger (sprinting needs food) and its walking speed.
+     * something that doesn't breathe or fall. The attributes give it its
+     * health, full hunger (sprinting needs food) and its walking speed.
      */
     private fun playerState(): Array<ServerPacket> = arrayOf(
         SetActorData(
             entityId,
             listOf(
                 flagsItem(playerFlags()),
-                ShortItem(ActorDataId.AIR_SUPPLY, PLAYER_MAX_AIR),
+                ShortItem(ActorDataId.AIR_SUPPLY, maxOf(vitals.air, 0).toShort()),
                 ShortItem(ActorDataId.AIR_SUPPLY_MAX, PLAYER_MAX_AIR),
                 FloatItem(ActorDataId.SCALE, 1f),
                 FloatItem(ActorDataId.WIDTH, PLAYER_WIDTH),
@@ -3235,9 +3613,7 @@ class Session(
         ),
         UpdateAttributes(
             entityId,
-            listOf(
-                Attribute("minecraft:health", 0f, 20f, 20f),
-                Attribute("minecraft:absorption", 0f, Float.MAX_VALUE, 0f),
+            healthAttributes() + listOf(
                 Attribute("minecraft:movement", 0f, Float.MAX_VALUE, PLAYER_WALK_SPEED),
                 Attribute("minecraft:player.hunger", 0f, 20f, 20f),
                 Attribute("minecraft:player.saturation", 0f, 20f, 5f, default = 20f), // The 5 a new player starts with
@@ -3421,7 +3797,7 @@ private fun FlatWorld.mapData(map: MapData, patch: MapPatch?) = ClientboundMapIt
 /**
  * Ticks the sky over [game]'s world, around these players, for them to see
  * what it does: the weather changing, lightning striking, with what it did
- * to the blocks it struck, snow settling, water freezing, cauldrons
+ * to the blocks it struck and the players near it, snow settling, water freezing, cauldrons
  * filling with rain or snow, and daylight detectors changing. They hear the time once a second. Run once a tick,
  * before redstone, which answers what the sky powered.
  */
@@ -3432,6 +3808,7 @@ internal fun Collection<Session>.tickSky(game: GameData) {
     val changes = Changes(emptyMap(), sky.changed.distinct(), events = sky.events)
     if (!changes.isEmpty) showAround(world.packetsFor(changes))
     forEach { it.showLightning() }
+    for (bolt in sky.strikes) forEach { it.struckNear(bolt.position) }
     if (world.gameTime % TIME_SYNC_TICKS == 0L) forEach { it.showTime() }
 }
 
@@ -3577,6 +3954,7 @@ class Sessions(
         sessions.values.tickSky(game)
         sessions.values.tickGrowth(game, dropItems = config.gameMode != GameMode.CREATIVE)
         sessions.values.tickPower(game)
+        sessions.values.forEach { it.tickHealth() }
         sessions.values.forEach { it.tickEffects() }
         sessions.values.tickBeacons(game)
         game.world.tickOrbs(sessions.values.mapNotNull { it.orbTarget })

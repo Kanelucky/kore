@@ -17,6 +17,13 @@ private const val FALLING = 8
 /** The depth from which liquid is falling, as items in it find it. */
 internal const val FALLING_DEPTH = FALLING
 
+/** How high in its block liquid [depth] steps from its source fills it: still and falling liquid eight ninths, and each step less a ninth less. */
+internal fun liquidHeight(depth: Int) = (if (depth >= FALLING) 8 else 8 - depth) / 9.0
+
+/** How high the liquid [here], at [pos], reaches: up its block as high as it is deep, or the whole block, with more of it above. */
+internal fun FlatWorld.liquidTop(pos: BlockPos, here: LiquidHere): Double =
+    pos.y + if (liquidHere(pos.side(Face.UP))?.liquid == here.liquid) 1.0 else liquidHeight(here.depth)
+
 /** Liquid no route down is found for, as far as it looks. */
 private const val NO_WAY_DOWN = 1000
 

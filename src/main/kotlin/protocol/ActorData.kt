@@ -34,11 +34,14 @@ enum class ActorFlag(val bit: Int) {
     SHOW_NAME(14),
     ALWAYS_SHOW_NAME(15),
     CAN_CLIMB(19),
+    /** Flying with an elytra. */
+    GLIDING(32),
     /** Without this, the client counts the player's air down as though they were underwater. */
     BREATHING(35),
     HAS_COLLISION(48),
     /** Without this, the player floats rather than falls. */
     HAS_GRAVITY(49),
+    SWIMMING(57),
 }
 
 /** One item of an actor's synced data: an ID, and a value of one of the types Mojang allows. */

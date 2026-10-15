@@ -8,6 +8,7 @@ import io.netty.channel.socket.InternetProtocolFamily
 import io.netty.channel.socket.nio.NioDatagramChannel
 import org.koremc.auth.AuthService
 import org.koremc.command.Console
+import org.koremc.command.ConsoleLogAppender
 import org.koremc.network.LAN_DISCOVERY_PORT
 import org.koremc.network.LanDiscovery
 import org.koremc.network.NetherNetRtcHandler
@@ -63,6 +64,7 @@ fun main() {
         log.error(e.message)
         exitProcess(1)
     }
+    ConsoleLogAppender.showDebug = config.logs.debug
     val vanilla = try {
         VanillaData.load(gameDataIn(config.dataDirectory))
     } catch (e: NoSuchFileException) {
@@ -172,7 +174,7 @@ fun main() {
         if (config.portV6 != config.port) bindServerListV6(loop, config.portV6, serverList)
         if (config.lanVisibility) bindLanDiscovery(loop, LanDiscovery(Random.nextLong(), config.onlineMode, status, answerOffer))
         console.start()
-        log.info("Started in {} seconds. Type help for the commands", String.format(Locale.ROOT, "%.1f", (System.nanoTime() - started) / 1e9))
+        log.info("Started in {} seconds. Type `help` for commands", String.format(Locale.ROOT, "%.1f", (System.nanoTime() - started) / 1e9))
         tcp.closeFuture().addListener { stopping.complete(Unit) }
         stopping.join()
     } finally {

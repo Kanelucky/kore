@@ -68,6 +68,8 @@ data class ServerConfig(
     val features: Features = Features(),
     /** The most blocks a command changes at once: the game's own limits, unless kore.json changes them. */
     val commandLimits: CommandLimits = CommandLimits(),
+    /** What the logs keep: what players say and the commands they run, and detail in the console, as kore.json says. */
+    val logs: LogSettings = LogSettings(),
     // Must match the client's protocol number and version string.
     val protocol: Int = 2193,
     val version: String = "1.26.50",
